@@ -15,6 +15,8 @@ from blosc2.native_graph import _parallel_compressed_reduction
 def test_prefilter_reduction(op, mapped, case, monkeypatch):
     import blosc2.native_graph as native_graph
 
+    if op in {"min", "max"} and not blosc2.blosc2_ext.menudet_shared_reduction_rules_available():
+        pytest.skip("Requires native shared extrema primitives")
     monkeypatch.setattr(native_graph, "MINIMUM_COMPRESSED_GRAPH_ITEMS", 1)
     values = np.random.default_rng(42).normal(size=400003)
     if case == "nan":
@@ -22,7 +24,7 @@ def test_prefilter_reduction(op, mapped, case, monkeypatch):
     elif case == "zeros":
         values[:] = 0.0
         values[::2] = -0.0
-    array = blosc2.asarray(values, chunks=(16384,), blocks=(1024,))
+    array = blosc2.asarray(values, chunks=(262144,), blocks=(1024,))
     expression = f"{op}(a + a)" if mapped else f"{op}(a)"
     plan = NativeGraph.from_expression(expression, {"a": "float64"}, jit=False)
     previous = blosc2.nthreads
@@ -46,21 +48,36 @@ def test_partial_storage_cap_retains_streaming_route(monkeypatch):
     values = np.arange(262145, dtype="float64")
     # Small blocks exceed the partial-buffer cap without a large input.
     array = blosc2.asarray(values, chunks=(8192,), blocks=(1,))
-    plan = NativeGraph.from_expression("min(a)", {"a": "float64"}, jit=False)
+    plan = NativeGraph.from_expression("max(a)", {"a": "float64"}, jit=False)
     previous = blosc2.nthreads
     try:
         blosc2.set_nthreads(2)
         result, report = _parallel_compressed_reduction(plan, {"a": array}, values.shape, 65536)
-        assert result == 0
+        assert result == 262144
         assert report["route"] == "parallel-graph-bounded-readers"
     finally:
         blosc2.set_nthreads(previous)
 
 
 def test_shared_extrema_rules_are_active():
-    pairwise = getattr(blosc2.blosc2_ext, "menudet_pairwise_sum_available", lambda: False)()
-    if not pairwise:
-        pytest.skip("Requires the pinned miniexpr revision")
-    # One miniexpr revision supplies both, so extrema must not fall back to
-    # Python-Blosc2's local copy in a qualified build.
-    assert blosc2.blosc2_ext.menudet_shared_reduction_rules_available()
+    if not blosc2.blosc2_ext.menudet_shared_reduction_rules_available():
+        pytest.skip("Requires native shared extrema primitives")
+    assert callable(blosc2.blosc2_ext.menudet_combine_argextrema)
+
+
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Requires native parallel scheduling")
+def test_small_chunks_use_parallel_regions(monkeypatch):
+    import blosc2.native_graph as native_graph
+
+    monkeypatch.setattr(native_graph, "MINIMUM_COMPRESSED_GRAPH_ITEMS", 1)
+    values = np.arange(400003, dtype=np.float64)
+    array = blosc2.asarray(values, chunks=(16384,), blocks=(1024,))
+    plan = NativeGraph.from_expression("min(a)", {"a": "float64"}, jit=False)
+    previous = blosc2.nthreads
+    try:
+        blosc2.set_nthreads(4)
+        result, report = _parallel_compressed_reduction(plan, {"a": array}, values.shape, 65536)
+        assert result == 0
+        assert report["route"] == "parallel-graph-bounded-readers"
+    finally:
+        blosc2.set_nthreads(previous)

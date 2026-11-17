@@ -1,0 +1,4187 @@
+{
+  "environment": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "python": "3.14.4",
+    "numpy": "2.5.4",
+    "blosc2": "4.16.0.dev0"
+  },
+  "repeats": 3,
+  "results": [
+    {
+      "codec": "BLOSCLZ",
+      "op": "min",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.009951583109796047,
+        "reader": 0.021667749620974064
+      },
+      "speedup": 2.1773168531994638,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "max",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.010400290600955486,
+        "reader": 0.06664533261209726
+      },
+      "speedup": 6.408026003232495,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "any",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.0018958337604999542,
+        "reader": 0.02202458307147026
+      },
+      "speedup": 11.617359881629133,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "all",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.005744332447648048,
+        "reader": 0.02158054243773222
+      },
+      "speedup": 3.7568407877521306,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmin",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.011114958673715591,
+        "reader": 0.010207959450781345
+      },
+      "speedup": 0.9183983270150075,
+      "routes": {
+        "prefilter": "chunked-fallback",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": null,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmax",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.010718249715864658,
+        "reader": 0.010832750238478184
+      },
+      "speedup": 1.0106827631048796,
+      "routes": {
+        "prefilter": "chunked-fallback",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": null,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "min",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.017346167005598545,
+        "reader": 0.028523500077426434
+      },
+      "speedup": 1.6443690452317425,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "max",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.017134958878159523,
+        "reader": 0.07525070756673813
+      },
+      "speedup": 4.391647981288932,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "any",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.008922082372009754,
+        "reader": 0.02866529207676649
+      },
+      "speedup": 3.2128477278684278,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "all",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.013079540804028511,
+        "reader": 0.02875637449324131
+      },
+      "speedup": 2.19857676382525,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmin",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.01704229135066271,
+        "reader": 0.017078000120818615
+      },
+      "speedup": 1.002095303349835,
+      "routes": {
+        "prefilter": "chunked-fallback",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": null,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmax",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.01812474988400936,
+        "reader": 0.01849845889955759
+      },
+      "speedup": 1.0206187129720303,
+      "routes": {
+        "prefilter": "chunked-fallback",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": null,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "min",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.004413500428199768,
+        "reader": 0.005892249755561352
+      },
+      "speedup": 1.335051361480156,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "max",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.004329416900873184,
+        "reader": 0.018551457673311234
+      },
+      "speedup": 4.284978346522752,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "any",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.0025438331067562103,
+        "reader": 0.005922999233007431
+      },
+      "speedup": 2.3283757166601986,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "all",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.003107125870883465,
+        "reader": 0.005914250388741493
+      },
+      "speedup": 1.90344731256731,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmin",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.004430792294442654,
+        "reader": 0.011026082560420036
+      },
+      "speedup": 2.488512624310908,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmax",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.004274333827197552,
+        "reader": 0.010704667307436466
+      },
+      "speedup": 2.504406005755272,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "min",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.005906916223466396,
+        "reader": 0.007617708295583725
+      },
+      "speedup": 1.289625247319552,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "max",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.0061822086572647095,
+        "reader": 0.020202500745654106
+      },
+      "speedup": 3.2678451772918016,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "any",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.003995542414486408,
+        "reader": 0.00758291594684124
+      },
+      "speedup": 1.8978439371206017,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "all",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.004969125613570213,
+        "reader": 0.007399541325867176
+      },
+      "speedup": 1.489103295287953,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmin",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.006239250302314758,
+        "reader": 0.017916083335876465
+      },
+      "speedup": 2.871512195820964,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmax",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.0060520414263010025,
+        "reader": 0.017957708798348904
+      },
+      "speedup": 2.9672151152680764,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "min",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.0031872503459453583,
+        "reader": 0.003891000524163246
+      },
+      "speedup": 1.220801663450491,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "max",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.004337792284786701,
+        "reader": 0.00883270800113678
+      },
+      "speedup": 2.036221981424614,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "any",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.00398029200732708,
+        "reader": 0.003418874926865101
+      },
+      "speedup": 0.8589507806390838,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "all",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.003850332461297512,
+        "reader": 0.0038228752091526985
+      },
+      "speedup": 0.9928688619954754,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmin",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.005145040340721607,
+        "reader": 0.011002999730408192
+      },
+      "speedup": 2.138564326371246,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmax",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.005142999812960625,
+        "reader": 0.011111042462289333
+      },
+      "speedup": 2.1604205456684897,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "min",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.004890709184110165,
+        "reader": 0.004856832325458527
+      },
+      "speedup": 0.9930732216174899,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "max",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.005969458259642124,
+        "reader": 0.011667583137750626
+      },
+      "speedup": 1.9545463977245585,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "any",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.004145042039453983,
+        "reader": 0.0048616668209433556
+      },
+      "speedup": 1.1728872167443136,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "all",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.005085458979010582,
+        "reader": 0.005038832314312458
+      },
+      "speedup": 0.9908313753211719,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmin",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.005595707334578037,
+        "reader": 0.01760220807045698
+      },
+      "speedup": 3.14566274073809,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmax",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.0157310425027328,
+      "seconds": {
+        "prefilter": 0.005625040270388126,
+        "reader": 0.017952917143702507
+      },
+      "speedup": 3.191606865147609,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "min",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.024268166162073612,
+        "reader": 0.03429329115897417
+      },
+      "speedup": 1.41309775654033,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "max",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.024515874683856964,
+        "reader": 0.08109720889478922
+      },
+      "speedup": 3.3079467871562227,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "any",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.015561999753117561,
+        "reader": 0.03428004030138254
+      },
+      "speedup": 2.2028043211165818,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "all",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.02046504244208336,
+        "reader": 0.034680332988500595
+      },
+      "speedup": 1.6946132941891963,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmin",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.015314208343625069,
+        "reader": 0.01543400064110756
+      },
+      "speedup": 1.0078222977508569,
+      "routes": {
+        "prefilter": "chunked-fallback",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": null,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmax",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.015834790654480457,
+        "reader": 0.015700791962444782
+      },
+      "speedup": 0.9915377035945998,
+      "routes": {
+        "prefilter": "chunked-fallback",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": null,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "min",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.031232000328600407,
+        "reader": 0.04223629180341959
+      },
+      "speedup": 1.3523402714856565,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "max",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.03100783284753561,
+        "reader": 0.0881205415353179
+      },
+      "speedup": 2.8418800491025413,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "any",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.02356899995356798,
+        "reader": 0.043388874270021915
+      },
+      "speedup": 1.8409297957274386,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "all",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.02682562544941902,
+        "reader": 0.0422644168138504
+      },
+      "speedup": 1.5755240038500482,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmin",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.025048749521374702,
+        "reader": 0.025233457796275616
+      },
+      "speedup": 1.0073739519309455,
+      "routes": {
+        "prefilter": "chunked-fallback",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": null,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmax",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.025489666499197483,
+        "reader": 0.025296875275671482
+      },
+      "speedup": 0.9924364948622584,
+      "routes": {
+        "prefilter": "chunked-fallback",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": null,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "min",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.007970583625137806,
+        "reader": 0.00949262548238039
+      },
+      "speedup": 1.1909573914314548,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "max",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.008043458685278893,
+        "reader": 0.022033249959349632
+      },
+      "speedup": 2.739275580500563,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "any",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.006095999851822853,
+        "reader": 0.009690208360552788
+      },
+      "speedup": 1.5896011476534369,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "all",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.007273457944393158,
+        "reader": 0.009390832856297493
+      },
+      "speedup": 1.2911098033551622,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmin",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.008303499780595303,
+        "reader": 0.015719999559223652
+      },
+      "speedup": 1.8931775726616131,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmax",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.008158833719789982,
+        "reader": 0.015296375378966331
+      },
+      "speedup": 1.8748237682382964,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "min",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.010142916813492775,
+        "reader": 0.011890291236341
+      },
+      "speedup": 1.1722753380490858,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "max",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.009867500513792038,
+        "reader": 0.023768958635628223
+      },
+      "speedup": 2.4088125054977993,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "any",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.00792095810174942,
+        "reader": 0.011429582722485065
+      },
+      "speedup": 1.4429545738868044,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "all",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.009114290587604046,
+        "reader": 0.011870541609823704
+      },
+      "speedup": 1.3024098250683729,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmin",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.010111125186085701,
+        "reader": 0.025339624844491482
+      },
+      "speedup": 2.506113254275824,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmax",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.0102742500603199,
+        "reader": 0.025185542181134224
+      },
+      "speedup": 2.451326572087544,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "min",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.006012124940752983,
+        "reader": 0.006050500087440014
+      },
+      "speedup": 1.006382958947993,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "max",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.008154666982591152,
+        "reader": 0.011479333974421024
+      },
+      "speedup": 1.4077011359173195,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "any",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.0051170410588383675,
+        "reader": 0.005489541217684746
+      },
+      "speedup": 1.072796007411936,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "all",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.006084207445383072,
+        "reader": 0.004990874789655209
+      },
+      "speedup": 0.8202999050340525,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmin",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.006986541673541069,
+        "reader": 0.015973791480064392
+      },
+      "speedup": 2.286366020052409,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmax",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.006933124735951424,
+        "reader": 0.015838333405554295
+      },
+      "speedup": 2.2844437405583213,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "min",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.005927957594394684,
+        "reader": 0.007389792241156101
+      },
+      "speedup": 1.2466000512796664,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "max",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.010160291567444801,
+        "reader": 0.01493766624480486
+      },
+      "speedup": 1.4702005494278856,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "any",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.007360165938735008,
+        "reader": 0.0074235824868083
+      },
+      "speedup": 1.0086161845536041,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "all",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.007350458763539791,
+        "reader": 0.007293707691133022
+      },
+      "speedup": 0.9922792475636665,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmin",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.007971499115228653,
+        "reader": 0.02569658402353525
+      },
+      "speedup": 3.223557282273897,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": null
+      }
+    },
+    {
+      "codec": "BLOSCLZ",
+      "op": "argmax",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.061090830427053,
+      "seconds": {
+        "prefilter": 0.007853208109736443,
+        "reader": 0.025687583722174168
+      },
+      "speedup": 3.2709668919032704,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "min",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.0321244178339839,
+        "reader": 0.042819833382964134
+      },
+      "speedup": 1.3329372567700115,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "max",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.03206087462604046,
+        "reader": 0.08880283311009407
+      },
+      "speedup": 2.7698194183999805,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "any",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.022927332669496536,
+        "reader": 0.04312108363956213
+      },
+      "speedup": 1.8807719267288423,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "all",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.02815204206854105,
+        "reader": 0.04362612497061491
+      },
+      "speedup": 1.5496611174564001,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmin",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.013227582909166813,
+        "reader": 0.013374334201216698
+      },
+      "speedup": 1.0110943392347354,
+      "routes": {
+        "prefilter": "chunked-fallback",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": null,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmax",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.012926500290632248,
+        "reader": 0.01303008385002613
+      },
+      "speedup": 1.0080132717336454,
+      "routes": {
+        "prefilter": "chunked-fallback",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": null,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "min",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.039315042085945606,
+        "reader": 0.049025083892047405
+      },
+      "speedup": 1.2469803233295522,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "max",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.0396952498704195,
+        "reader": 0.09522770904004574
+      },
+      "speedup": 2.398969885588463,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "any",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.031700124964118004,
+        "reader": 0.04896279238164425
+      },
+      "speedup": 1.5445614942233257,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "all",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.035521375015378,
+        "reader": 0.04991258308291435
+      },
+      "speedup": 1.4051422013169839,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmin",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.020894499495625496,
+        "reader": 0.021173750050365925
+      },
+      "speedup": 1.0133647879337284,
+      "routes": {
+        "prefilter": "chunked-fallback",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": null,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmax",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.02056395821273327,
+        "reader": 0.02072366699576378
+      },
+      "speedup": 1.0077664417218868,
+      "routes": {
+        "prefilter": "chunked-fallback",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": null,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "min",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.00962245836853981,
+        "reader": 0.011398416943848133
+      },
+      "speedup": 1.1845639136371573,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "max",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.010028875432908535,
+        "reader": 0.02358929067850113
+      },
+      "speedup": 2.3521371699458684,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "any",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.007690084166824818,
+        "reader": 0.0116884158924222
+      },
+      "speedup": 1.5199334154034707,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "all",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.008860458619892597,
+        "reader": 0.011893000453710556
+      },
+      "speedup": 1.342255628507717,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmin",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.009817374870181084,
+        "reader": 0.013000458478927612
+      },
+      "speedup": 1.3242296083054448,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmax",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.009721790440380573,
+        "reader": 0.013342333026230335
+      },
+      "speedup": 1.3724152056200905,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "min",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.011749791912734509,
+        "reader": 0.013248583301901817
+      },
+      "speedup": 1.1275589729842712,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "max",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.011839249171316624,
+        "reader": 0.025987583212554455
+      },
+      "speedup": 2.1950364281136605,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "any",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.009520875290036201,
+        "reader": 0.013193374499678612
+      },
+      "speedup": 1.3857312587095598,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "all",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.010810832493007183,
+        "reader": 0.013411290943622589
+      },
+      "speedup": 1.2405419242502806,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmin",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.011888707987964153,
+        "reader": 0.020732250064611435
+      },
+      "speedup": 1.7438606521078888,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmax",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.011675499379634857,
+        "reader": 0.021080459468066692
+      },
+      "speedup": 1.8055295780184408,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "min",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.0072701675817370415,
+        "reader": 0.007294666953384876
+      },
+      "speedup": 1.0033698496454715,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "max",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.010092457756400108,
+        "reader": 0.014962375164031982
+      },
+      "speedup": 1.4825303731931527,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "any",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.0073071252554655075,
+        "reader": 0.0073016248643398285
+      },
+      "speedup": 0.9992472564882386,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "all",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.007320958189666271,
+        "reader": 0.007264375686645508
+      },
+      "speedup": 0.9922711615672616,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmin",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.006960749626159668,
+        "reader": 0.013275958597660065
+      },
+      "speedup": 1.90725989450429,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmax",
+      "expression": "a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.006944917142391205,
+        "reader": 0.013476457446813583
+      },
+      "speedup": 1.9404777869205079,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "min",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.006716041825711727,
+        "reader": 0.006698207929730415
+      },
+      "speedup": 0.9973445823531002,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "max",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.01154854241758585,
+        "reader": 0.011569290421903133
+      },
+      "speedup": 1.0017965907356143,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "any",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.00755841750651598,
+        "reader": 0.007664582692086697
+      },
+      "speedup": 1.0140459541271958,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "all",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.007521207444369793,
+        "reader": 0.006953583098948002
+      },
+      "speedup": 0.9245301569435235,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmin",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.008032875135540962,
+        "reader": 0.021039040759205818
+      },
+      "speedup": 2.619117116126936,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmax",
+      "expression": "a + a",
+      "dtype": "float32",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.191905173120905,
+      "seconds": {
+        "prefilter": 0.007813749834895134,
+        "reader": 0.020988416858017445
+      },
+      "speedup": 2.686087640569968,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "min",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.0403412077575922,
+        "reader": 0.051683999598026276
+      },
+      "speedup": 1.2811713498661765,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "max",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.0394249577075243,
+        "reader": 0.09606695920228958
+      },
+      "speedup": 2.436704178986477,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "any",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.03183779213577509,
+        "reader": 0.05168075021356344
+      },
+      "speedup": 1.6232517001545301,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "all",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.0368969589471817,
+        "reader": 0.0512147918343544
+      },
+      "speedup": 1.3880491318449522,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmin",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.017592458054423332,
+        "reader": 0.01761716604232788
+      },
+      "speedup": 1.0014044647898612,
+      "routes": {
+        "prefilter": "chunked-fallback",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": null,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmax",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.017731666564941406,
+        "reader": 0.01774429250508547
+      },
+      "speedup": 1.0007120560325122,
+      "routes": {
+        "prefilter": "chunked-fallback",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": null,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "min",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.04878195747733116,
+        "reader": 0.05909204203635454
+      },
+      "speedup": 1.2113503658358615,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "max",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.04771300032734871,
+        "reader": 0.10641979239881039
+      },
+      "speedup": 2.230415016215432,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "any",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.039011416025459766,
+        "reader": 0.05907199997454882
+      },
+      "speedup": 1.5142234246508006,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "all",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.044208042323589325,
+        "reader": 0.0587674155831337
+      },
+      "speedup": 1.3293376610747478,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 1,
+        "reader": 1
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmin",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.026077667251229286,
+        "reader": 0.026912791654467583
+      },
+      "speedup": 1.0320245056888258,
+      "routes": {
+        "prefilter": "chunked-fallback",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": null,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmax",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 1,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.0261103343218565,
+        "reader": 0.0272233746945858
+      },
+      "speedup": 1.0426283462712156,
+      "routes": {
+        "prefilter": "chunked-fallback",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": null,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "min",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.011718416586518288,
+        "reader": 0.013522625900804996
+      },
+      "speedup": 1.1539635752805035,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "max",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.011889499612152576,
+        "reader": 0.025787875056266785
+      },
+      "speedup": 2.1689621849104825,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "any",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.010339082218706608,
+        "reader": 0.01354137435555458
+      },
+      "speedup": 1.309726924412501,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "all",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.011070082895457745,
+        "reader": 0.013572458177804947
+      },
+      "speedup": 1.2260484682887038,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmin",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.0120746660977602,
+        "reader": 0.017958874814212322
+      },
+      "speedup": 1.4873185451930317,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmax",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.011996000073850155,
+        "reader": 0.01802645903080702
+      },
+      "speedup": 1.5027058119233045,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "min",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.013927708379924297,
+        "reader": 0.015760875307023525
+      },
+      "speedup": 1.131620140018267,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "max",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.0141830425709486,
+        "reader": 0.028548874892294407
+      },
+      "speedup": 2.0128879081821003,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "any",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.011768207885324955,
+        "reader": 0.01568354107439518
+      },
+      "speedup": 1.332704284902434,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "all",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.013001084327697754,
+        "reader": 0.015569416806101799
+      },
+      "speedup": 1.197547559393367,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 4
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmin",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.014062084257602692,
+        "reader": 0.027164124883711338
+      },
+      "speedup": 1.931728212268747,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmax",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 4,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.014002666808664799,
+        "reader": 0.02755166683346033
+      },
+      "speedup": 1.9676014012139074,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "min",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.008586208336055279,
+        "reader": 0.008638291619718075
+      },
+      "speedup": 1.0060659235863272,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "max",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.011999749578535557,
+        "reader": 0.016304832883179188
+      },
+      "speedup": 1.3587644289131091,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "any",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.007013666443526745,
+        "reader": 0.006850375793874264
+      },
+      "speedup": 0.9767182184999417,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "all",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.006933167576789856,
+        "reader": 0.007066166028380394
+      },
+      "speedup": 1.0191829275893716,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmin",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.00827737431973219,
+        "reader": 0.017826749943196774
+      },
+      "speedup": 2.1536720769894515,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmax",
+      "expression": "a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.008253917098045349,
+        "reader": 0.01822745893150568
+      },
+      "speedup": 2.2083404418760413,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "min",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.009673457592725754,
+        "reader": 0.009049584157764912
+      },
+      "speedup": 0.9355066759759217,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "max",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.013929041102528572,
+        "reader": 0.014789625070989132
+      },
+      "speedup": 1.0617834323357935,
+      "routes": {
+        "prefilter": "parallel-prefilter-reduction",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 4,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "any",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.009000875055789948,
+        "reader": 0.009102124720811844
+      },
+      "speedup": 1.0112488690704318,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "all",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.007940875366330147,
+        "reader": 0.009223166853189468
+      },
+      "speedup": 1.1614798655947083,
+      "routes": {
+        "prefilter": "parallel-graph-bounded-readers",
+        "reader": "parallel-graph-bounded-readers"
+      },
+      "prefilter_selected": false,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": 12
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmin",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.009340875782072544,
+        "reader": 0.027155625633895397
+      },
+      "speedup": 2.9071819674568173,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": null
+      }
+    },
+    {
+      "codec": "ZSTD",
+      "op": "argmax",
+      "expression": "a + a",
+      "dtype": "float64",
+      "size": 16000003,
+      "chunks": [
+        262144
+      ],
+      "blocks": [
+        8192
+      ],
+      "threads": 12,
+      "ratio": 1.1531160402119163,
+      "seconds": {
+        "prefilter": 0.009107166901230812,
+        "reader": 0.027362792752683163
+      },
+      "speedup": 3.004534016938368,
+      "routes": {
+        "prefilter": "parallel-prefilter-argextrema",
+        "reader": "chunked-fallback"
+      },
+      "prefilter_selected": true,
+      "worker_threads": {
+        "prefilter": 12,
+        "reader": null
+      }
+    }
+  ]
+}

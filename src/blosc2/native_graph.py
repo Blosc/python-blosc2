@@ -1158,7 +1158,11 @@ def _compressed_execution_layout(plan, inputs, shape, *, reduction=True):
     if first.blocks[0] > 65536:
         return None
     if workers < 2 and not (
-        reduction and op == "sum" and _pairwise_prefilter_kernel(plan, inputs, shape) is not None
+        reduction
+        and (
+            op in PREFILTER_GRAPH_REDUCERS
+            or (op == "sum" and _pairwise_prefilter_kernel(plan, inputs, shape) is not None)
+        )
     ):
         return None
     return first, workers, op
@@ -1198,7 +1202,17 @@ def _prefilter_graph_reduction(plan, inputs, shape, op, first):
     """
     import blosc2
 
+    if (
+        op not in TRUTH_GRAPH_REDUCERS
+        and not getattr(blosc2.blosc2_ext, "menudet_shared_reduction_rules_available", lambda: False)()
+    ):
+        return None
     if first.chunks[0] % first.blocks[0]:
+        return None
+    workers = min(blosc2.nthreads, max(1, first.chunks[0] // 65536))
+    if op in {"min", "any", "all"} and workers < blosc2.nthreads:
+        # These inexpensive reducers benefit more from streaming independent
+        # chunk regions than from oversubscribing each sequential chunk.
         return None
     artifact = plan._handle.reduction_artifact()
     if artifact is None:
@@ -1221,6 +1235,9 @@ def _prefilter_graph_reduction(plan, inputs, shape, op, first):
         inputs,
         _reduction_op=f"native_{op}" if op in {"min", "max"} else op,
         _reduction_out=np.empty(blocks, dtype=accumulator),
+        # Prefilters schedule one chunk at a time; array-wide worker counts
+        # over-subscribe small chunks even for very large arrays.
+        _nthreads=workers,
     )
     result, combined = _combine_graph_reductions(op, partials, [report])
     report["fp_flags"] |= combined["fp_flags"]
@@ -1238,6 +1255,100 @@ def _prefilter_graph_reduction(plan, inputs, shape, op, first):
         input_materialization_bytes=0,
     )
     return result.reshape(result_shape), report
+
+
+def compute_prefilter_argreduce_if_eligible(  # noqa: C901 -- metadata-only admission before any reads
+    expr, item, *, jit=True, jit_backend=None, fp_accuracy=None, options=None
+):
+    """Optional full-domain 1-D arg-extrema; numerical rules live in miniexpr."""
+    options = options or {}
+    reduction = options.get("_reduce_args", {})
+    op = getattr(reduction.get("op"), "name", "").lower()
+    if op not in {"argmin", "argmax"} or options.keys() - {"_reduce_args"}:
+        return None
+    import blosc2
+
+    if (
+        _NUMPY_VALUE_PROMOTION
+        or blosc2.IS_WASM
+        or blosc2.nthreads < 2
+        or jit_backend is not None
+        or fp_accuracy is not None
+        or not getattr(blosc2.blosc2_ext, "menudet_shared_reduction_rules_available", lambda: False)()
+        or type(expr) is not blosc2.LazyExpr
+        or any(hasattr(expr, name) for name in ("_where_args", "_indices", "_order", "_output"))
+        or getattr(expr, "_eval_kwargs", None) is not None
+    ):
+        return None
+    axis = reduction.get("axis")
+    if axis is not None and (not isinstance(axis, int) or axis not in (0, -1)):
+        return None
+    selection = item if isinstance(item, tuple) else (item,)
+    if any(not isinstance(part, slice) or part != slice(None) for part in selection):
+        return None
+    values = tuple(expr.operands.values())
+    first = next((value for value in values if type(value) is blosc2.NDArray), None)
+    if first is None or first.ndim != 1 or first.size < MINIMUM_COMPRESSED_GRAPH_ITEMS:
+        return None
+    if first.chunks[0] % first.blocks[0] or first.blocks[0] > 65536:
+        return None
+    if any(
+        type(value) not in (blosc2.NDArray, np.ndarray)
+        or value.shape != first.shape
+        or value.dtype.kind not in "biuf"
+        or not value.dtype.isnative
+        or (
+            type(value) is blosc2.NDArray
+            and (
+                value.chunks != first.chunks
+                or value.blocks != first.blocks
+                or blosc2.blosc2_ext.reads_need_python(value)
+            )
+        )
+        for value in values
+    ):
+        return None
+    if not _native_first_syntax(expr.expression):
+        return None
+    try:
+        plan, inputs, is_reduction = lower_native_graph(expr, jit=jit)
+        if is_reduction or plan.info()["stages"] != 1:
+            return None
+        artifact = plan._handle.reduction_artifact()
+    except NotImplementedError:
+        return None
+    except blosc2.MenudetError as error:
+        if error.status not in {"invalid_signature", "unsupported"}:
+            raise
+        return None
+    if artifact is None:
+        return None
+    signature = artifact.descriptor_info()
+    dtype = signature["output_dtype"]
+    if dtype.kind not in "biuf" or set(signature["inputs"]) != set(inputs):
+        return None
+    count = (first.size + first.blocks[0] - 1) // first.blocks[0]
+    if count * (dtype.itemsize + 8) > 1024 * 1024:
+        return None
+    if not blosc2.blosc2_ext.menudet_prefilter_inputs_eligible(inputs, allow_numpy=True, output_dtype=dtype):
+        return None
+    partials = np.empty(count, dtype=dtype)
+    indices = np.empty(count, dtype=np.int64)
+    partials, report = artifact.evaluate_prefilter(
+        inputs,
+        _reduction_op="native_min" if op == "argmin" else "native_max",
+        _reduction_out=partials,
+        _arg_indices=indices,
+    )
+    result, flags = blosc2.blosc2_ext.menudet_combine_argextrema(partials, indices, op == "argmin")
+    report["fp_flags"] |= flags
+    report.update(
+        route="parallel-prefilter-argextrema",
+        reduction_buffer_bytes=partials.nbytes + indices.nbytes,
+        input_materialization_bytes=0,
+    )
+    expr._native_execution_report = report
+    return result.reshape((1,)) if reduction.get("keepdims", False) else result
 
 
 def _parallel_compressed_reduction(plan, inputs, shape, tile_items):

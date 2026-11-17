@@ -35,6 +35,21 @@ Eligible aligned one-dimensional compressed ``min``, ``max``, ``any`` and
 maps. Block results are combined with the native reducer to preserve its NaN
 and signed-zero rules. Partial-result storage is capped at 1 MiB; larger
 domains retain the streaming bounded-reader route.
+Floating extrema require the native shared-extrema capability; older runtimes
+keep the bounded-reader route rather than maintaining duplicate numerical rules.
+Prefilter workers are bounded by work per chunk, not only by total array size.
+
+When the native runtime provides shared value/index reductions, eligible
+whole-domain one-dimensional ``argmin`` and ``argmax`` calls also use parallel
+prefilters. Inputs must have matching aligned chunk/block geometry; boolean,
+integer and float32/float64 mapped values are supported. Each block produces
+its best value and absolute logical index. Native merging preserves the first
+occurrence on ties (including signed zeros) and selects the first NaN.
+Index results use ``blosc2.DEFAULT_INDEX``, including on 32-bit platforms.
+Value/index partials together are capped at 1 MiB. Single-thread requests,
+larger scratch requirements, multidimensional inputs, slices and unsupported
+options keep their existing execution path. Explicit strict native graph
+execution is unchanged.
 
 .. currentmodule:: blosc2
 

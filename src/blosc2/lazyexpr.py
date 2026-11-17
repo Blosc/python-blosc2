@@ -5411,6 +5411,7 @@ class LazyExpr(LazyArray):
             from .native_graph import (
                 compute_native_graph,
                 compute_native_prefilter_if_eligible,
+                compute_prefilter_argreduce_if_eligible,
                 compute_resident_if_eligible,
                 prepare_native_first,
             )
@@ -5425,6 +5426,17 @@ class LazyExpr(LazyArray):
             native_accuracy = fp_accuracy
             if native_accuracy is None and policy["fp_accuracy"] != blosc2.FPAccuracy.DEFAULT:
                 native_accuracy = policy["fp_accuracy"]
+
+            arg_reduction = compute_prefilter_argreduce_if_eligible(
+                self,
+                item,
+                jit=native_jit,
+                jit_backend=native_backend,
+                fp_accuracy=native_accuracy,
+                options=kwargs,
+            )
+            if arg_reduction is not None:
+                return arg_reduction
 
             resident = (
                 compute_resident_if_eligible(

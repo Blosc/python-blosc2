@@ -332,8 +332,12 @@ def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op, kwar
         atol = 1e-15 if a1.dtype == "float64" else 1e-6
         rtol = atol
     if kwargs != {}:
-        if not np.isscalar(res):
+        if np.ndim(res) > 0:
             assert isinstance(res, blosc2.NDArray)
+        else:
+            # Full reductions retain the public zero-dimensional array
+            # contract even when storage options are supplied.
+            assert isinstance(res, np.ndarray)
         np.testing.assert_allclose(res[()], nres, atol=atol, rtol=rtol)
     else:
         np.testing.assert_allclose(res, nres, atol=atol, rtol=rtol)

@@ -14,8 +14,7 @@
  * expression_evaluator.py); unsupported combinations return -1.
  * NATIVE_MIN/MAX are separate from these legacy operations: they preserve
  * the mapped dtype, prefer -0 for min / +0 for max, select the first NaN, and
- * delegate NaN-free blocks to miniexpr's shared reducer so extrema rules keep a
- * single owner. The local first-NaN path remains for blocks miniexpr declines.
+ * delegate all floating blocks to miniexpr so numerical rules have one owner.
  */
 
 #ifndef B2_BLOCK_REDUCTIONS_H
@@ -25,14 +24,13 @@
 #include <math.h>
 #include <string.h>
 
-/* Prefer miniexpr's shared direct-input reducers so extrema rules (first-NaN
- * selection, signed-zero preference, scan order) have a single owner. The
- * header is internal to the pinned miniexpr sources; the guard keeps builds
- * against other layouts compiling with the local rules below. */
+/* Optional native capability. Older builds retain the graph-reader route. */
 #if defined(__has_include)
-#if __has_include("dsl_menudet_reduce.h")
-#include "dsl_menudet_reduce.h"
+#if __has_include("miniexpr_reduce.h")
+#include "miniexpr_reduce.h"
+#if defined(ME_EXTREMA_REDUCE_API) && ME_EXTREMA_REDUCE_API >= 1
 #define B2_HAVE_SHARED_MENUDET_REDUCE 1
+#endif
 #endif
 #endif
 #ifndef B2_HAVE_SHARED_MENUDET_REDUCE
@@ -102,21 +100,6 @@ enum {
   static int b2_reduce_##SUFFIX(int op, int acc, const ST *x, int64_t n, void *slot) {   \
     int64_t i;                                                                            \
     switch (op) {                                                                         \
-      case B2_REDUCE_NATIVE_MIN:                                                          \
-      case B2_REDUCE_NATIVE_MAX: {                                                        \
-        if (!(IS_FLOAT) || n <= 0) return -1;                                             \
-        ST m = x[0];                                                                      \
-        for (i = 1; i < n; i++) {                                                         \
-          ST v = x[i];                                                                    \
-          if (isnan((double)m)) continue;                                                 \
-          if (isnan((double)v) || (op == B2_REDUCE_NATIVE_MIN ? v < m : v > m) ||          \
-              (v == 0 && m == 0 &&                                                        \
-               (op == B2_REDUCE_NATIVE_MIN ? signbit((double)v) : !signbit((double)v)))) m = v; \
-        }                                                                                 \
-        if (isnan((double)m)) m = m + m;                                                  \
-        memcpy(slot, &m, sizeof(ST));                                                      \
-        return 0;                                                                         \
-      }                                                                                   \
       case B2_REDUCE_SUM:                                                                 \
         if (acc == B2_RT_F32) { *(float *)slot = b2_pairwise_f32_##SUFFIX(x, n); return 0; } \
         if (acc == B2_RT_F64) { *(double *)slot = b2_pairwise_f64_##SUFFIX(x, n); return 0; } \
@@ -187,11 +170,22 @@ B2_DEFINE_REDUCER(f32, float, 1, B2_RT_F64, double)
 B2_DEFINE_REDUCER(f64, double, 1, B2_RT_F64, double)
 
 #if B2_HAVE_SHARED_MENUDET_REDUCE
-/* Map a floating source code onto miniexpr's dtype enum, or ME_AUTO. */
+/* Map a source code onto miniexpr's dtype enum, or ME_AUTO. */
 static inline me_dtype b2_shared_dtype(int src) {
-  if (src == B2_RT_F32) return ME_FLOAT32;
-  if (src == B2_RT_F64) return ME_FLOAT64;
-  return ME_AUTO;
+  switch (src) {
+    case B2_RT_BOOL: return ME_BOOL;
+    case B2_RT_I8: return ME_INT8;
+    case B2_RT_I16: return ME_INT16;
+    case B2_RT_I32: return ME_INT32;
+    case B2_RT_I64: return ME_INT64;
+    case B2_RT_U8: return ME_UINT8;
+    case B2_RT_U16: return ME_UINT16;
+    case B2_RT_U32: return ME_UINT32;
+    case B2_RT_U64: return ME_UINT64;
+    case B2_RT_F32: return ME_FLOAT32;
+    case B2_RT_F64: return ME_FLOAT64;
+    default: return ME_AUTO;
+  }
 }
 #endif
 
@@ -200,15 +194,13 @@ static inline int b2_shared_reduction_rules_available(void) {
   return B2_HAVE_SHARED_MENUDET_REDUCE;
 }
 
-/* Let miniexpr reduce NaN-free floating blocks; return -1 so the caller keeps
- * its own first-NaN propagation for the cases miniexpr declines. */
+/* All numerical behavior, including NaNs, belongs to miniexpr. */
 static inline int b2_shared_extrema(int op, int src, int acc, const void *data, int64_t n, void *slot) {
 #if B2_HAVE_SHARED_MENUDET_REDUCE
   me_dtype dtype = b2_shared_dtype(src);
   if (dtype == ME_AUTO || acc != src || n <= 0) return -1;
   uint64_t bits = 0;
-  /* Declines NaN blocks; this is also its NaN scan, so do not pre-scan. */
-  if (!dsl_menudet_extrema(dtype, data, (size_t)n, 0, false,
+  if (!me_extrema_float(dtype, data, (size_t)n, 0, false,
                            op == B2_REDUCE_NATIVE_MIN, &bits)) return -1;
   memcpy(slot, &bits, dtype == ME_FLOAT32 ? sizeof(float) : sizeof(double));
   return 0;
@@ -220,9 +212,8 @@ static inline int b2_shared_extrema(int op, int src, int acc, const void *data, 
 
 /* Reduce n > 0 items of type `src` at `data` into the accumulator `slot`. */
 static inline int b2_block_reduce(int op, int src, int acc, const void *data, int64_t n, void *slot) {
-  if ((op == B2_REDUCE_NATIVE_MIN || op == B2_REDUCE_NATIVE_MAX) &&
-      b2_shared_extrema(op, src, acc, data, n, slot) == 0) {
-    return 0;
+  if (op == B2_REDUCE_NATIVE_MIN || op == B2_REDUCE_NATIVE_MAX) {
+    return b2_shared_extrema(op, src, acc, data, n, slot);
   }
   switch (src) {
     case B2_RT_BOOL: return b2_reduce_bool(op, acc, (const uint8_t *)data, n, slot);
@@ -247,7 +238,7 @@ static inline int b2_block_reduce_supported(int op, int src, int acc) {
   switch (op) {
     case B2_REDUCE_NATIVE_MIN:
     case B2_REDUCE_NATIVE_MAX:
-      return is_float && acc == src;
+      return B2_HAVE_SHARED_MENUDET_REDUCE && is_float && acc == src;
     case B2_REDUCE_SUM:
     case B2_REDUCE_PROD:
       return acc == B2_RT_F32 || acc == B2_RT_F64 || (acc == B2_RT_U64 && !is_float);
@@ -260,6 +251,41 @@ static inline int b2_block_reduce_supported(int op, int src, int acc) {
     default:
       return 0;
   }
+}
+
+static inline int b2_argextrema(int src, const void *data, int64_t n,
+    int64_t origin, int minimum, void *value, int64_t *index) {
+#if B2_HAVE_SHARED_MENUDET_REDUCE
+  me_dtype dtype = b2_shared_dtype(src);
+  me_argextrema_state state = {0};
+  if (n <= 0 || !me_argextrema_update(dtype, data, (size_t)n, origin, minimum != 0, &state)) return -1;
+  memcpy(value, &state.value, me_extrema_itemsize(dtype));
+  *index = state.index;
+  return 0;
+#else
+  (void)src; (void)data; (void)n; (void)origin; (void)minimum; (void)value; (void)index;
+  return -1;
+#endif
+}
+
+static inline int b2_argextrema_combine(int src, const void *values,
+    const int64_t *indices, int64_t n, int minimum, int64_t *index) {
+#if B2_HAVE_SHARED_MENUDET_REDUCE
+  me_dtype dtype = b2_shared_dtype(src);
+  size_t width = me_extrema_itemsize(dtype);
+  if (!width || n <= 0) return -1;
+  me_argextrema_state state = {0};
+  for (int64_t i = 0; i < n; i++) {
+    uint64_t bits = 0;
+    memcpy(&bits, (const unsigned char *)values + i * width, width);
+    if (!me_argextrema_merge(dtype, &state, bits, indices[i], minimum != 0)) return -1;
+  }
+  *index = state.index;
+  return 0;
+#else
+  (void)src; (void)values; (void)indices; (void)n; (void)minimum; (void)index;
+  return -1;
+#endif
 }
 
 #endif /* B2_BLOCK_REDUCTIONS_H */

@@ -1243,6 +1243,8 @@ cdef extern from "block_reductions.h":
     int b2_block_reduce(int op, int src, int acc, const void *data, int64_t n, void *slot) noexcept nogil
     int b2_block_reduce_supported(int op, int src, int acc) noexcept nogil
     int b2_shared_reduction_rules_available() noexcept nogil
+    int b2_argextrema(int, const void *, int64_t, int64_t, int, void *, int64_t *) noexcept nogil
+    int b2_argextrema_combine(int, const void *, const int64_t *, int64_t, int, int64_t *) noexcept nogil
 
 
 cdef int _menudet_reduce_type_code(dtype_obj) noexcept:
@@ -1345,6 +1347,7 @@ cdef struct menudet_prefilter_state:
     int reduction_acc_itemsize
     bint pairwise_sum
     bint identity_map
+    int64_t *arg_indices
     uint8_t *sum_leaves
     uint8_t *sum_fragments
     int64_t sum_leaf_origin
@@ -1624,7 +1627,7 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
             descriptor.block_origin = &block_origin
             descriptor.block_extent = &block_extent
         # Decoder/postfilter work must not contribute to numerical FP flags.
-        if state.pairwise_sum:
+        if state.pairwise_sum or state.reduction_output != NULL:
             b2_pairwise_clear_flags()
         if state.identity_map:
             destination = <void *>worker.bindings[0].data
@@ -1636,12 +1639,19 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
             if state.pairwise_sum:
                 rc = pairwise_store_block(state, <const uint8_t *>destination,
                                           origin, count, params.nblock, params.output_typesize)
+            elif state.arg_indices != NULL:
+                rc = b2_argextrema(state.reduction_src_type, destination, count, origin,
+                                  state.reduction_op == B2_REDUCE_NATIVE_MIN,
+                                  state.reduction_output + block_id * state.reduction_acc_itemsize,
+                                  state.arg_indices + block_id)
+                if rc:
+                    strcpy(error.message, "Menudet prefilter index reduction failed")
             elif b2_block_reduce(state.reduction_op, state.reduction_src_type, state.reduction_acc_type,
                                 destination, count,
                                 state.reduction_output + block_id * state.reduction_acc_itemsize):
                 rc = -4
                 strcpy(error.message, "Menudet prefilter block reduction failed")
-    if state.pairwise_sum:
+    if state.pairwise_sum or state.reduction_output != NULL:
         fp.flags |= b2_pairwise_flags()
     if fesetenv(&environment):
         rc = -5
@@ -1685,6 +1695,32 @@ def menudet_prefilter_reductions_available():
 def menudet_shared_reduction_rules_available():
     """Extrema rules come from miniexpr's shared direct-input reducer."""
     return bool(b2_shared_reduction_rules_available())
+
+
+def menudet_combine_argextrema(np.ndarray values, np.ndarray indices, bint minimum):
+    """Merge value/index partials through the native first-occurrence rule."""
+    cdef int src = _menudet_reduce_type_code(values.dtype)
+    cdef int64_t index = -1
+    cdef int rc
+    cdef unsigned flags = 0
+    cdef fenv_t environment
+    if (not b2_shared_reduction_rules_available() or src < 0 or values.ndim != 1
+            or not values.size or indices.ndim != 1 or indices.shape[0] != values.size
+            or indices.dtype != np.dtype("int64")
+            or not values.flags.c_contiguous or not indices.flags.c_contiguous
+            or not values.flags.aligned or not indices.flags.aligned):
+        raise ValueError("Invalid native index reduction partials")
+    with nogil:
+        rc = feholdexcept(&environment)
+        if rc == 0:
+            rc = b2_argextrema_combine(src, values.data, <const int64_t *>indices.data,
+                                      values.size, minimum, &index)
+            flags = b2_pairwise_flags()
+            if fesetenv(&environment):
+                rc = -1
+    if rc:
+        raise RuntimeError("Cannot merge native index reduction partials")
+    return np.asarray(index, dtype=np.int64), flags
 
 
 def menudet_resident_available():
@@ -2079,6 +2115,8 @@ cdef class NativeGraphHandle:
         document = json.loads(self.to_json())
         nodes = {node["id"]: node for node in document["nodes"]}
         root = nodes[document["root"]]
+        if root["op"] == "input":
+            result._identity_input = root["name"]
         if root["op"] in ("sum", "min", "max", "any", "all"):
             source = nodes[root["args"][0]]
             if source["op"] == "input":
@@ -2697,7 +2735,7 @@ cdef class MenudetArtifactHandle:
                            _driver_input=None, _nthreads=None, _block_items=None, _diagonal=None,
                            _chunk_indices=None, _reduction_op=None, _reduction_out=None,
                            _candidate_blocks=None, _prune_chunks=False, _pairwise_sum=False,
-                           _skip_identity=True):
+                           _skip_identity=True, _arg_indices=None):
         """Run an artifact through C-Blosc2 scheduling into Blosc2 or NumPy."""
         if not menudet_prefilter_inputs_eligible(
                 inputs, allow_numpy=numpy_out is not None or out is not None or _reduction_out is not None,
@@ -2739,8 +2777,19 @@ cdef class MenudetArtifactHandle:
                 raise ValueError("Prefilter reduction output must be a 1-D writable aligned C-contiguous array")
             reduction_acc_type = _menudet_reduce_type_code(_reduction_out.dtype)
             if (reduction_op == B2_REDUCE_NONE or reduction_src_type < 0 or reduction_acc_type < 0
-                    or not b2_block_reduce_supported(reduction_op, reduction_src_type, reduction_acc_type)):
+                    or (_arg_indices is None and not b2_block_reduce_supported(
+                        reduction_op, reduction_src_type, reduction_acc_type))):
                 raise ValueError("Unsupported Menudet prefilter reduction signature")
+        if _arg_indices is not None:
+            if (not b2_shared_reduction_rules_available()
+                    or _reduction_op not in ("native_min", "native_max") or _reduction_out is None
+                    or first.ndim != 1 or first.chunks[0] % first.blocks[0]
+                    or type(_arg_indices) is not np.ndarray or _arg_indices.ndim != 1
+                    or _arg_indices.size != _reduction_out.size or _arg_indices.dtype != np.dtype("int64")
+                    or not _arg_indices.flags.c_contiguous or not _arg_indices.flags.aligned
+                    or not _arg_indices.flags.writeable or _reduction_out.dtype != self.signature_dtype(-1)
+                    or np.shares_memory(_arg_indices, _reduction_out)):
+                raise ValueError("Invalid native index reduction buffers")
         if _pairwise_sum:
             if (not b2_pairwise_available() or _reduction_op != "sum" or _reduction_out is None
                     or first.ndim != 1
@@ -2831,7 +2880,7 @@ cdef class MenudetArtifactHandle:
             reduction_out=_reduction_out, reduction_op=reduction_op,
             reduction_src_type=reduction_src_type, reduction_acc_type=reduction_acc_type,
             candidate_blocks=_candidate_blocks, prune_chunks=bool(_prune_chunks),
-            pairwise_sum=bool(_pairwise_sum), identity_map=identity_map)
+            pairwise_sum=bool(_pairwise_sum), identity_map=identity_map, arg_indices=_arg_indices)
 
     def evaluate_sources(self, inputs, readers, shape, size_t tile_items=65536):
         cdef b2_array_source *sources = NULL
@@ -8013,7 +8062,8 @@ cdef class NDArray:
                                     np.ndarray reduction_out=None, int reduction_op=0,
                                     int reduction_src_type=-1, int reduction_acc_type=-1,
                                     np.ndarray candidate_blocks=None, bint prune_chunks=False,
-                                    bint pairwise_sum=False, bint identity_map=False):
+                                    bint pairwise_sum=False, bint identity_map=False,
+                                    np.ndarray arg_indices=None):
         cdef menudet_prefilter_state state
         cdef menudet_prefilter_worker *worker
         cdef blosc2_prefilter_params parameters
@@ -8079,6 +8129,7 @@ cdef class NDArray:
             state.reduction_acc_itemsize = reduction_out.dtype.itemsize
         state.pairwise_sum = pairwise_sum
         state.identity_map = identity_map
+        state.arg_indices = <int64_t *>arg_indices.data if arg_indices is not None else NULL
         if pairwise_sum:
             rc = b2_pairwise_init(&sum_state, b2_artifact_output(kernel._handle))
             if rc:
