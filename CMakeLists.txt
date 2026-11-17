@@ -146,8 +146,8 @@ endif()
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    # Shared extrema and mergeable value/index reductions (after v0.3.1).
-    GIT_TAG c720b6970f00b6b57c1aad48ff6b31d4d4023a62
+    # Shared extrema, mergeable value/index reductions, and centered moments.
+    GIT_TAG 8cff006874f8ba26e4bcbcd91427ac5eff8a69b1
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)

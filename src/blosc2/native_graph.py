@@ -1257,6 +1257,109 @@ def _prefilter_graph_reduction(plan, inputs, shape, op, first):
     return result.reshape(result_shape), report
 
 
+def compute_prefilter_moments_if_eligible(
+    expr, *, axis, dtype, ddof, keepdims, stddev, fp_accuracy, execution_kwargs
+):
+    """Single decode pass for full-domain floating variance/standard deviation.
+
+    Miniexpr owns centered block moments, merging, and finalization. Explicit
+    accuracy/backend requests retain their established implementation.
+    """
+    import blosc2
+
+    from .lazyexpr import _jit_from_env
+
+    policy = blosc2.jit_config.execution_options()
+    jit, backend = _jit_from_env(
+        execution_kwargs.get("jit", policy["jit"]),
+        execution_kwargs.get("jit_backend", policy["jit_backend"]),
+    )
+    if (
+        _NUMPY_VALUE_PROMOTION
+        or blosc2.IS_WASM
+        or backend is not None
+        or fp_accuracy is not None
+        or policy["fp_accuracy"] != blosc2.FPAccuracy.DEFAULT
+        or execution_kwargs.keys() - {"jit", "jit_backend"}
+        or not getattr(blosc2.blosc2_ext, "menudet_moments_available", lambda: False)()
+        or type(expr) is not blosc2.LazyExpr
+        or any(hasattr(expr, name) for name in ("_where_args", "_indices", "_order", "_output"))
+        or getattr(expr, "_eval_kwargs", None) is not None
+        or not (axis is None or (type(axis) is int and axis in (0, -1)))
+        or not isinstance(ddof, (int, float, np.integer, np.floating))
+        or not math.isfinite(ddof)
+    ):
+        return None
+    values = tuple(expr.operands.values())
+    first = next((value for value in values if type(value) is blosc2.NDArray), None)
+    if (
+        first is None
+        or first.ndim != 1
+        or first.size < MINIMUM_COMPRESSED_GRAPH_ITEMS
+        or first.size > 2**53
+        or first.size <= ddof
+        or first.chunks[0] % first.blocks[0]
+        or first.blocks[0] > 65536
+        or expr.dtype not in (np.dtype("float32"), np.dtype("float64"))
+        or (dtype is not None and np.dtype(dtype) != expr.dtype)
+    ):
+        return None
+    count = (first.size + first.blocks[0] - 1) // first.blocks[0]
+    if count * 32 > 1024 * 1024:
+        return None
+    if any(
+        type(value) not in (blosc2.NDArray, np.ndarray)
+        or value.shape != first.shape
+        or value.dtype.kind != "f"
+        or not value.dtype.isnative
+        or (
+            type(value) is blosc2.NDArray
+            and (
+                value.chunks != first.chunks
+                or value.blocks != first.blocks
+                or blosc2.blosc2_ext.reads_need_python(value)
+            )
+        )
+        for value in values
+    ) or not _native_first_syntax(expr.expression):
+        return None
+    try:
+        plan, inputs, reduction = lower_native_graph(expr, jit=jit is not False)
+        if reduction or plan.info()["stages"] != 1:
+            return None
+        artifact = plan._handle.reduction_artifact()
+    except NotImplementedError:
+        return None
+    except blosc2.MenudetError as error:
+        if error.status not in {"invalid_signature", "unsupported"}:
+            raise
+        return None
+    if artifact is None:
+        return None
+    signature = artifact.descriptor_info()
+    if signature["output_dtype"] != expr.dtype or set(signature["inputs"]) != set(inputs):
+        return None
+    if not blosc2.blosc2_ext.menudet_prefilter_inputs_eligible(
+        inputs, allow_numpy=True, output_dtype=expr.dtype
+    ):
+        return None
+    partials, report = artifact.evaluate_prefilter(
+        inputs,
+        _reduction_op="moments",
+        _reduction_out=np.empty(count * 4, dtype=np.float64),
+        _nthreads=min(blosc2.nthreads, max(1, first.chunks[0] // 65536)),
+    )
+    result, flags = blosc2.blosc2_ext.menudet_combine_moments(partials, ddof, stddev, expr.dtype)
+    report["fp_flags"] |= flags
+    report.update(
+        route="parallel-prefilter-moments",
+        reduction_buffer_bytes=partials.nbytes,
+        input_materialization_bytes=0,
+    )
+    expr._native_execution_report = report
+    return result.reshape((1,)) if keepdims else result
+
+
 def compute_prefilter_argreduce_if_eligible(  # noqa: C901 -- metadata-only admission before any reads
     expr, item, *, jit=True, jit_backend=None, fp_accuracy=None, options=None
 ):

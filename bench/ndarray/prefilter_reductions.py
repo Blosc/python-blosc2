@@ -5,7 +5,8 @@ Run with conda Python, e.g.:
 
 The reader route is produced by temporarily disabling prefilter input
 eligibility, which is what the adapter consults before claiming a reduction.
-Both routes must agree bit for bit, so a mismatch aborts the run.
+Both routes must agree bit for bit except for mean/variance/std, whose different
+summation/centered-moment algorithms use dtype-appropriate tolerances.
 """
 
 import argparse
@@ -25,7 +26,9 @@ import blosc2.native_graph as native_graph
 def benchmark(array, ops, repeats, expression):
     ext = blosc2.blosc2_ext
     eligible = ext.menudet_prefilter_inputs_eligible
+    moments = getattr(ext, "menudet_moments_available", lambda: False)
     for op in ops:
+        statistical = op in {"var", "std"}
         samples = {mode: [] for mode in ("prefilter", "reader")}
         reports = {}
         expected = None
@@ -35,23 +38,42 @@ def benchmark(array, ops, repeats, expression):
             shift = iteration % len(modes)
             for mode in modes[shift:] + modes[:shift]:
                 try:
-                    ext.menudet_prefilter_inputs_eligible = (
-                        (lambda *args, **kwargs: False) if mode == "reader" else eligible
-                    )
+                    if statistical:
+                        # Compare one-pass moments with the established two-pass
+                        # implementation, keeping its accelerated sums enabled.
+                        ext.menudet_moments_available = (lambda: False) if mode == "reader" else moments
+                    else:
+                        ext.menudet_prefilter_inputs_eligible = (
+                            (lambda *args, **kwargs: False) if mode == "reader" else eligible
+                        )
                     expr = blosc2.lazyexpr(expression, {"a": array})
                     start = time.perf_counter()
                     result = getattr(expr, op)()
                     elapsed = time.perf_counter() - start
                 finally:
                     ext.menudet_prefilter_inputs_eligible = eligible
+                    ext.menudet_moments_available = moments
                 if expected is None:
-                    expected = result.tobytes()
-                elif result.tobytes() != expected:
+                    expected = result.copy()
+                elif statistical or op == "mean":
+                    np.testing.assert_allclose(
+                        result,
+                        expected,
+                        rtol=2e-5 if array.dtype == np.float32 else 1e-11,
+                        # Means close to zero need an absolute tolerance; the
+                        # existing reader and fixed-leaf sums have different trees.
+                        atol=np.finfo(array.dtype).eps if op == "mean" else 0,
+                    )
+                elif result.tobytes() != expected.tobytes():
                     raise SystemExit(f"{op}: {mode} route changed result bits")
                 if iteration:
                     samples[mode].append(elapsed)
                 reports[mode] = getattr(expr, "_native_execution_report", {"route": "chunked-fallback"})
-                if mode == "reader" and reports[mode]["route"].startswith("parallel-prefilter"):
+                if (
+                    mode == "reader"
+                    and reports[mode]["route"].startswith("parallel-prefilter")
+                    and not statistical
+                ):
                     raise SystemExit(f"{op}: baseline unexpectedly used a prefilter")
         timings = {mode: statistics.median(v) for mode, v in samples.items()}
         baseline = timings["reader"]
@@ -98,10 +120,14 @@ def main():
     parser.add_argument(
         "--ops",
         nargs="+",
-        choices=["min", "max", "any", "all", "argmin", "argmax"],
+        choices=["min", "max", "any", "all", "argmin", "argmax", "mean", "var", "std"],
         default=["min", "max", "any", "all", "argmin", "argmax"],
     )
-    parser.add_argument("--output", type=Path, help="Save timings and environment metadata as JSON")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="Save per-run JSON outside the checkout (temporary storage or CI artifacts)",
+    )
     args = parser.parse_args()
     if args.repeats < 1 or args.size < 262144 or min(args.threads) < 1:
         parser.error("--repeats/--threads must be positive; --size must be at least 262144")
@@ -123,6 +149,9 @@ def main():
                 del values
                 for threads in dict.fromkeys(args.threads):
                     blosc2.set_nthreads(threads)
+                    # Legacy single-worker reductions use the array's decoder
+                    # policy rather than the global setting. Keep both matched.
+                    array.schunk.dparams = blosc2.DParams(nthreads=threads)
                     for expression in args.expressions:
                         for record in benchmark(array, args.ops, args.repeats, expression):
                             records.append({"codec": name, **record})

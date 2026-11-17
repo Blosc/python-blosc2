@@ -37,6 +37,30 @@
 #define B2_HAVE_SHARED_MENUDET_REDUCE 0
 #endif
 
+#if defined(ME_MOMENTS_REDUCE_API) && ME_MOMENTS_REDUCE_API >= 1
+#define B2_HAVE_MOMENTS 1
+#else
+#define B2_HAVE_MOMENTS 0
+#endif
+
+static inline int b2_moments_available(void) {
+  return B2_HAVE_MOMENTS;
+}
+
+static inline int b2_moments_combine(const double *partials, int64_t count,
+                                   double ddof, int stddev, double *out) {
+#if B2_HAVE_MOMENTS
+  double state[4] = {0};
+  for (int64_t i = 0; i < count; i++) {
+    if (!me_moments_merge(state, partials + 4 * i)) return -1;
+  }
+  return me_moments_finish(state, ddof, stddev != 0, out) ? 0 : -1;
+#else
+  (void)partials; (void)count; (void)ddof; (void)stddev; (void)out;
+  return -1;
+#endif
+}
+
 enum {
   B2_REDUCE_NONE = 0,
   B2_REDUCE_SUM,
@@ -47,6 +71,7 @@ enum {
   B2_REDUCE_ALL,
   B2_REDUCE_NATIVE_MIN,
   B2_REDUCE_NATIVE_MAX,
+  B2_REDUCE_MOMENTS,
 };
 
 /* Element type codes, shared by sources and accumulators. */
@@ -169,7 +194,7 @@ B2_DEFINE_REDUCER(u64, uint64_t, 0, B2_RT_U64, uint64_t)
 B2_DEFINE_REDUCER(f32, float, 1, B2_RT_F64, double)
 B2_DEFINE_REDUCER(f64, double, 1, B2_RT_F64, double)
 
-#if B2_HAVE_SHARED_MENUDET_REDUCE
+#if B2_HAVE_SHARED_MENUDET_REDUCE || B2_HAVE_MOMENTS
 /* Map a source code onto miniexpr's dtype enum, or ME_AUTO. */
 static inline me_dtype b2_shared_dtype(int src) {
   switch (src) {
@@ -212,6 +237,14 @@ static inline int b2_shared_extrema(int op, int src, int acc, const void *data, 
 
 /* Reduce n > 0 items of type `src` at `data` into the accumulator `slot`. */
 static inline int b2_block_reduce(int op, int src, int acc, const void *data, int64_t n, void *slot) {
+  if (op == B2_REDUCE_MOMENTS) {
+#if B2_HAVE_MOMENTS
+    if (acc != B2_RT_F64 || n < 0) return -1;
+    return me_moments_span(b2_shared_dtype(src), data, (size_t)n, (double *)slot) ? 0 : -1;
+#else
+    return -1;
+#endif
+  }
   if (op == B2_REDUCE_NATIVE_MIN || op == B2_REDUCE_NATIVE_MAX) {
     return b2_shared_extrema(op, src, acc, data, n, slot);
   }
@@ -236,6 +269,8 @@ static inline int b2_block_reduce_supported(int op, int src, int acc) {
   int is_float = src == B2_RT_F32 || src == B2_RT_F64;
   int is_signed = src >= B2_RT_I8 && src <= B2_RT_I64;
   switch (op) {
+    case B2_REDUCE_MOMENTS:
+      return B2_HAVE_MOMENTS && is_float && acc == B2_RT_F64;
     case B2_REDUCE_NATIVE_MIN:
     case B2_REDUCE_NATIVE_MAX:
       return B2_HAVE_SHARED_MENUDET_REDUCE && is_float && acc == src;

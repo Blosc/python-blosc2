@@ -1229,6 +1229,7 @@ cdef extern from "block_reductions.h":
         B2_REDUCE_ALL
         B2_REDUCE_NATIVE_MIN
         B2_REDUCE_NATIVE_MAX
+        B2_REDUCE_MOMENTS
         B2_RT_BOOL
         B2_RT_I8
         B2_RT_I16
@@ -1243,6 +1244,8 @@ cdef extern from "block_reductions.h":
     int b2_block_reduce(int op, int src, int acc, const void *data, int64_t n, void *slot) noexcept nogil
     int b2_block_reduce_supported(int op, int src, int acc) noexcept nogil
     int b2_shared_reduction_rules_available() noexcept nogil
+    int b2_moments_available() noexcept nogil
+    int b2_moments_combine(const double *, int64_t, double, int, double *) noexcept nogil
     int b2_argextrema(int, const void *, int64_t, int64_t, int, void *, int64_t *) noexcept nogil
     int b2_argextrema_combine(int, const void *, const int64_t *, int64_t, int, int64_t *) noexcept nogil
 
@@ -1277,6 +1280,8 @@ cdef int _menudet_reduce_type_code(dtype_obj) noexcept:
 
 
 cdef int _menudet_reduce_op_code(op) noexcept:
+    if op == "moments":
+        return B2_REDUCE_MOMENTS
     if op == "native_min":
         return B2_REDUCE_NATIVE_MIN
     if op == "native_max":
@@ -1695,6 +1700,44 @@ def menudet_prefilter_reductions_available():
 def menudet_shared_reduction_rules_available():
     """Extrema rules come from miniexpr's shared direct-input reducer."""
     return bool(b2_shared_reduction_rules_available())
+
+
+def menudet_moments_available():
+    return bool(b2_moments_available())
+
+
+def menudet_combine_moments(np.ndarray partials, double ddof=0, bint stddev=False, dtype="float64"):
+    """Finalize native count/origin/offset/M2 slots without leaking floating flags."""
+    cdef double result
+    cdef int rc
+    cdef unsigned flags = 0
+    cdef fenv_t environment
+    cdef int output_type = _menudet_reduce_type_code(dtype)
+    cdef np.ndarray output
+    if (not b2_moments_available() or partials.ndim != 1 or not partials.size
+            or partials.size % 4 or partials.dtype != np.dtype("float64")
+            or output_type not in (B2_RT_F32, B2_RT_F64)
+            or not partials.flags.c_contiguous or not partials.flags.aligned):
+        raise ValueError("Invalid native moments partials")
+    output = np.empty((), dtype=dtype)
+    with nogil:
+        rc = feholdexcept(&environment)
+        if rc == 0:
+            rc = b2_moments_combine(<const double *>partials.data, partials.size // 4,
+                                    ddof, stddev, &result)
+            if rc == 0:
+                # Capture narrowing overflow in the report, not a Python
+                # astype warning outside the isolated floating environment.
+                if output_type == B2_RT_F32:
+                    (<float *>output.data)[0] = <float>result
+                else:
+                    (<double *>output.data)[0] = result
+            flags = b2_pairwise_flags()
+            if fesetenv(&environment):
+                rc = -1
+    if rc:
+        raise RuntimeError("Cannot merge native moments partials")
+    return output, flags
 
 
 def menudet_combine_argextrema(np.ndarray values, np.ndarray indices, bint minimum):
@@ -2771,11 +2814,19 @@ cdef class MenudetArtifactHandle:
             if (type(_reduction_out) is not np.ndarray
                     or (_reduction_out.shape != () if _pairwise_sum else (
                         _reduction_out.ndim != 1
-                        or _reduction_out.size != (first.size + block_items - 1) // block_items))
+                        or _reduction_out.size != ((first.size + block_items - 1) // block_items)
+                        * (4 if reduction_op == B2_REDUCE_MOMENTS else 1)))
                     or not _reduction_out.flags.c_contiguous or not _reduction_out.flags.aligned
                     or not _reduction_out.flags.writeable):
                 raise ValueError("Prefilter reduction output must be a 1-D writable aligned C-contiguous array")
             reduction_acc_type = _menudet_reduce_type_code(_reduction_out.dtype)
+            if reduction_op == B2_REDUCE_MOMENTS and (
+                    first.ndim != 1 or first.chunks[0] % first.blocks[0] or _pairwise_sum):
+                raise ValueError("Moments prefilters require aligned 1-D chunks")
+            if reduction_op == B2_REDUCE_MOMENTS and any(
+                    type(value) is np.ndarray and np.shares_memory(_reduction_out, value)
+                    for value in inputs.values()):
+                raise ValueError("Moments partials must not overlap an input")
             if (reduction_op == B2_REDUCE_NONE or reduction_src_type < 0 or reduction_acc_type < 0
                     or (_arg_indices is None and not b2_block_reduce_supported(
                         reduction_op, reduction_src_type, reduction_acc_type))):
@@ -8127,6 +8178,8 @@ cdef class NDArray:
             state.reduction_src_type = reduction_src_type
             state.reduction_acc_type = reduction_acc_type
             state.reduction_acc_itemsize = reduction_out.dtype.itemsize
+            if reduction_op == B2_REDUCE_MOMENTS:
+                state.reduction_acc_itemsize *= 4
         state.pairwise_sum = pairwise_sum
         state.identity_map = identity_map
         state.arg_indices = <int64_t *>arg_indices.data if arg_indices is not None else NULL

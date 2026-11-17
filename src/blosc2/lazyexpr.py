@@ -4794,9 +4794,33 @@ class LazyExpr(LazyArray):
         execution_kwargs = blosc2.jit_config.pop_execution_options(kwargs)
         where = self._normalize_where(where)
         item = kwargs.pop("item", ())
-        if item == () and axis is None and where is None and self._can_full_var(dtype):
+        from .native_graph import compute_prefilter_moments_if_eligible
+
+        self.__dict__.pop("_native_execution_report", None)
+        out = (
+            compute_prefilter_moments_if_eligible(
+                self,
+                axis=axis,
+                dtype=dtype,
+                ddof=ddof,
+                keepdims=keepdims,
+                stddev=finish is not None,
+                fp_accuracy=fp_accuracy,
+                execution_kwargs=execution_kwargs,
+            )
+            if item == () and where is None
+            else None
+        )
+        native_moments = out is not None
+        if (
+            not native_moments
+            and item == ()
+            and axis is None
+            and where is None
+            and self._can_full_var(dtype)
+        ):
             out = self._full_var(dtype, keepdims, fp_accuracy, execution_kwargs)
-        else:
+        elif not native_moments:
             if item == ():  # fast path
                 mean_value = self.mean(
                     axis=axis,
@@ -4828,7 +4852,7 @@ class LazyExpr(LazyArray):
                 fp_accuracy=fp_accuracy,
                 **execution_kwargs,
             )
-        if ddof != 0:
+        if ddof != 0 and not native_moments:
             num_elements = (
                 self.get_num_elements(axis, item, fp_accuracy=fp_accuracy, **execution_kwargs)
                 if where is None
@@ -4839,7 +4863,7 @@ class LazyExpr(LazyArray):
             # Keep the dtype of the variance: with NumPy 1.x, a float32 scalar times a Python int
             # becomes float64, and so does a float32 array times an int above 65535
             out = (out * num_elements / (num_elements - ddof)).astype(np.asarray(out).dtype, copy=False)
-        if finish is not None:
+        if finish is not None and not native_moments:
             out = finish(out)
         if np.isscalar(out):
             out = np.asarray(out)

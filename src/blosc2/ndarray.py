@@ -915,6 +915,14 @@ def std(
     std_along_axis: np.ndarray or :ref:`NDArray` or scalar
         The standard deviation of the elements along the axis.
 
+    Notes
+    -----
+    Eligible full-domain 1-D floating reductions can use native centered block
+    moments without decoding the input twice. Float32 moments accumulate in
+    float64 and the result retains the requested dtype. Rounding can differ
+    from the two-pass implementation. Explicit accuracy/backend policies and
+    unsupported requests retain their existing evaluation paths.
+
     References
     ----------
     `np.std <https://numpy.org/doc/stable/reference/generated/numpy.std.html>`_
