@@ -301,13 +301,14 @@ def test_kernel_no_inputs_with_explicit_shape():
     np.testing.assert_equal(res, expected)
 
 
-def test_dsl_kernel_with_no_inputs_sum_returns_scalar():
+def test_dsl_kernel_with_no_inputs_sum_returns_zero_dimensional_array():
     shape = (10, 5)
     expr = blosc2.lazyudf(kernel_index_ramp_no_inputs, (), dtype=np.float32, shape=shape)
     result = expr.sum()
 
     expected = np.arange(np.prod(shape), dtype=np.float32).reshape(shape).sum()
-    assert np.isscalar(result)
+    assert isinstance(result, np.ndarray)
+    assert result.shape == ()
     np.testing.assert_allclose(result, expected, rtol=0.0, atol=0.0)
 
 

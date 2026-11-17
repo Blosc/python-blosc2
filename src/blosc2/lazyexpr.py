@@ -3511,7 +3511,7 @@ def reduce_slices(  # noqa: C901
                 # exist after per-block reduction.  Use axis=0 to combine
                 # all block results.
                 result = reduce_op.value.reduce(aux_reduc, axis=0)
-            return result
+            return np.asarray(result)
 
     # Iterate over the operands and get the chunks
     chunk_operands = {}
@@ -3715,16 +3715,13 @@ def reduce_slices(  # noqa: C901
 
     if reduced_shape == ():
         # convert_none_out() may allocate shape (1,) as an internal buffer for scalar reductions.
-        # Collapse it to a numpy scalar while handling both 0-d and 1-d singleton arrays.
-        if isinstance(out, np.ndarray):
-            out = out[()] if out.ndim == 0 else out[0]
-        else:
-            out = out[()]
+        # Full reductions return a zero-dimensional array, not a NumPy scalar.
+        out = np.asarray(out).reshape(())
     final_mask = tuple(np.where(mask_slice)[0])
     if np.any(mask_slice):  # remove dummy dims
         out = np.squeeze(out, axis=final_mask)
     # Check if the output array needs to be converted into a blosc2.NDArray
-    if kwargs != {} and not np.isscalar(out):
+    if kwargs != {} and np.ndim(out) > 0:
         out = blosc2.asarray(out, **kwargs)
     return out
 
@@ -4749,7 +4746,7 @@ class LazyExpr(LazyArray):
                 axis=axis, dtype=np.int64, fp_accuracy=fp_accuracy, **execution_kwargs
             )
         )
-        if np.isscalar(num_elements) and num_elements == 0:
+        if np.ndim(num_elements) == 0 and num_elements == 0:
             raise ValueError("mean of an empty array is not defined")
         out = total_sum / num_elements
         # NumPy's dtype for a floating `dtype` or input: NumPy 1.x makes a float32 scalar over a
@@ -4758,11 +4755,13 @@ class LazyExpr(LazyArray):
         mean_dtype = np.dtype(self.dtype if dtype is None else dtype)
         if mean_dtype.kind in "fc" and isinstance(out, (np.ndarray, np.generic)):
             out = out.astype(mean_dtype, copy=False)
+        if np.isscalar(out):
+            out = np.asarray(out)
         out2 = kwargs.pop("out", None)
         if out2 is not None:
             out2[:] = out
             return out2
-        if kwargs != {} and not np.isscalar(out):
+        if kwargs != {} and np.ndim(out) > 0:
             out = blosc2.asarray(out, **kwargs)
         return out
 
@@ -4842,11 +4841,13 @@ class LazyExpr(LazyArray):
             out = (out * num_elements / (num_elements - ddof)).astype(np.asarray(out).dtype, copy=False)
         if finish is not None:
             out = finish(out)
+        if np.isscalar(out):
+            out = np.asarray(out)
         out2 = kwargs.pop("out", None)
         if out2 is not None:
             out2[:] = out
             return out2
-        if kwargs != {} and not np.isscalar(out):
+        if kwargs != {} and np.ndim(out) > 0:
             out = blosc2.asarray(out, **kwargs)
         return out
 
@@ -5497,6 +5498,8 @@ class LazyExpr(LazyArray):
         if hasattr(self, "_order"):
             kwargs["_order"] = self._order
         result = self._compute_expr(item, kwargs)
+        if "_reduce_args" in kwargs and np.isscalar(result):
+            result = np.asarray(result)
         if "_order" in kwargs and "_indices" not in kwargs:
             # We still need to apply the index in result
             x = self._where_args["_where_x"]

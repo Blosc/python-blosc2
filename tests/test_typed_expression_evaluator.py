@@ -287,7 +287,9 @@ def test_typed_scalar_reduction_prefilter(monkeypatch, dtype, op, explicit_dtype
         kwargs = {} if explicit_dtype is None else {"dtype": explicit_dtype}
     got = getattr(expr, method)(**kwargs)
     expected = getattr(nexpr, method)(**kwargs)
-    assert np.dtype(type(got)) == np.dtype(type(expected))
+    assert isinstance(got, np.ndarray)
+    assert got.shape == ()
+    assert got.dtype == expected.dtype
     if np.issubdtype(expected.dtype, np.floating):
         np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-5)
     else:
@@ -319,7 +321,9 @@ def test_typed_boolean_accumulator_uses_logical_reduction(monkeypatch, op, value
     monkeypatch.setattr(blosc2.NDArray, "_execute_menudet_prefilter", record)
     a = blosc2.asarray(values, chunks=(8,), blocks=(2,))
     result = getattr(a, op)(dtype=np.bool_)
-    assert isinstance(result, np.bool_)
+    assert isinstance(result, np.ndarray)
+    assert result.shape == ()
+    assert result.dtype == np.bool_
     assert result == getattr(values, op)(dtype=np.bool_)
     if (
         not blosc2.IS_WASM
@@ -333,7 +337,9 @@ def test_typed_boolean_accumulator_uses_logical_reduction(monkeypatch, op, value
 def test_typed_empty_boolean_accumulator_identity(op):
     values = np.array([], dtype=np.int64)
     result = getattr(blosc2.asarray(values), op)(dtype=np.bool_)
-    assert isinstance(result, np.bool_)
+    assert isinstance(result, np.ndarray)
+    assert result.shape == ()
+    assert result.dtype == np.bool_
     assert result == getattr(values, op)(dtype=np.bool_)
 
 

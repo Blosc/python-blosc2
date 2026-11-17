@@ -47,5 +47,7 @@ def test_column_sum_accepts_dtype():
 
     result = t.x.sum(dtype=np.float64)
 
-    assert isinstance(result, np.floating)
+    assert isinstance(result, np.ndarray)
+    assert result.shape == ()
+    assert result.dtype == np.float64
     assert result == 5.0

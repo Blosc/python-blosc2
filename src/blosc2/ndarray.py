@@ -2249,7 +2249,7 @@ def isinf(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
 #     return ndarr.__ne__(0)
 
 
-def count_nonzero(ndarr: blosc2.Array, axis: int | Sequence[int] | None = None) -> int:
+def count_nonzero(ndarr: blosc2.Array, axis: int | Sequence[int] | None = None) -> np.ndarray:
     """
     Return number of nonzero values along axes.
 
@@ -2263,8 +2263,8 @@ def count_nonzero(ndarr: blosc2.Array, axis: int | Sequence[int] | None = None) 
 
     Returns
     -------
-    out: int
-        Number of nonzero elements.
+    out: np.ndarray
+        Number of nonzero elements, as a zero-dimensional array for a full reduction.
 
     References
     ----------
