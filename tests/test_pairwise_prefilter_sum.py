@@ -8,14 +8,13 @@ import pytest
 import blosc2
 
 pytestmark = pytest.mark.skipif(
-    blosc2.IS_WASM
-    or not getattr(blosc2.blosc2_ext, "menudet_pairwise_sum_available", lambda: False)(),
+    blosc2.IS_WASM or not getattr(blosc2.blosc2_ext, "menudet_pairwise_sum_available", lambda: False)(),
     reason="Requires native fixed-leaf pairwise sums",
 )
 
 
 @pytest.fixture
-def automatic_pairwise(monkeypatch):
+def automatic_pairwise(monkeypatch, automatic_native_runtime):
     from blosc2 import native_graph, resident_execution
 
     monkeypatch.setattr(native_graph, "MINIMUM_COMPRESSED_GRAPH_ITEMS", 1)
