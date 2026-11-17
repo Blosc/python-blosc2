@@ -1337,6 +1337,7 @@ cdef struct menudet_prefilter_state:
     int reduction_acc_type
     int reduction_acc_itemsize
     bint pairwise_sum
+    bint sum_identity
     uint8_t *sum_leaves
     uint8_t *sum_fragments
     int64_t sum_leaf_origin
@@ -1394,6 +1395,28 @@ cdef extern from "fenv.h":
     int fesetenv(const fenv_t *) noexcept nogil
 
 
+@cython.cdivision(True)
+cdef int pairwise_store_block(menudet_prefilter_state *state, const uint8_t *values,
+                              int64_t origin, int64_t count, int64_t block,
+                              int itemsize) noexcept nogil:
+    cdef int64_t prefix = min(count, (B2_PAIRWISE_LEAF_ITEMS - origin % B2_PAIRWISE_LEAF_ITEMS)
+                             % B2_PAIRWISE_LEAF_ITEMS)
+    cdef int64_t full = (count - prefix) // B2_PAIRWISE_LEAF_ITEMS * B2_PAIRWISE_LEAF_ITEMS
+    cdef int64_t suffix = count - prefix - full
+    cdef int64_t leaf_offset = (origin + prefix) // B2_PAIRWISE_LEAF_ITEMS - state.sum_leaf_origin
+    if prefix:
+        memcpy(state.sum_fragments + block * 2 * state.sum_fragment_items * itemsize,
+               values, prefix * itemsize)
+    if suffix:
+        memcpy(state.sum_fragments + (block * 2 + 1) * state.sum_fragment_items * itemsize,
+               values + (prefix + full) * itemsize, suffix * itemsize)
+    if full:
+        return b2_pairwise_leaves(b2_artifact_output(state.artifact), values + prefix * itemsize, full,
+                                 state.sum_leaves + leaf_offset * itemsize,
+                                 full // B2_PAIRWISE_LEAF_ITEMS * itemsize)
+    return 0
+
+
 @cython.cdivision(True)  # see aux_miniexpr()
 cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nogil:
     cdef menudet_prefilter_state *state = <menudet_prefilter_state *>params.user_data
@@ -1419,7 +1442,6 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
     cdef int64_t origins[16]
     cdef int64_t extents[16]
     cdef bint edge = False
-    cdef int64_t prefix, full, suffix, leaf_offset
     if state.resident:
         # Disposable chunks carry no numerical payload, so physical scheduling
         # blocks may visit logical spans in striped order. Spread first-touch
@@ -1597,30 +1619,16 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
         # Decoder/postfilter work must not contribute to numerical FP flags.
         if state.pairwise_sum:
             b2_pairwise_clear_flags()
-        rc = b2_artifact_eval_status(state.artifact, worker.bindings, state.ninputs,
-                                    destination, &descriptor, 0, &fp, &error)
+        if state.sum_identity:
+            destination = <void *>worker.bindings[0].data
+            fp.supported = 1
+        else:
+            rc = b2_artifact_eval_status(state.artifact, worker.bindings, state.ninputs,
+                                        destination, &descriptor, 0, &fp, &error)
         if not rc and state.reduction_output != NULL:
             if state.pairwise_sum:
-                prefix = min(count, (B2_PAIRWISE_LEAF_ITEMS - origin % B2_PAIRWISE_LEAF_ITEMS)
-                             % B2_PAIRWISE_LEAF_ITEMS)
-                full = (count - prefix) // B2_PAIRWISE_LEAF_ITEMS * B2_PAIRWISE_LEAF_ITEMS
-                suffix = count - prefix - full
-                leaf_offset = (origin + prefix) // B2_PAIRWISE_LEAF_ITEMS - state.sum_leaf_origin
-                if prefix:
-                    memcpy(state.sum_fragments + (
-                               params.nblock * 2 * state.sum_fragment_items * params.output_typesize),
-                           destination, prefix * params.output_typesize)
-                if suffix:
-                    memcpy(state.sum_fragments + (
-                               (params.nblock * 2 + 1) * state.sum_fragment_items * params.output_typesize),
-                           <uint8_t *>destination + (prefix + full) * params.output_typesize,
-                           suffix * params.output_typesize)
-                if full:
-                    rc = b2_pairwise_leaves(
-                        b2_artifact_output(state.artifact),
-                        <uint8_t *>destination + prefix * params.output_typesize, full,
-                        state.sum_leaves + leaf_offset * params.output_typesize,
-                        full // B2_PAIRWISE_LEAF_ITEMS * params.output_typesize)
+                rc = pairwise_store_block(state, <const uint8_t *>destination,
+                                          origin, count, params.nblock, params.output_typesize)
             elif b2_block_reduce(state.reduction_op, state.reduction_src_type, state.reduction_acc_type,
                                 destination, count,
                                 state.reduction_output + block_id * state.reduction_acc_itemsize):
@@ -2053,6 +2061,16 @@ cdef class NativeGraphHandle:
         result._borrowed = True
         result._handle = <void *>artifact
         result._owner = self
+        # The native-validated graph is immutable. Record a proof of an exact
+        # input-only map once, rather than guessing from an expression string.
+        import json
+        document = json.loads(self.to_json())
+        nodes = {node["id"]: node for node in document["nodes"]}
+        root = nodes[document["root"]]
+        if root["op"] == "sum":
+            source = nodes[root["args"][0]]
+            if source["op"] == "input":
+                result._identity_input = source["name"]
         return result
 
     @staticmethod
@@ -2385,6 +2403,7 @@ cdef class MenudetArtifactHandle:
     cdef bytes _artifact_document
     cdef object _attested_graph
     cdef object _resident_meta
+    cdef object _identity_input
 
     def __cinit__(self, bytes artifact=None, int jit_mode=0, bint infer_output=False):
         cdef b2_artifact_error error
@@ -2665,7 +2684,8 @@ cdef class MenudetArtifactHandle:
     def evaluate_prefilter(self, inputs, out=None, numpy_out=None, _chunk_range=None,
                            _driver_input=None, _nthreads=None, _block_items=None, _diagonal=None,
                            _chunk_indices=None, _reduction_op=None, _reduction_out=None,
-                           _candidate_blocks=None, _prune_chunks=False, _pairwise_sum=False):
+                           _candidate_blocks=None, _prune_chunks=False, _pairwise_sum=False,
+                           _skip_identity=True):
         """Run an artifact through C-Blosc2 scheduling into Blosc2 or NumPy."""
         if not menudet_prefilter_inputs_eligible(
                 inputs, allow_numpy=numpy_out is not None or out is not None or _reduction_out is not None,
@@ -2716,6 +2736,10 @@ cdef class MenudetArtifactHandle:
                     or _reduction_out.dtype != self.signature_dtype(-1)
                     or _reduction_out.dtype not in (np.dtype("float32"), np.dtype("float64"))):
                 raise ValueError("Pairwise prefilters require a matching floating, 1-D full sum")
+        sum_identity = (
+            bool(_skip_identity) and _pairwise_sum and len(inputs) == 1
+            and self._identity_input in inputs and first.dtype == self.signature_dtype(-1)
+        )
         if _candidate_blocks is not None or _prune_chunks:
             if (_candidate_blocks is None or not inputs or first.ndim != 1 or _reduction_out is not None
                     or _chunk_range is not None or _chunk_indices is not None or _block_items is not None):
@@ -2795,7 +2819,7 @@ cdef class MenudetArtifactHandle:
             reduction_out=_reduction_out, reduction_op=reduction_op,
             reduction_src_type=reduction_src_type, reduction_acc_type=reduction_acc_type,
             candidate_blocks=_candidate_blocks, prune_chunks=bool(_prune_chunks),
-            pairwise_sum=bool(_pairwise_sum))
+            pairwise_sum=bool(_pairwise_sum), sum_identity=sum_identity)
 
     def evaluate_sources(self, inputs, readers, shape, size_t tile_items=65536):
         cdef b2_array_source *sources = NULL
@@ -7977,7 +8001,7 @@ cdef class NDArray:
                                     np.ndarray reduction_out=None, int reduction_op=0,
                                     int reduction_src_type=-1, int reduction_acc_type=-1,
                                     np.ndarray candidate_blocks=None, bint prune_chunks=False,
-                                    bint pairwise_sum=False):
+                                    bint pairwise_sum=False, bint sum_identity=False):
         cdef menudet_prefilter_state state
         cdef menudet_prefilter_worker *worker
         cdef blosc2_prefilter_params parameters
@@ -8042,6 +8066,7 @@ cdef class NDArray:
             state.reduction_acc_type = reduction_acc_type
             state.reduction_acc_itemsize = reduction_out.dtype.itemsize
         state.pairwise_sum = pairwise_sum
+        state.sum_identity = sum_identity
         if pairwise_sum:
             rc = b2_pairwise_init(&sum_state, b2_artifact_output(kernel._handle))
             if rc:
@@ -8246,6 +8271,7 @@ cdef class NDArray:
                     free(state.chunks[i])
         result = reduction_out if reduction_out is not None else (numpy_out if numpy_out is not None else self)
         return result, {"route": "menudet-prefilter", "evaluated_blocks": state.evaluated_blocks,
+                          "identity_map_skipped": bool(sum_identity),
                           "summation": "fixed-pairwise" if pairwise_sum else None,
                           "logical_leaf_items": B2_PAIRWISE_LEAF_ITEMS if pairwise_sum else None,
                           "reduction_buffer_bytes": (sum_leaves.nbytes + sum_fragments.nbytes
@@ -8256,7 +8282,7 @@ cdef class NDArray:
                          "discarded_output_bytes": placeholder_bytes,
                         "fp_flags": state.fp_flags, "fp_supported": bool(state.fp_supported),
                          "threads": cparams.nthreads,
-                         "native_decoder_contexts": decoder_contexts,
+                          "native_decoder_contexts": decoder_contexts,
                          "input_buffer_allocations": input_buffer_allocations,
                          "input_chunk_fetches": input_chunk_fetches,
                          "output_zero_fill_bytes": state.output_zero_fill_bytes,

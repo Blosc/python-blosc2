@@ -22,6 +22,8 @@ mapped and accumulator dtypes, use parallel prefilters.
 Storage blocks drive decompression and expression evaluation, but
 arithmetic uses fixed 128-element logical leaves and a pairwise merge tree.
 Partial leaves crossing storage boundaries are completed in logical order.
+For plain sums, a proven input-only map skips elementwise evaluation and the
+mapped-block copy, reducing directly from the worker's decoded input buffer.
 Results are independent of thread count and compression partitioning for the
 same mapped values, with scratch bounded by chunk size rather than array size.
 This improves accumulation accuracy without guaranteeing correctly rounded sums.

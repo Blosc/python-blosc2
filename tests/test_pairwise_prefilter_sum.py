@@ -42,6 +42,7 @@ def test_pairwise_storage_and_thread_invariance(automatic_pairwise, dtype, mappe
             report = expr._native_execution_report
             assert report["route"] == "parallel-prefilter-pairwise-sum"
             assert report["summation"] == "fixed-pairwise"
+            assert report["identity_map_skipped"] == (not mapped)
             assert report["input_materialization_bytes"] == 0
             if first_bits is None:
                 first_bits = result.tobytes()
