@@ -16,8 +16,9 @@ project(python-blosc2)
 
 # Update to the latest minimum C-Blosc2 version, and to the actual bundled one
 set(BLOSC2_MIN_VERSION 3.7.0)
-# C-Blosc2 3.7 development snapshot with the full-write prefilter API.
-set(BLOSC2_BUNDLED_VERSION be06f086511bcc1ff101b8cba1809b575f811bad)
+set(BLOSC2_BUNDLED_VERSION v3.7.0)
+# If you prefer some C-Blosc2 3.7 development snapshot
+# set(BLOSC2_BUNDLED_VERSION be06f086511bcc1ff101b8cba1809b575f811bad)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
