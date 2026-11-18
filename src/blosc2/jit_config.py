@@ -1,4 +1,4 @@
-"""JIT defaults and task-local evaluation settings, without environment mutation."""
+"""Process-wide and task-local compute settings, without environment mutation."""
 
 import contextlib
 import contextvars
@@ -58,7 +58,7 @@ def _validate(values, *, check_platform=True):
         if value is _UNSET:
             continue
         if name not in _BUILTIN:
-            raise TypeError(f"Unknown JIT option: {name}")
+            raise TypeError(f"Unknown compute option: {name}")
         if value is None:
             value = _BUILTIN[name]
         if name in ("jit", "trace", "compiler_output"):
@@ -80,7 +80,7 @@ def _validate(values, *, check_platform=True):
     return result
 
 
-def set_jit_options(
+def set_compute_options(
     *,
     jit=_UNSET,
     jit_backend=_UNSET,
@@ -92,11 +92,11 @@ def set_jit_options(
     cache_dir=_UNSET,
     compiler_output=_UNSET,
 ):
-    """Set process-wide JIT defaults and return the previous defaults as a dict.
+    """Set process-wide compute defaults and return the previous defaults as a dict.
 
     Omitted arguments leave settings unchanged; None resets a setting to its
     built-in default. All settings are validated before any change is made.
-    Explicit evaluation settings and :func:`jit_options` contexts take precedence.
+    Explicit evaluation settings and :func:`compute_options` contexts take precedence.
     Native JIT remains best effort. See :ref:`JITOptions` for parameter details,
     backend applicability, environment overrides and cache behavior.
     """
@@ -108,8 +108,8 @@ def set_jit_options(
     return previous
 
 
-def get_jit_options():
-    """Return a copy of Python JIT defaults, including active context overrides.
+def get_compute_options():
+    """Return a copy of Python compute defaults, including active context overrides.
 
     Does not include environment overrides or per-evaluation settings.
     See :ref:`JITOptions`.
@@ -120,7 +120,7 @@ def get_jit_options():
 
 
 @contextlib.contextmanager
-def jit_options(
+def compute_options(
     *,
     jit=_UNSET,
     jit_backend=_UNSET,
@@ -132,9 +132,9 @@ def jit_options(
     cache_dir=_UNSET,
     compiler_output=_UNSET,
 ):
-    """Override JIT defaults for this thread/async context temporarily.
+    """Override compute defaults for this thread/async context temporarily.
 
-    Accepts the same options as :func:`set_jit_options`. Omitted settings inherit;
+    Accepts the same options as :func:`set_compute_options`. Omitted settings inherit;
     None selects their built-in defaults. Nested contexts restore outer settings
     on exit, including exceptions. Settings apply at evaluation time, not lazy
     expression construction time. No environment variables are changed.
@@ -143,9 +143,15 @@ def jit_options(
     updates = _validate(locals())
     token = _context.set({**(_context.get() or {}), **updates})
     try:
-        yield get_jit_options()
+        yield get_compute_options()
     finally:
         _context.reset(token)
+
+
+# Keep the original public names on the same defaults and context.
+set_jit_options = set_compute_options
+get_jit_options = get_compute_options
+jit_options = compute_options
 
 
 def execution_options():
@@ -153,7 +159,7 @@ def execution_options():
     execution = _execution.get()
     if execution is not None and execution[1] is _context.get():
         return execution[0].copy()
-    return get_jit_options()
+    return get_compute_options()
 
 
 def trace_enabled():

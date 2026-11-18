@@ -593,7 +593,14 @@ from .dsl_kernel import (
     validate_menudet,
 )
 from .menudet_kernel import MenudetError, MenudetKernel
-from .jit_config import get_jit_options, jit_options, set_jit_options
+from .jit_config import (
+    compute_options,
+    get_compute_options,
+    get_jit_options,
+    jit_options,
+    set_compute_options,
+    set_jit_options,
+)
 from .expression_graph import expression_evaluation
 from .lazyexpr import (
     LazyExpr,
@@ -890,6 +897,9 @@ __all__ = [  # noqa : RUF022
     # Grouped reductions
     "group_reduce",
     # JIT configuration
+    "get_compute_options",
+    "set_compute_options",
+    "compute_options",
     "get_jit_options",
     "set_jit_options",
     "jit_options",

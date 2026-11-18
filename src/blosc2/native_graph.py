@@ -1707,12 +1707,19 @@ def _native_text_expression(expression):
     numerical semantics. Method syntax, captures and dtype normalization retain
     the declarative adapter until their frontend parity is qualified.
     """
+    from .utils import MINIEXPR_FUNCTION_ALIASES
+
     if not _native_first_syntax(expression):
         return None
     tree, nodes = expression_syntax(expression)
     for node in nodes:
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "copy":
-            return None  # The declarative adapter elides this pure value-copy node.
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and (node.func.id == "copy" or node.func.id in MINIEXPR_FUNCTION_ALIASES)
+        ):
+            # The declarative adapter elides copy and normalizes NumPy spellings.
+            return None
         if isinstance(node, ast.Attribute) or (isinstance(node, ast.keyword) and node.arg == "dtype"):
             return None
         if isinstance(node, ast.Name) and (
@@ -1782,15 +1789,31 @@ def configured_map_kernel(plan, jit, configuration, environment):
     """Compile a graph map with task-local options; retain native graph safety.
 
     Configuration/environment are cache identity, never operand/result values.
-    Unlike compatibility capture specialization, import the original graph
-    artifact verbatim so its NumPy profile and weak-scalar rules stay intact.
+    Preserve the graph artifact's NumPy profile, source and weak captures.
     """
     import blosc2
 
     from .menudet_kernel import MenudetKernel
 
-    with blosc2.jit_options(**dict(configuration)):
-        kernel = MenudetKernel.from_json(plan.map_json(), jit=jit)
+    options = dict(configuration)
+    artifact = plan.map_json()
+    backend = options["math_backend"] or os.environ.get("ME_SIMD_MATH_BACKEND") or "auto"
+    with blosc2.compute_options(**options):
+        kernel = None
+        if options["fp_accuracy"] == blosc2.FPAccuracy.HIGH and backend in {"auto", "sleef"}:
+            manifest = json.loads(artifact)
+            manifest["semantics"].update(math="sleef", ulp="u10")
+            if "flexible-math" not in manifest["requires"]:
+                manifest["requires"].append("flexible-math")
+            try:
+                kernel = MenudetKernel.from_json(json.dumps(manifest), jit=jit)
+            except blosc2.MenudetError as error:
+                # Automatic selection must continue to work on builds without
+                # SLEEF. Don't discard a backend the caller explicitly chose.
+                if backend != "auto" or "requested math backend 'sleef' is unavailable" not in str(error):
+                    raise
+        if kernel is None:
+            kernel = MenudetKernel.from_json(artifact, jit=jit)
     kernel.graph_partitionable = plan.partitionable
     return kernel
 

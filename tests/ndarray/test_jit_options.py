@@ -48,6 +48,16 @@ def test_set_get_and_atomic_validation():
     assert blosc2.get_jit_options() == original
 
 
+def test_compute_options_aliases_share_defaults():
+    blosc2.set_compute_options(fp_accuracy=blosc2.FPAccuracy.HIGH)
+    assert blosc2.get_jit_options()["fp_accuracy"] == blosc2.FPAccuracy.HIGH
+    with blosc2.compute_options(fp_accuracy=None):
+        assert blosc2.get_jit_options()["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
+    assert blosc2.get_compute_options()["fp_accuracy"] == blosc2.FPAccuracy.HIGH
+    blosc2.set_jit_options(fp_accuracy=None)
+    assert blosc2.get_compute_options()["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
@@ -264,6 +274,46 @@ def test_ramp_metadata_shortcut_strips_execution_options(constructor, monkeypatc
 @DSLKernel
 def kernel(x):
     return x * 2 + 1
+
+
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Native miniexpr prefilter observation")
+def test_compute_accuracy_full_slice(monkeypatch, automatic_native_runtime):
+    from blosc2 import native_graph
+
+    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "typed")
+    monkeypatch.delenv("ME_SIMD_MATH_BACKEND", raising=False)
+    original = native_graph.configured_map_kernel
+    observed = []
+
+    def capture(*args):
+        kernel = original(*args)
+        observed.append(kernel._info)
+        return kernel
+
+    monkeypatch.setattr(native_graph, "configured_map_kernel", capture)
+    x = np.full(257, 2**24, dtype=np.float32)
+    y = np.linspace(-1, 1, x.size)
+    a, b = (blosc2.asarray(value, chunks=(128,), blocks=(64,)) for value in (x, y))
+    # Widening the float32 intermediate would turn zero into one.
+    expr = ((a + 1.0) - a) + blosc2.sin(b) + blosc2.acos(b)
+    expected = ((x + 1.0) - x) + np.sin(y) + np.arccos(y)
+
+    def no_fallback(*args, **kwargs):
+        pytest.fail("An eligible typed expression must not fall back to NumPy for HIGH")
+
+    monkeypatch.setattr(sys.modules["blosc2.lazyexpr"], "evaluate_chunk", no_fallback)
+    blosc2.set_compute_options(jit=False, fp_accuracy=blosc2.FPAccuracy.HIGH, math_backend=None)
+    result = expr[:]
+    assert result.dtype == expected.dtype
+    np.testing.assert_allclose(result, expected, rtol=1e-14, atol=0)
+    info = observed[-1]
+    assert not info["jit"]
+    if info["math_backend"] == "sleef":
+        assert info["sleef_accuracy"] == "u10"
+    else:
+        # Automatic policy stays native on builds without SLEEF.
+        assert info["math_backend"] == "auto"
+        assert info["sleef_accuracy"] == ""
 
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Native miniexpr prefilter observation")

@@ -1,7 +1,7 @@
 .. _JITOptions:
 
-JIT execution options
-=====================
+Compute options
+===============
 
 Blosc2 can compile eligible computations at runtime (JIT compilation). Native
 builds use the bundled Tiny C Compiler (TCC) by default, so installing a system
@@ -18,7 +18,7 @@ control-flow parsing contract; it is not an alias for Menudet.
 
 Both can use native interpretation or JIT. For Menudet, choose ``jit=False`` to
 interpret, ``jit=True`` to prefer compilation, or ``require_jit=True`` to require
-JIT. Select backend/compiler options with ``blosc2.jit_options(...)`` when
+JIT. Select backend/compiler options with ``blosc2.compute_options(...)`` when
 specializing/calling the function. A prepared kernel's policy is fixed; call or
 specialize again to select a different one. Runtime backend defaults reach
 artifact preparation but are not written into serialized author source. Existing
@@ -28,19 +28,22 @@ source-pragma/environment precedence remains authoritative. See
 Global defaults and scoped options
 ----------------------------------
 
-Use :func:`blosc2.set_jit_options` to configure a script, or
-:func:`blosc2.jit_options` for a temporary thread/task-local override:
+Use :func:`blosc2.set_compute_options` to configure process-wide defaults, or
+:func:`blosc2.compute_options` for a temporary thread/task-local override:
 
 .. code-block:: python
 
     import blosc2
 
-    previous = blosc2.set_jit_options(jit_backend="cc")
-    a = blosc2.linspace(0, 10, 10_000)
-    expr = a * 2 + 1
-    with blosc2.jit_options(jit=True, trace=True, cflags="-O2"):
-        result = expr.compute()
-    blosc2.set_jit_options(**previous)
+    blosc2.set_compute_options(fp_accuracy=blosc2.FPAccuracy.HIGH)
+    x = blosc2.linspace(0, 10, 10_000)
+    result = blosc2.sin(x)[:]  # uses the process-wide default at evaluation time
+    with blosc2.compute_options(jit=False, fp_accuracy=blosc2.FPAccuracy.MEDIUM):
+        result = blosc2.sin(x)[:]
+    blosc2.set_compute_options(fp_accuracy=None)  # restore the built-in default
+
+``set_jit_options``, ``get_jit_options``, and ``jit_options`` remain aliases
+for the same settings.
 
 Both functions accept the same keyword-only parameters:
 
@@ -65,8 +68,12 @@ Both functions accept the same keyword-only parameters:
         Independent of ``jit``; prepared kernels are cached per policy.
     * - ``fp_accuracy``
       - ``FPAccuracy.DEFAULT``
-      - Existing floating-point function accuracy policy, not a compiler flag.
-        Use an actual :class:`blosc2.FPAccuracy` member.
+       - Floating-point function accuracy for supported miniexpr kernels,
+         including interpreted execution. It is not a compiler flag and
+         does not control NumPy fallbacks. Use a :class:`blosc2.FPAccuracy` member.
+         Eligible typed expressions preserve NumPy-style intermediate dtypes
+         while using SLEEF's 1 ULP mode for ``HIGH`` when SLEEF is available and
+         the math backend is automatic or explicitly set to ``"sleef"``.
     * - ``trace``
       - ``False``
       - Python routing and native compilation/cache/fallback diagnostics on
@@ -95,7 +102,7 @@ effect on TCC, JavaScript, or non-JIT execution.
 
 For setters and contexts, an omitted argument leaves/inherits that setting;
 ``None`` resets it to the built-in default. The setter returns the previous
-process defaults as a fresh dictionary. :func:`blosc2.get_jit_options` returns
+process defaults as a fresh dictionary. :func:`blosc2.get_compute_options` returns
 a fresh dictionary of the current Python defaults, including context overrides,
 but excluding environment overrides and per-evaluation arguments. Validation is
 atomic: an invalid setting leaves the defaults unchanged.
@@ -137,6 +144,12 @@ explicit cache directory is selected. An explicit ``math_backend`` overrides
 ``ME_SIMD_MATH_BACKEND`` for that evaluation. The JIT enable/backend environment
 rules below remain unchanged. Configuration does not require changing environment
 variables; native compilation receives a call-local settings snapshot.
+
+.. autofunction:: blosc2.set_compute_options
+
+.. autofunction:: blosc2.get_compute_options
+
+.. autofunction:: blosc2.compute_options
 
 .. autofunction:: blosc2.set_jit_options
 

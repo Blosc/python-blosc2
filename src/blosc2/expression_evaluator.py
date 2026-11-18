@@ -65,7 +65,9 @@ def binary_result_dtype(op, value1, value2):
         return None
 
 
-def _prepare_typed_map_kernel(expression, operands, *, jit=None, jit_backend=None, optimization="moderate"):
+def _prepare_typed_map_kernel(
+    expression, operands, *, jit=None, jit_backend=None, fp_accuracy=None, optimization="moderate"
+):
     """Compile a 1-stage typed map artifact from metadata only, or return None."""
     import blosc2
 
@@ -93,9 +95,13 @@ def _prepare_typed_map_kernel(expression, operands, *, jit=None, jit_backend=Non
     stub = blosc2.LazyExpr(None)
     stub.expression, stub.operands, stub._optimization = expression, operands, optimization
     policy = blosc2.jit_config.execution_options()
+    if fp_accuracy is not None:
+        policy["fp_accuracy"] = fp_accuracy
     effective_jit = policy["jit"] if jit is None else jit
-    configured = jit_backend is not None or any(
-        policy[name] for name in ("compiler", "cflags", "trace", "compiler_output", "cache_dir")
+    configured = (
+        jit_backend is not None
+        or policy["fp_accuracy"] != blosc2.FPAccuracy.DEFAULT
+        or any(policy[name] for name in ("compiler", "cflags", "trace", "compiler_output", "cache_dir"))
     )
     try:
         plan, inputs, reduction = lower_native_graph(
@@ -136,6 +142,7 @@ def compute_typed_prefilter(  # noqa: C901 -- explicit metadata-only admission b
     jit,
     jit_backend,
     options,
+    fp_accuracy=None,
     candidate_blocks=None,
     prune_chunks=False,
     optimization="moderate",
@@ -158,7 +165,12 @@ def compute_typed_prefilter(  # noqa: C901 -- explicit metadata-only admission b
     )():
         return None
     prepared = _prepare_typed_map_kernel(
-        expression, operands, jit=jit, jit_backend=jit_backend, optimization=optimization
+        expression,
+        operands,
+        jit=jit,
+        jit_backend=jit_backend,
+        fp_accuracy=fp_accuracy,
+        optimization=optimization,
     )
     if prepared is None:
         return None
@@ -274,7 +286,14 @@ def _reduction_dtypes(reduce_op_str, map_dtype, explicit_dtype):
 
 
 def compute_typed_reduction(
-    expression, operands, *, reduce_op, reduce_op_str, explicit_dtype, optimization="moderate"
+    expression,
+    operands,
+    *,
+    reduce_op,
+    reduce_op_str,
+    explicit_dtype,
+    fp_accuracy=None,
+    optimization="moderate",
 ):
     """Evaluate a full-domain scalar reduction with typed map blocks and NumPy reduction rules."""
     import blosc2
@@ -284,7 +303,9 @@ def compute_typed_reduction(
         return None
     if not getattr(extension, "menudet_prefilter_reductions_available", lambda: False)():
         return None
-    prepared = _prepare_typed_map_kernel(expression, operands, optimization=optimization)
+    prepared = _prepare_typed_map_kernel(
+        expression, operands, fp_accuracy=fp_accuracy, optimization=optimization
+    )
     if prepared is None:
         return None
     kernel, inputs = prepared

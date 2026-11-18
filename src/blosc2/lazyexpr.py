@@ -2160,7 +2160,6 @@ def fast_eval(  # noqa: C901
         and try_miniexpr
         and not eval_kwargs
         and not _in_place
-        and fp_accuracy == blosc2.FPAccuracy.DEFAULT
         and (where is None or len(where) == 2)
     ):
         typed_source = f"where({expression}, _where_x, _where_y)" if where is not None else expression
@@ -2172,6 +2171,7 @@ def fast_eval(  # noqa: C901
             out=out,
             jit=jit,
             jit_backend=jit_backend,
+            fp_accuracy=fp_accuracy,
             options={**kwargs, "chunks": chunks, "blocks": blocks},
             candidate_blocks=candidate_blocks,
             prune_chunks=prune_chunks,
@@ -3375,7 +3375,6 @@ def reduce_slices(  # noqa: C901
         and not np.any(mask_slice)
         and not eval_kwargs
         and "initial" not in reduce_args
-        and fp_accuracy == blosc2.FPAccuracy.DEFAULT
         and (where is None or len(where) == 2)
     ):
         typed_source = f"where({expression}, _where_x, _where_y)" if where is not None else expression
@@ -3385,6 +3384,7 @@ def reduce_slices(  # noqa: C901
             reduce_op=reduce_op,
             reduce_op_str=reduce_op_str,
             explicit_dtype=reduce_args.get("dtype"),
+            fp_accuracy=fp_accuracy,
             optimization=optimization,
         )
         if result is not None:
