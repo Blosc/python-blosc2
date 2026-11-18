@@ -262,10 +262,8 @@ def _compute_resident_prefilter(lazy, kwargs):
     output = options.pop("out", None)
     if output is None:
         cparams = options.get("cparams")
-        if cparams is None:
-            cparams = blosc2.CParams()
-        elif isinstance(cparams, dict):
-            cparams = blosc2.CParams(**cparams)
+        if not isinstance(cparams, blosc2.CParams):
+            cparams = blosc2.cparams_dflts | (cparams or {})
         chunks, blocks = blosc2.compute_chunks_blocks(
             lazy.shape,
             chunks=options.get("chunks"),
@@ -275,7 +273,9 @@ def _compute_resident_prefilter(lazy, kwargs):
         )
         if chunks[0] % blocks[0] or chunks[0] * lazy.dtype.itemsize > DENSE_MATERIALIZATION_BUDGET:
             return None
-        options.update(chunks=chunks, blocks=blocks, cparams=cparams)
+        options.update(chunks=chunks, blocks=blocks)
+        if "cparams" in options and options["cparams"] is None:
+            options["cparams"] = {}
         output = blosc2.uninit(lazy.shape, dtype=lazy.dtype, **options)
     elif (
         type(output) is not blosc2.NDArray
@@ -315,10 +315,8 @@ def _compute_generator_prefilter(lazy, kwargs):
     output = options.pop("out", None)
     if output is None:
         cparams = options.get("cparams")
-        if cparams is None:
-            cparams = blosc2.CParams()
-        elif isinstance(cparams, dict):
-            cparams = blosc2.CParams(**cparams)
+        if not isinstance(cparams, blosc2.CParams):
+            cparams = blosc2.cparams_dflts | (cparams or {})
         chunks, blocks = blosc2.compute_chunks_blocks(
             lazy.shape,
             chunks=options.get("chunks"),
@@ -332,7 +330,9 @@ def _compute_generator_prefilter(lazy, kwargs):
             or chunks[0] * lazy.dtype.itemsize > DENSE_MATERIALIZATION_BUDGET
         ):
             return None
-        options.update(chunks=chunks, blocks=blocks, cparams=cparams)
+        options.update(chunks=chunks, blocks=blocks)
+        if "cparams" in options and options["cparams"] is None:
+            options["cparams"] = {}
         output = blosc2.uninit(lazy.shape, dtype=lazy.dtype, **options)
     elif (
         type(output) is not blosc2.NDArray
@@ -431,11 +431,13 @@ def compute_storage_if_eligible(lazy, kwargs):
         block_bytes += prod(first.blocks) * lazy.dtype.itemsize
     thread_limit = max(1, (32 * 1024**2) // block_bytes)
     cparams = options.get("cparams")
-    if cparams is None:
-        cparams = blosc2.CParams()
-    elif isinstance(cparams, dict):
-        cparams = blosc2.CParams(**cparams)
-    options["cparams"] = replace(cparams, nthreads=min(cparams.nthreads, thread_limit))
+    if isinstance(cparams, blosc2.CParams):
+        options["cparams"] = replace(cparams, nthreads=min(cparams.nthreads, thread_limit))
+    else:
+        # Leave unspecified fields to the allocator so it reads current cparams_dflts.
+        cparams = dict(cparams or {})
+        cparams["nthreads"] = min(cparams.get("nthreads", blosc2.storage.default_nthreads()), thread_limit)
+        options["cparams"] = cparams
     output = blosc2.uninit(lazy.shape, dtype=lazy.dtype, **options)
     return lazy.kernel._handle.evaluate_prefilter(lazy.inputs, out=output)
 

@@ -223,12 +223,8 @@ def compute_typed_prefilter(  # noqa: C901 -- explicit metadata-only admission b
             storage = dict(options)
             storage["chunks"] = first.chunks
             storage["blocks"] = first.blocks
-            cparams = storage.get("cparams")
-            if isinstance(cparams, dict):
-                cparams = blosc2.CParams(**cparams)
-            elif cparams is None:
-                cparams = blosc2.CParams()
-            storage["cparams"] = cparams
+            if "cparams" in storage and storage["cparams"] is None:
+                storage["cparams"] = {}
             target = blosc2.uninit(first.shape, dtype=dtype, **storage)
         return kernel._handle.evaluate_prefilter(
             inputs, out=target, _candidate_blocks=bitmap, _prune_chunks=prune_chunks
