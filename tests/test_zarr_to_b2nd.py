@@ -64,10 +64,10 @@ def test_zarr_to_b2nd_v2_blosc_compressor_is_preserved(tmp_path):
     ("kwargs", "codec", "clevel", "filt"),
     [
         # Zarr's default is Zstd level 0, meaning "Zstd default", not "no compression".
-        ({}, blosc2.Codec.ZSTD, 5, blosc2.Filter.SHUFFLE),
+        ({}, blosc2.Codec.ZSTD, 1, blosc2.Filter.SHUFFLE),
         ({"compressors": zarr.codecs.ZstdCodec(level=15)}, blosc2.Codec.ZSTD, 9, blosc2.Filter.SHUFFLE),
         ({"compressors": zarr.codecs.GzipCodec(level=4)}, blosc2.Codec.ZLIB, 4, blosc2.Filter.SHUFFLE),
-        ({"compressors": None}, blosc2.Codec.ZSTD, 5, blosc2.Filter.SHUFFLE),
+        ({"compressors": None}, blosc2.Codec.ZSTD, 1, blosc2.Filter.SHUFFLE),
         (
             {"compressors": zarr.codecs.BloscCodec(cname="zstd", clevel=3, shuffle="noshuffle")},
             blosc2.Codec.ZSTD,

@@ -4,6 +4,9 @@
 
 ### Native generation and compression
 
+- Lower the default compression level from 5 to 1 to reduce compression
+  overhead during computation, potentially at the cost of a lower compression
+  ratio. Set `clevel=5` explicitly to retain the previous level.
 - Reduce native block-scheduling lock acquisitions and reuse worker-local LZ4
   compression state when using bundled LZ4. External LZ4 keeps its existing
   compressor entry point.

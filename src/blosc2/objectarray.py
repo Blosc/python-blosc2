@@ -71,7 +71,7 @@ class ObjectArray:
         else:
             cparams["typesize"] = 1
             codec = cparams.get("codec", blosc2.Codec.ZSTD)
-            clevel = cparams.get("clevel", 5)
+            clevel = cparams.get("clevel", blosc2.cparams_dflts["clevel"])
             if auto_use_dict and codec == blosc2.Codec.ZSTD and clevel > 0:
                 # ObjectArray stores many small serialized payloads; Zstd dicts help materially.
                 cparams["use_dict"] = True

@@ -78,7 +78,9 @@ def determine_zarr_codec(
         return None
 
     cparams = getattr(arr, "cparams", None)
-    actual_clevel = clevel if clevel is not None else getattr(cparams, "clevel", 5)
+    actual_clevel = (
+        clevel if clevel is not None else getattr(cparams, "clevel", blosc2.cparams_dflts["clevel"])
+    )
 
     if codec_name == "gzip":
         if zarr_format == 2:

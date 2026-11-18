@@ -268,7 +268,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--codec", type=str, default="ZSTD", choices=[c.name for c in blosc2.Codec])
-    parser.add_argument("--clevel", type=int, default=5)
+    parser.add_argument("--clevel", type=int, default=blosc2.cparams_dflts["clevel"])
     parser.add_argument(
         "--reduce-mem",
         action="store_true",

@@ -217,13 +217,13 @@ def determine_blosc2_cparams(
     elif kind in {"ZstdCodec", "Zstd"}:
         # Zstd level 0 means its default level (not "no compression"); levels go up to 22.
         src_cname = "zstd"
-        src_clevel = min(compressor.level, 9) if compressor.level > 0 else 5
+        src_clevel = min(compressor.level, 9) if compressor.level > 0 else blosc2.cparams_dflts["clevel"]
         src_shuffle = "shuffle"
     elif kind in {"GzipCodec", "GZip"}:
         # zlib is Blosc2's closest match to gzip.
         src_cname, src_clevel, src_shuffle = "zlib", compressor.level, "shuffle"
     else:
-        src_cname, src_clevel, src_shuffle = "zstd", 5, "shuffle"
+        src_cname, src_clevel, src_shuffle = "zstd", blosc2.cparams_dflts["clevel"], "shuffle"
 
     final_cname = src_cname if codec == "auto" else codec
     final_clevel = src_clevel if clevel is None else clevel

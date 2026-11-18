@@ -13,6 +13,11 @@ import blosc2
 random = np.random.default_rng()
 
 
+def test_compress2_uses_default_clevel():
+    data = np.arange(10_000, dtype=np.int64)
+    assert blosc2.compress2(data) == blosc2.compress2(data, clevel=1)
+
+
 @pytest.mark.parametrize("gil", [True, False])
 @pytest.mark.parametrize(
     ("obj", "cparams", "dparams"),

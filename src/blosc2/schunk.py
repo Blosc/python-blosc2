@@ -661,7 +661,7 @@ class SChunk(blosc2_ext.SChunk):
         nbytes    : 24000 (23.44 KiB)
         cbytes    : ...
         cratio    : ...
-        cparams   : CParams(codec=<Codec.ZSTD: 5>, codec_meta=0, clevel=5, use_dict=False, typesize=1,
+        cparams   : CParams(codec=<Codec.ZSTD: 5>, codec_meta=0, clevel=1, use_dict=False, typesize=1,
                   : nthreads=..., blocksize=0, splitmode=<SplitMode.AUTO_SPLIT: 3>,
                   : filters=[<Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>,
                   : <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.SHUFFLE: 1>], filters_meta=[0,

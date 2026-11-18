@@ -131,7 +131,7 @@ def test_cparams_defaults():
     assert cparams.codec == blosc2.Codec.ZSTD
     assert cparams.codec_meta == 0
     assert cparams.splitmode == blosc2.SplitMode.AUTO_SPLIT
-    assert cparams.clevel == 5
+    assert cparams.clevel == 1
     assert cparams.typesize == 8
     assert cparams.nthreads == blosc2.nthreads
     assert cparams.filters == [blosc2.Filter.NOFILTER] * 5 + [blosc2.Filter.SHUFFLE]
@@ -143,6 +143,12 @@ def test_cparams_defaults():
     blosc2.set_nthreads(1)
     cparams = blosc2.CParams()
     assert cparams.nthreads == blosc2.nthreads
+
+
+def test_storage_uses_default_clevel():
+    assert blosc2.cparams_dflts["clevel"] == 1
+    assert blosc2.SChunk().cparams.clevel == 1
+    assert blosc2.zeros((10, 10)).cparams.clevel == 1
 
 
 def test_raises_cparams():

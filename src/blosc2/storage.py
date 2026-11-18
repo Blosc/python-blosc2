@@ -74,7 +74,7 @@ class CParams:
 
     codec: blosc2.Codec | int = blosc2.Codec.ZSTD
     codec_meta: int = 0
-    clevel: int = 5
+    clevel: int = 1
     use_dict: bool = False
     typesize: int = 8
     nthreads: int = field(default_factory=default_nthreads)
