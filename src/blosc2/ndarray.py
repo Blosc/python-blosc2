@@ -732,9 +732,6 @@ def sum(
         correctly against the input array.
     where: array_like of bool, optional
         Elements to include in the reduction. False entries are ignored.
-    fp_accuracy: :class:`blosc2.FPAccuracy`, optional
-        Specifies the floating-point accuracy for reductions on :ref:`LazyExpr`.
-        Passed to :func:`LazyExpr.compute` when :paramref:`ndarr` is a LazyExpr.
     kwargs: dict, optional
         Additional keyword arguments supported by the :func:`empty` constructor.
 
@@ -785,9 +782,6 @@ def cumulative_sum(
         Data type of the returned array.
     include_initial : bool
         Boolean indicating whether to include the initial value as the first value in the output. Initial value will be zero. Default: False.
-    fp_accuracy: :class:`blosc2.FPAccuracy`, optional
-        Specifies the floating-point accuracy for reductions on :ref:`LazyExpr`.
-        Passed to :func:`LazyExpr.compute` when :paramref:`ndarr` is a LazyExpr.
     kwargs: dict, optional
         Additional keyword arguments supported by the :func:`empty` constructor.
 
@@ -821,9 +815,6 @@ def cumulative_prod(
         Data type of the returned array.
     include_initial : bool
         Boolean indicating whether to include the initial value as the first value in the output. Initial value will be one. Default: False.
-    fp_accuracy: :class:`blosc2.FPAccuracy`, optional
-        Specifies the floating-point accuracy for reductions on :ref:`LazyExpr`.
-        Passed to :func:`LazyExpr.compute` when :paramref:`ndarr` is a LazyExpr.
     kwargs: dict, optional
         Additional keyword arguments supported by the :func:`empty` constructor.
 
@@ -904,9 +895,6 @@ def std(
         against the input array.
     where: array_like of bool, optional
         Elements to include in the reduction. False entries are ignored.
-    fp_accuracy: :class:`blosc2.FPAccuracy`, optional
-        Specifies the floating-point accuracy for reductions on :ref:`LazyExpr`.
-        Passed to :func:`LazyExpr.compute` when :paramref:`ndarr` is a LazyExpr.
     kwargs: dict, optional
         Additional keyword arguments that are supported by the :func:`empty` constructor.
 
@@ -1049,9 +1037,6 @@ def min(
         against the input array.
     where: array_like of bool, optional
         Elements to include in the reduction. False entries are ignored.
-    fp_accuracy: :class:`blosc2.FPAccuracy`, optional
-        Specifies the floating-point accuracy for reductions on :ref:`LazyExpr`.
-        Passed to :func:`LazyExpr.compute` when :paramref:`ndarr` is a LazyExpr.
     kwargs: dict, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
 
@@ -1181,9 +1166,6 @@ def argmin(
 
     keepdims: bool
         If True, reduced axis included in the result as singleton dimension. Otherwise, axis not included in the result. Default: False.
-    fp_accuracy: :class:`blosc2.FPAccuracy`, optional
-        Specifies the floating-point accuracy for reductions on :ref:`LazyExpr`.
-        Passed to :func:`LazyExpr.compute` when :paramref:`ndarr` is a LazyExpr.
 
     Returns
     -------
@@ -1211,9 +1193,6 @@ def argmax(
 
     keepdims: bool
         If True, reduced axis included in the result as singleton dimension. Otherwise, axis not included in the result. Default: False.
-    fp_accuracy: :class:`blosc2.FPAccuracy`, optional
-        Specifies the floating-point accuracy for reductions on :ref:`LazyExpr`.
-        Passed to :func:`LazyExpr.compute` when :paramref:`ndarr` is a LazyExpr.
 
     Returns
     -------

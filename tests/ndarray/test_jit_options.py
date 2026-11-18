@@ -90,6 +90,19 @@ def test_automatic_medium_math_preference(monkeypatch, platform, available, expe
         assert resolve(medium) is None
 
 
+def _native_math_available(backend):
+    from blosc2.graph_plan import NativeGraph
+
+    try:
+        with blosc2.compute_options(math_backend=backend):
+            NativeGraph.from_expression("sin(x)", {"x": "float64"}, jit=False)
+    except blosc2.MenudetError as error:
+        if f"requested math backend '{backend}' is unavailable" not in str(error):
+            raise
+        return False
+    return True
+
+
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 @pytest.mark.parametrize("func", ["arctan", "expm1", "sin"])
 def test_automatic_medium_typed_math(monkeypatch, automatic_native_runtime, dtype, func):
@@ -101,12 +114,17 @@ def test_automatic_medium_typed_math(monkeypatch, automatic_native_runtime, dtyp
     a = blosc2.asarray(x, chunks=(128,), blocks=(64,))
     with np.errstate(invalid="ignore", divide="ignore"):
         expected = getattr(np, func)(x)
+    preferred = "auto"
+    if not blosc2.IS_WASM:
+        if sys.platform == "darwin" and _native_math_available("accelerate"):
+            preferred = "accelerate"
+        elif sys.platform.startswith(("darwin", "linux", "win")) and _native_math_available("sleef"):
+            preferred = "sleef"
     with blosc2.compute_options(jit=False, fp_accuracy=blosc2.FPAccuracy.MEDIUM, math_backend=None):
         expr = getattr(blosc2, func)(a)
-        preferred = native_graph.preferred_expression_math(blosc2.FPAccuracy.MEDIUM)
         plan, _, _ = native_graph.lower_native_graph(expr)
         kernel = native_graph.resident_map_kernel(plan)
-        assert kernel._info["math_backend"] == (preferred or "auto")
+        assert kernel._info["math_backend"] == preferred
         if preferred == "sleef":
             assert kernel._info["sleef_accuracy"] == "u35"
         actual = expr[:]
@@ -115,6 +133,59 @@ def test_automatic_medium_typed_math(monkeypatch, automatic_native_runtime, dtyp
     with blosc2.compute_options(jit=False, math_backend="system"):
         plan, _, _ = native_graph.lower_native_graph(expr)
         assert native_graph.resident_map_kernel(plan)._info["math_backend"] == "system"
+
+
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Native resident math policy")
+def test_evaluate_per_call_compute_options(monkeypatch, automatic_native_runtime):
+    from blosc2 import native_graph
+
+    original = native_graph.configured_map_kernel
+    observed = []
+
+    def capture(plan, jit, configuration, environment):
+        kernel = original(plan, jit, configuration, environment)
+        observed.append((jit, dict(configuration), kernel._info))
+        return kernel
+
+    monkeypatch.setattr(native_graph, "configured_map_kernel", capture)
+    x = np.linspace(-1, 1, 513)
+    blosc2.set_compute_options(jit=True, fp_accuracy=blosc2.FPAccuracy.HIGH)
+    with blosc2.compute_options(
+        jit=True, jit_backend="cc", math_backend="system", fp_accuracy=blosc2.FPAccuracy.MEDIUM
+    ):
+        result = blosc2.evaluate(
+            "sin(x) + cos(x)",
+            jit=False,
+            jit_backend="tcc",
+            math_backend="system",
+            fp_accuracy=blosc2.FPAccuracy.HIGH,
+        )
+        np.testing.assert_allclose(result, np.sin(x) + np.cos(x))
+        jit, policy, info = observed[-1]
+        assert jit is False
+        assert policy["jit_backend"] == "tcc"
+        assert policy["fp_accuracy"] == blosc2.FPAccuracy.HIGH
+        assert info["math_backend"] == "system"
+        assert blosc2.get_compute_options()["fp_accuracy"] == blosc2.FPAccuracy.MEDIUM
+        np.testing.assert_allclose(blosc2.re_evaluate(), result)
+        assert observed[-1] == (jit, policy, info)
+
+
+@pytest.mark.parametrize(
+    ("options", "error"),
+    [
+        ({"jit": 1}, TypeError),
+        ({"jit_backend": "invalid"}, ValueError),
+        ({"math_backend": "invalid"}, ValueError),
+        ({"fp_accuracy": 1}, TypeError),
+        ({"compiler": "cc"}, ValueError),
+    ],
+)
+def test_evaluate_validates_per_call_options(options, error):
+    out = np.zeros(4)
+    with pytest.raises(error):
+        blosc2.evaluate("x + 1", local_dict={"x": np.ones(4)}, out=out, **options)
+    np.testing.assert_array_equal(out, 0)
 
 
 @pytest.mark.parametrize(
@@ -367,7 +438,8 @@ def test_compute_accuracy_full_slice(monkeypatch, automatic_native_runtime):
     np.testing.assert_allclose(result, expected, rtol=1e-14, atol=0)
     info = observed[-1]
     assert not info["jit"]
-    if info["math_backend"] == "sleef":
+    if _native_math_available("sleef"):
+        assert info["math_backend"] == "sleef"
         assert info["sleef_accuracy"] == "u10"
     else:
         # Automatic policy stays native on builds without SLEEF.

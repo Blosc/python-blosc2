@@ -87,15 +87,12 @@ Eligible ``evaluate()`` expressions default to native interpretation, as do
 automatic policy, not an evaluator-specific override: single-return expressions
 are interpreted and multi-statement Menudet programs prefer JIT. Explicit
 global/context JIT settings and the ``ME_DSL_JIT`` environment
-override retain their existing precedence. To opt in for repeated computations::
+override retain their existing precedence. To opt in for one call::
 
-    with blosc2.jit_options(jit=True):
-        result = blosc2.evaluate("x + y * 2", local_dict={"x": x, "y": y})
+    result = blosc2.evaluate("x + y * 2", local_dict={"x": x, "y": y}, jit=True)
 
-Set ``jit_backend="cc"`` in that context to request the system compiler instead
-of TCC. JIT remains best effort. Accelerate remains an explicit opt-in; the
-``optimization`` option does not select it. The targeted integer-power policy
-does not affect other arithmetic transformations or math-library selection.
+See :ref:`JITOptions` for per-call options, defaults and backend selection.
+The ``optimization`` option does not select the math library.
 
 Overlapping NumPy inputs are snapshotted before writing an explicit output;
 this may require temporary memory proportional to the overlapping operands.

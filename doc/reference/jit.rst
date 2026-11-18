@@ -119,6 +119,12 @@ Within Python, precedence is:
 **explicit evaluation settings → explicit LazyUDF settings → context defaults →
 process defaults → built-in defaults**.
 
+``blosc2.evaluate()`` accepts ``jit``, ``jit_backend``, ``math_backend`` and
+``fp_accuracy`` directly. Use the setter or context manager for compiler and
+cache configuration. Lazy-expression reductions accept compute settings as
+evaluation keywords; ``fp_accuracy`` applies to the math functions in the input
+expression, not to the reduction's accumulation order.
+
 The execution options also work as per-call kwargs on the evaluation entry points
 listed below. For these existing per-call APIs, ``None`` means inherit, not reset;
 use a resetting context to select built-in defaults locally. ``fp_accuracy`` now

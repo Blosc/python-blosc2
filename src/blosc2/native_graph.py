@@ -429,10 +429,13 @@ def prepare_resident(
     if cached is not None and cached[0] == signature and not blosc2.IS_WASM:
         return cached
     policy = dict(signature[-1][1])
-    if policy["fp_accuracy"] != blosc2.FPAccuracy.DEFAULT:
+    high_accuracy = policy["fp_accuracy"] != blosc2.FPAccuracy.DEFAULT
+    if high_accuracy and explicit:
         return None
-    configured = policy["jit_backend"] is not None or any(
-        policy[name] for name in ("compiler", "cflags", "trace", "compiler_output", "cache_dir")
+    configured = (
+        high_accuracy
+        or policy["jit_backend"] is not None
+        or any(policy[name] for name in ("compiler", "cflags", "trace", "compiler_output", "cache_dir"))
     )
     parallel = math.prod(signature[2]) >= _MINIMUM_PARALLEL_ITEMS
     if parallel and (

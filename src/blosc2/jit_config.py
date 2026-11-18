@@ -167,23 +167,27 @@ def trace_enabled():
     return env != "0" if env else execution_options()["trace"]
 
 
-def math_execution(func):
-    """Scope per-call math policy without leaking execution kwargs into storage APIs."""
+def compute_execution(*names):
+    """Scope selected per-call options without forwarding them to the wrapped function."""
 
-    @functools.wraps(func)
-    def wrapped(*args, **kwargs):
-        backend = kwargs.pop("math_backend", None)
-        if backend is None:
-            return func(*args, **kwargs)
-        options = execution_options()
-        options.update(_validate({"math_backend": backend}))
-        token = _execution.set((options, _context.get()))
-        try:
-            return func(*args, **kwargs)
-        finally:
-            _execution.reset(token)
+    def decorate(func):
+        @functools.wraps(func)
+        def wrapped(*args, **kwargs):
+            overrides = {name: kwargs.pop(name) for name in names if name in kwargs}
+            overrides = {name: value for name, value in overrides.items() if value is not None}
+            if not overrides:
+                return func(*args, **kwargs)
+            options = execution_options()
+            options.update(_validate(overrides))
+            token = _execution.set((options, _context.get()))
+            try:
+                return func(*args, **kwargs)
+            finally:
+                _execution.reset(token)
 
-    return wrapped
+        return wrapped
+
+    return decorate
 
 
 def pop_execution_options(kwargs):

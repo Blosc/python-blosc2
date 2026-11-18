@@ -140,8 +140,11 @@ def prepare_evaluate(expression, **options):
     >>> evaluator({"x": np.arange(3)})
     array([1, 2, 3])
 
-    The approved expression grammar is used in both safe and full modes. Options
-    match :func:`blosc2.evaluate`; per-call overrides do not mutate the recipe.
+    The approved expression grammar is used in both safe and full modes.
+    Preparation accepts ``order``, ``casting`` and ``optimization``. Pass
+    compute options such as ``fp_accuracy`` when calling the prepared evaluator,
+    or set them with :func:`blosc2.compute_options`. Per-call overrides do not
+    mutate the recipe.
     """
     from .lazyexpr import validate_evaluate_options
 

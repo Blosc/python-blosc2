@@ -5403,7 +5403,7 @@ class LazyExpr(LazyArray):
         return indexing.explain_query(self)
 
     @expression_method
-    @blosc2.jit_config.math_execution
+    @blosc2.jit_config.compute_execution("math_backend")
     def compute(  # noqa: C901 -- native-first/strict dispatch plus legacy output policies
         self,
         item=(),
@@ -6907,7 +6907,7 @@ def _prepare_cached_evaluate(expression, local_dict, global_dict, optimization="
             cached=recipe.resident if recipe is not None else None,
             optimization=optimization,
         )
-        if not _NUMPY_VALUE_PROMOTION and policy["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
+        if not _NUMPY_VALUE_PROMOTION
         else None
     )
     if resident is not None and (recipe is None or resident is not recipe.resident):
@@ -7011,14 +7011,17 @@ def _array_owner(value):
 
 
 @remember_evaluation
-@blosc2.jit_config.math_execution
+@blosc2.jit_config.compute_execution("jit", "jit_backend", "math_backend", "fp_accuracy")
 def evaluate(
     ex: str,
     local_dict: dict | None = None,
     global_dict: dict | None = None,
     out: blosc2.Array = None,
     *,
+    jit: bool | None = None,
+    jit_backend: str | None = None,
     math_backend: str | None = None,
+    fp_accuracy: blosc2.FPAccuracy | None = None,
     **kwargs: Any,
 ) -> blosc2.Array:
     """
@@ -7072,13 +7075,9 @@ def evaluate(
     out: blosc2.Array, optional
         The output array where the result will be stored. If not provided,
         a new NumPy array will be created and returned.
-    math_backend: str, optional
-        Math library: ``"system"``, ``"sleef"`` or ``"accelerate"``. None inherits
-        the current Python/native defaults. Explicit choices override the native
-        environment default and require a build supporting the requested library.
-        Accelerate is macOS-only. Calls requiring its vector math retain tiled
-        interpretation; arithmetic and safely lowered powers can use JIT.
-        Prepared plans are cached separately for each policy.
+    jit, jit_backend, math_backend, fp_accuracy : optional
+        Per-call overrides for :ref:`JITOptions`. ``None`` inherits the current
+        settings. Unsupported expressions can still fall back to NumPy.
     kwargs: Any, optional
         Accepted options are ``order``, ``casting`` and ``optimization``.
         ``optimization`` defaults to ``"aggressive"``, matching NumExpr's default.
