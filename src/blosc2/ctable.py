@@ -13148,6 +13148,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
     def _menudet_table_descriptor(self, kernel, bindings, *, dtype=None, cardinality="elementwise"):
         if isinstance(kernel, SourceKernel):
+            from .menudet_kernel import prepare_menudet_kernel
+
             if dtype is None:
                 raise ValueError("Authored Menudet table kernels require an explicit output dtype")
             bindings = dict(bindings)
@@ -13158,15 +13160,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 if bindings
                 else (1,)
             )
-            kernel = blosc2.MenudetKernel.from_json(
-                kernel.export(
-                    {name: self._cols[dep].dtype for name, dep in bindings.items()},
-                    dtype,
-                    version="0.1",
-                    ndim=len(row_shape),
-                    cardinality=cardinality,
-                ),
-                jit=False,
+            kernel = prepare_menudet_kernel(
+                kernel,
+                {name: self._cols[dep].dtype for name, dep in bindings.items()},
+                dtype,
+                ndim=len(row_shape),
+                cardinality=cardinality,
             )
         if not isinstance(kernel, blosc2.MenudetKernel):
             raise TypeError("Menudet table transformers require a validated MenudetKernel")

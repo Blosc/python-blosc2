@@ -12,7 +12,7 @@ from blosc2.lazyexpr import LazyArray
 def menudet_from_lazyudf(obj):
     """Preflight a newly authored Menudet recipe without executing it or touching storage."""
     from blosc2.dsl_kernel import SourceKernel as DSLKernel
-    from blosc2.menudet_kernel import MenudetError, MenudetKernel
+    from blosc2.menudet_kernel import MenudetError, prepare_menudet_kernel
 
     if not isinstance(obj.func, DSLKernel):
         raise TypeError("Python LazyUDF cannot be persisted; use @blosc2.menudet or MenudetKernel.lazy")
@@ -39,7 +39,8 @@ def menudet_from_lazyudf(obj):
             "with explicit partitions"
         )
     try:
-        artifact = obj.func.export(
+        kernel = prepare_menudet_kernel(
+            obj.func,
             {name: value.dtype for name, value in inputs.items()},
             obj.dtype,
             version="0.1",
@@ -54,9 +55,7 @@ def menudet_from_lazyudf(obj):
                 "use @menudet(cardinality='block_scalar') with explicit partitions"
             ) from error
         raise
-    menudet_result = MenudetLazyArray(
-        MenudetKernel.from_json(artifact, jit=False), inputs, shape=shape, partitions=partitions
-    )
+    menudet_result = MenudetLazyArray(kernel, inputs, shape=shape, partitions=partitions)
     menudet_result._set_user_vlmeta(obj._get_user_vlmeta(), sync=False)
     return menudet_result
 

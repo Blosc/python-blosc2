@@ -297,14 +297,15 @@ def test_arange(sss, shape, dtype, chunks, blocks, c_order):
         pass
 
 
-def test_eager_c_order_ramps_bypass_legacy_source_kernel(monkeypatch):
+@pytest.mark.parametrize("c_order", [True, False])
+def test_eager_real_ramps_bypass_legacy_source_kernel(monkeypatch, c_order):
     from importlib import import_module
 
     def reject(*args, **kwargs):
-        pytest.fail("Eligible C-order ramps must not construct a legacy SourceKernel")
+        pytest.fail("Eligible real ramps must not construct a legacy SourceKernel")
 
     monkeypatch.setattr(import_module("blosc2.ndarray"), "SourceKernel", reject)
-    layout = {"chunks": (2, 4), "blocks": (1, 2), "shape": (3, 5)}
+    layout = {"chunks": (2, 4), "blocks": (1, 2), "shape": (3, 5), "c_order": c_order}
     ramp = blosc2.arange(120, 135, dtype=np.int8, jit=False, **layout)
     assert ramp.chunks == layout["chunks"]
     assert ramp.blocks == layout["blocks"]
@@ -343,7 +344,8 @@ def test_ramp_jit_resolves_before_dispatch(monkeypatch, constructor, c_order):
 
     monkeypatch.setattr(ndarray, "_compute_menudet_ramp", capture_menudet)
     monkeypatch.setattr(blosc2, "lazyudf", lambda *args, **kwargs: CaptureLegacy())
-    route = "menudet" if c_order else "legacy"
+    # Real ramps retain logical C-order values for either traversal flag.
+    route = "menudet"
     with blosc2.compute_options(jit=None):
         for size, override, expected in (
             (3_999_999, None, False),

@@ -8,8 +8,16 @@ python your_program.py
 ```
 
 The temporary `BLOSC2_EXPRESSION_EVALUATOR` selector has been removed after
-qualification on macOS, Linux, Windows, and Pyodide. Explicit compatibility
-DSL kernels and Python UDFs keep their existing execution contracts.
+qualification on macOS, Linux, Windows, and Pyodide. The public alpha DSL
+authoring API was retired in 4.15.0. Internal source normalization still serves
+Menudet authoring, control-flow `@blosc2.jit`, and table kernels. A reference
+to `SourceKernel` alone does not imply execution through the old prefilter.
+Python UDFs retain their existing execution contract.
+
+Eligible real `arange` and `linspace` constructors now prepare Menudet kernels
+directly, including calls with `c_order=False` that historically used logical
+C-order coordinates. Unsupported signatures and explicit Pyodide JavaScript
+requests retain their compatibility paths.
 
 The typed route reuses Menudet graph plans and admitted compression prefilters.
 Other layouts/signatures use bounded chunk evaluation through typed graph

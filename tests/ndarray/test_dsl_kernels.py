@@ -716,7 +716,9 @@ def test_kernel_failure_raises_strict_off(monkeypatch):
     def failing_export(*args, **kwargs):
         raise blosc2.MenudetError("forced miniexpr failure", status="invalid_source")
 
-    monkeypatch.setattr(DSLKernel, "export", failing_export)
+    monkeypatch.setattr(
+        importlib.import_module("blosc2.menudet_kernel"), "prepare_menudet_kernel", failing_export
+    )
 
     try:
         _, _, a2, b2 = _make_arrays(shape=(32, 32), chunks=(16, 16), blocks=(8, 8))
@@ -740,7 +742,9 @@ def test_kernel_failure_includes_backend_error(monkeypatch):
     def failing_export(*args, **kwargs):
         raise blosc2.MenudetError("forced miniexpr backend failure details", status="invalid_source")
 
-    monkeypatch.setattr(DSLKernel, "export", failing_export)
+    monkeypatch.setattr(
+        importlib.import_module("blosc2.menudet_kernel"), "prepare_menudet_kernel", failing_export
+    )
 
     try:
         _, _, a2, b2 = _make_arrays(shape=(32, 32), chunks=(16, 16), blocks=(8, 8))
@@ -774,7 +778,9 @@ def test_kernel_failure_prefers_validate_error(monkeypatch):
             "error": "synthetic validate_dsl diagnostics",
         }
 
-    monkeypatch.setattr(DSLKernel, "export", failing_export)
+    monkeypatch.setattr(
+        importlib.import_module("blosc2.menudet_kernel"), "prepare_menudet_kernel", failing_export
+    )
     monkeypatch.setattr(lazyexpr_mod, "validate_dsl", fake_validate_dsl, raising=False)
 
     try:

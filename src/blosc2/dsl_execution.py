@@ -92,7 +92,7 @@ class _PartitionedDSL(MenudetLazyArray):
 def evaluate_dsl_udf(udf, item, *, getitem, options):  # noqa: C901 -- explicit compatibility gates
     """Return (handled, result), retaining explicit compatibility exclusions."""
     from .dsl_kernel import SourceKernel as DSLKernel
-    from .menudet_kernel import MenudetError
+    from .menudet_kernel import MenudetError, prepare_menudet_kernel
 
     if (
         not isinstance(udf.func, DSLKernel)
@@ -140,28 +140,17 @@ def evaluate_dsl_udf(udf, item, *, getitem, options):  # noqa: C901 -- explicit 
     source = copy.copy(udf.func)
     source.dsl_source = text
     ndim = udf.ndim if re.search(r"\b(?:_flat_idx|_ndim|_[in]\d+)\b", text) else 0
-    try:
-        with blosc2.jit_options(**execution):
-            artifact = source.export(
-                {name: value.dtype for name, value in inputs.items()},
-                udf.dtype,
-                constants=constants,
-                ndim=ndim,
+    input_dtypes = {name: value.dtype for name, value in inputs.items()}
+    prepare_options = {"constants": constants, "ndim": ndim, "jit": execution["jit"]}
+    with blosc2.compute_options(**execution):
+        try:
+            kernel = prepare_menudet_kernel(source, input_dtypes, udf.dtype, **prepare_options)
+        except MenudetError as error:
+            if "return cardinality" not in str(error):
+                raise RuntimeError(f"Menudet compilation failed for DSL kernel: {error}") from error
+            kernel = prepare_menudet_kernel(
+                source, input_dtypes, udf.dtype, cardinality="block_scalar", **prepare_options
             )
-    except MenudetError as error:
-        if "return cardinality" in str(error):
-            with blosc2.jit_options(**execution):
-                artifact = source.export(
-                    {name: value.dtype for name, value in inputs.items()},
-                    udf.dtype,
-                    constants=constants,
-                    ndim=ndim,
-                    cardinality="block_scalar",
-                )
-        else:
-            raise RuntimeError(f"Menudet compilation failed for DSL kernel: {error}") from error
-    with blosc2.jit_options(**execution):
-        kernel = blosc2.MenudetKernel.from_json(artifact, jit=execution["jit"])
     if kernel.result_cardinality == "block_scalar":
         menudet_result = kernel.lazy(inputs, shape=tuple(udf.shape), partitions=blocks)
     elif any(c % b for c, b in zip(chunks, blocks, strict=True)):

@@ -6798,10 +6798,14 @@ def _menudet_ramp(
 
     backend = execution.get("jit_backend")
     if backend in {"tcc", "cc"}:
+        env_backend = os.environ.get("ME_DSL_JIT_COMPILER", "").strip().lower()
+        if env_backend in {"tcc", "cc"}:
+            backend = env_backend
         source = f"# me:compiler={backend}\n{source}"
-    kernel = prepare_menudet_generator(
-        source, "ramp", dtype, constants=constants, ndim=len(shape), jit=execution["jit"]
-    )
+    with blosc2.compute_options(**execution):
+        kernel = prepare_menudet_generator(
+            source, "ramp", dtype, constants=constants, ndim=len(shape), jit=execution["jit"]
+        )
     return kernel.lazy({}, shape=shape, partitions=partitions)
 
 
@@ -6817,9 +6821,11 @@ def _menudet_ramp_supported(dtype, execution, *, eager=False):
         return False
     if execution.get("jit_backend") == "js":
         return False
-    # MenudetKernel currently consumes compiler policy from the artifact pragma,
-    # not every task-local C compiler/cache override.
-    if builtins.any(execution.get(name) for name in ("compiler", "cflags", "cache_dir", "compiler_output")):
+    if builtins.any(
+        execution.get(name) for name in ("compiler", "cflags", "cache_dir", "compiler_output")
+    ) and (
+        not eager or not getattr(blosc2.blosc2_ext, "menudet_artifact_options_available", lambda: False)()
+    ):
         return False
     # Ramp arithmetic has no accuracy-selectable math functions.
     return eager or execution.get("fp_accuracy", blosc2.FPAccuracy.DEFAULT) == blosc2.FPAccuracy.DEFAULT
@@ -7026,7 +7032,9 @@ def arange(  # noqa: C901
 
     kwargs.update(execution)
 
-    if c_order and _menudet_ramp_supported(dtype, execution, eager=True):
+    # Real ramps have historically used logical C-order coordinates even
+    # with c_order=False. Complex fallbacks have separate reshape semantics.
+    if (c_order or dtype.kind != "c") and _menudet_ramp_supported(dtype, execution, eager=True):
         if dtype.kind in "biu":
             int_bounds = np.iinfo(np.int64)
             if builtins.all(
@@ -7043,7 +7051,7 @@ def arange(  # noqa: C901
         else:
             return _compute_menudet_ramp(start, step, dtype, tuple(shape), execution, kwargs)
 
-    # Retain the legacy path for insertion order or unsupported execution options.
+    # Preserve compatibility for unsupported signatures and explicit JS.
     if blosc2.isdtype(dtype, "complex floating"):
         lshape = (math.prod(shape),)
         lazyarr = blosc2.lazyudf(arange_fill, (start, stop, step), dtype=dtype, shape=lshape)
@@ -7210,7 +7218,7 @@ def linspace(  # noqa: C901
 
     kwargs.update(execution)
 
-    if c_order and _menudet_ramp_supported(dtype, execution, eager=True):
+    if (c_order or dtype.kind != "c") and _menudet_ramp_supported(dtype, execution, eager=True):
         if dtype.kind in "iu":
             # Menudet checks floating-to-integer conversions. Only admit this
             # route when both ends (including the rounded last value) fit.
@@ -7223,7 +7231,7 @@ def linspace(  # noqa: C901
                 start, step, dtype, tuple(shape), execution, kwargs, endpoint_stop=endpoint_stop
             )
 
-    # Retain the legacy path for insertion order or unsupported execution options.
+    # Preserve compatibility for unsupported signatures and explicit JS.
     if blosc2.isdtype(dtype, "complex floating"):
         inputs = (start, stop, num, endpoint)
         lazyarr = blosc2.lazyudf(linspace_fill, inputs, dtype=dtype, shape=(num,))
