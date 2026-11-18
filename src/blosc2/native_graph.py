@@ -451,6 +451,7 @@ def prepare_resident(
                 signature[-1],
                 input_dtypes=tuple((name, value.dtype) for name, value in inputs.items()),
                 optimization=optimization,
+                preferred_math=None if explicit else preferred_expression_math(policy["fp_accuracy"]),
             )
         # Checked conversions and mixed-type errors retain their whole-domain execution order.
         if plan.stages != 1 or (parallel and not plan.partitionable):
@@ -1679,8 +1680,19 @@ def _parallel_compressed_map(plan, inputs, shape, tile_items, out=None):
 
 
 @lru_cache(maxsize=128)
-def compile_plan(graph, jit=False, configuration=(), *, input_dtypes=None, optimization="moderate"):
+def compile_plan(
+    graph, jit=False, configuration=(), *, input_dtypes=None, optimization="moderate", preferred_math=None
+):
     """Reusable native plans; cache identity includes explicit captures and policy."""
+    import blosc2
+
+    if preferred_math is not None:
+        with blosc2.compute_options(math_backend=preferred_math):
+            return _compile_plan(graph, jit, input_dtypes, optimization)
+    return _compile_plan(graph, jit, input_dtypes, optimization)
+
+
+def _compile_plan(graph, jit, input_dtypes, optimization):
     from .graph_plan import NativeGraph
 
     if input_dtypes is None:
@@ -1697,6 +1709,41 @@ def compile_plan(graph, jit=False, configuration=(), *, input_dtypes=None, optim
         plan = NativeGraph.from_expression(graph, dict(input_dtypes), jit=jit)
         plan._frontend = "native-expression"
     return plan
+
+
+@lru_cache(maxsize=2)
+def _expression_math_available(backend):
+    """Probe the graph runtime once per backend, without doing any numerical work."""
+    import blosc2
+
+    from .graph_plan import NativeGraph
+
+    try:
+        with blosc2.compute_options(math_backend=backend):
+            plan = NativeGraph.from_expression("sin(x)", {"x": "float64"}, jit=False)
+    except (NotImplementedError, blosc2.MenudetError):
+        return False
+    return json.loads(plan.map_json())["semantics"].get("math") == backend
+
+
+def preferred_expression_math(fp_accuracy):
+    """Resolve the automatic MEDIUM policy for ordinary typed expressions."""
+    import blosc2
+
+    if (
+        fp_accuracy != blosc2.FPAccuracy.MEDIUM
+        or blosc2.IS_WASM
+        or blosc2.jit_config.execution_options()["math_backend"] is not None
+        or os.environ.get("ME_SIMD_MATH_BACKEND") not in (None, "", "auto")
+    ):
+        return None
+    if sys.platform == "darwin":
+        candidates = ("accelerate", "sleef")
+    elif sys.platform.startswith(("linux", "win")):
+        candidates = ("sleef",)
+    else:
+        return None
+    return next((backend for backend in candidates if _expression_math_available(backend)), None)
 
 
 @lru_cache(maxsize=128)
@@ -2184,7 +2231,9 @@ class GraphAdapter:
         raise ValueError(f"Unsupported native syntax: {type(node).__name__}")
 
 
-def lower_native_graph(expr, *, jit=False, reduction_options=None, root_options=None, allow_output=False):
+def lower_native_graph(
+    expr, *, jit=False, reduction_options=None, root_options=None, allow_output=False, fp_accuracy=None
+):
     import blosc2
 
     if type(expr) is not blosc2.LazyExpr:
@@ -2204,6 +2253,9 @@ def lower_native_graph(expr, *, jit=False, reduction_options=None, root_options=
     if graph.names - operands.keys():
         raise ValueError("Native graph contains unbound names")
     configuration = _graph_configuration(jit)
+    if fp_accuracy is None:
+        fp_accuracy = blosc2.jit_config.execution_options()["fp_accuracy"]
+    preferred_math = preferred_expression_math(fp_accuracy)
     optimization = getattr(expr, "_optimization", "moderate")
     text = (
         _native_text_expression(graph.text)
@@ -2218,7 +2270,9 @@ def lower_native_graph(expr, *, jit=False, reduction_options=None, root_options=
     ):
         source, reduction = text
         signature = tuple((name, value.dtype.name) for name, value in arrays.items())
-        plan = compile_plan(source, jit, configuration, input_dtypes=signature)
+        plan = compile_plan(
+            source, jit, configuration, input_dtypes=signature, preferred_math=preferred_math
+        )
         return plan, arrays, reduction
     adapter = GraphAdapter(operands)
     root = adapter.visit(ast.parse(graph.text, mode="eval").body)
@@ -2231,7 +2285,12 @@ def lower_native_graph(expr, *, jit=False, reduction_options=None, root_options=
         if "initial" in root_options:
             adapter.nodes[root]["initial"] = scalar_descriptor(root_options["initial"])
     document = _graph_document(adapter, root, optimization)
-    plan = compile_plan(json.dumps(document, sort_keys=True, separators=(",", ":")), jit, configuration)
+    plan = compile_plan(
+        json.dumps(document, sort_keys=True, separators=(",", ":")),
+        jit,
+        configuration,
+        preferred_math=preferred_math,
+    )
     return plan, adapter.arrays, adapter.nodes[root]["op"] in REDUCERS
 
 

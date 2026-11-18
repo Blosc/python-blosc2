@@ -105,7 +105,10 @@ def _prepare_typed_map_kernel(
     )
     try:
         plan, inputs, reduction = lower_native_graph(
-            stub, jit=False if configured else effective_jit, allow_output=True
+            stub,
+            jit=False if configured else effective_jit,
+            allow_output=True,
+            fp_accuracy=policy["fp_accuracy"],
         )
         if reduction or plan.stages != 1:
             return None

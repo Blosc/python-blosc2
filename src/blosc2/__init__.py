@@ -202,11 +202,12 @@ class FPAccuracy(Enum):
     This is only relevant when using floating point dtypes with miniexpr.
     """
 
-    #: Use 1.0 ULPs (Units in the Last Place) for floating point functions
+    #: Prefer SLEEF's 1 ULP mode for supported floating-point functions.
     HIGH = 1
-    #: Use 3.5 ULPs (Units in the Last Place) for floating point functions
+    #: Prefer Accelerate on macOS and SLEEF's 3.5 ULP mode on Linux and Windows
+    #: for typed expressions. Accuracy depends on the selected backend.
     MEDIUM = 2
-    #: Use default accuracy. This is MEDIUM, which should be enough for most applications.
+    #: Use the default accuracy (MEDIUM).
     DEFAULT = MEDIUM
 
 

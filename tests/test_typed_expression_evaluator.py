@@ -67,7 +67,12 @@ def test_typed_map_and_reduction_semantics(monkeypatch, force_wasm, case):
         expr, expected = a == 2**53 + 1, na == 2**53 + 1
     assert expr.dtype == expected.dtype
     for result in (expr[:], expr.compute()[:], expr[:2]):
-        np.testing.assert_array_equal(result, expected[:2] if result.shape == (2, 6) else expected)
+        target = expected[:2] if result.shape == (2, 6) else expected
+        if case == "hypot":
+            # Different native math backends need not round hypot identically.
+            np.testing.assert_allclose(result, target, rtol=4 * np.finfo(target.dtype).eps, atol=0)
+        else:
+            np.testing.assert_array_equal(result, target)
     np.testing.assert_allclose(expr.sum(), expected.sum())
     np.testing.assert_allclose(expr.sum(axis=0), expected.sum(axis=0))
 

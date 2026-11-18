@@ -5771,8 +5771,11 @@ class LazyExpr(LazyArray):
                         and not re.search(r"\bcopy\s*\(", expression)
                     ):
                         try:
-                            from .graph_plan import NativeGraph
-                            from .native_graph import native_weak_scalars_eligible, prepare_resident
+                            from .native_graph import (
+                                lower_native_graph,
+                                native_weak_scalars_eligible,
+                                prepare_resident,
+                            )
 
                             # The reviewed arithmetic subset can get metadata from its execution plan.
                             inputs = result.operands
@@ -5782,12 +5785,7 @@ class LazyExpr(LazyArray):
                                 _, plan, schedule = resident
                                 info = {"dtype": plan.inferred_dtype, "shape": resident[0][2]}
                             else:
-                                plan = NativeGraph.from_expression(
-                                    result.expression,
-                                    {name: value.dtype.name for name, value in inputs.items()},
-                                    jit=native_jit,
-                                )
-                                plan._frontend = "native-expression"
+                                plan, inputs, _ = lower_native_graph(result, jit=native_jit)
                                 if not native_weak_scalars_eligible(plan, result.expression, inputs):
                                     raise NotImplementedError(
                                         "Checked scalar metadata requires legacy preparation"

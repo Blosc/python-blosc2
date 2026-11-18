@@ -58,6 +58,65 @@ def test_compute_options_aliases_share_defaults():
     assert blosc2.get_compute_options()["fp_accuracy"] == blosc2.FPAccuracy.DEFAULT
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Native math backend preferences")
+@pytest.mark.parametrize(
+    ("platform", "available", "expected"),
+    [
+        ("darwin", {"accelerate", "sleef"}, "accelerate"),
+        ("darwin", {"sleef"}, "sleef"),
+        ("linux", {"accelerate", "sleef"}, "sleef"),
+        ("win32", {"sleef"}, "sleef"),
+        ("linux", set(), None),
+    ],
+)
+def test_automatic_medium_math_preference(monkeypatch, platform, available, expected):
+    from types import SimpleNamespace
+
+    from blosc2 import native_graph
+
+    monkeypatch.setattr(native_graph, "sys", SimpleNamespace(platform=platform))
+    monkeypatch.setattr(native_graph, "_expression_math_available", available.__contains__)
+    monkeypatch.delenv("ME_SIMD_MATH_BACKEND", raising=False)
+    resolve = native_graph.preferred_expression_math
+    medium = blosc2.FPAccuracy.MEDIUM
+
+    with blosc2.compute_options(math_backend=None):
+        assert resolve(medium) == expected
+        assert resolve(blosc2.FPAccuracy.HIGH) is None
+        monkeypatch.setenv("ME_SIMD_MATH_BACKEND", "system")
+        assert resolve(medium) is None
+    monkeypatch.delenv("ME_SIMD_MATH_BACKEND")
+    with blosc2.compute_options(math_backend="system"):
+        assert resolve(medium) is None
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("func", ["arctan", "expm1", "sin"])
+def test_automatic_medium_typed_math(monkeypatch, automatic_native_runtime, dtype, func):
+    from blosc2 import native_graph
+
+    monkeypatch.delenv("ME_SIMD_MATH_BACKEND", raising=False)
+    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "typed")
+    x = np.resize(np.array([-np.inf, -0.0, 0.0, 0.25, 1.0, np.inf, np.nan], dtype=dtype), 513)
+    a = blosc2.asarray(x, chunks=(128,), blocks=(64,))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        expected = getattr(np, func)(x)
+    with blosc2.compute_options(jit=False, fp_accuracy=blosc2.FPAccuracy.MEDIUM, math_backend=None):
+        expr = getattr(blosc2, func)(a)
+        preferred = native_graph.preferred_expression_math(blosc2.FPAccuracy.MEDIUM)
+        plan, _, _ = native_graph.lower_native_graph(expr)
+        kernel = native_graph.resident_map_kernel(plan)
+        assert kernel._info["math_backend"] == (preferred or "auto")
+        if preferred == "sleef":
+            assert kernel._info["sleef_accuracy"] == "u35"
+        actual = expr[:]
+    assert actual.dtype == expected.dtype
+    np.testing.assert_allclose(actual, expected, rtol=5 * np.finfo(dtype).eps, atol=0)
+    with blosc2.compute_options(jit=False, math_backend="system"):
+        plan, _, _ = native_graph.lower_native_graph(expr)
+        assert native_graph.resident_map_kernel(plan)._info["math_backend"] == "system"
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [

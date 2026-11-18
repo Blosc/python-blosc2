@@ -74,6 +74,13 @@ Both functions accept the same keyword-only parameters:
          Eligible typed expressions preserve NumPy-style intermediate dtypes
          while using SLEEF's 1 ULP mode for ``HIGH`` when SLEEF is available and
          the math backend is automatic or explicitly set to ``"sleef"``.
+         For ``MEDIUM`` with automatic backend selection, eligible typed
+         expressions prefer Accelerate on macOS, then SLEEF if available.
+         Linux and Windows prefer SLEEF. SLEEF uses its 3.5 ULP mode for
+         ``MEDIUM``; Accelerate does not expose ULP modes. If neither preferred
+         backend is available, the native evaluator retains its default math.
+         An explicit backend takes precedence, and ``MEDIUM`` does not promise
+         a portable error bound.
     * - ``trace``
       - ``False``
       - Python routing and native compilation/cache/fallback diagnostics on
