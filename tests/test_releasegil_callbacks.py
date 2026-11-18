@@ -239,11 +239,12 @@ def test_to_cframe_postfilter(releasegil):
     np.testing.assert_array_equal(read(copy), values)
 
 
-def longest_gap(func):
-    """Longest time a ticker thread did not run during func(), as a fraction of that call."""
-    stamps, stop = [], threading.Event()
+def ticks_during_call(func):
+    """Count ticker progress during the call, excluding disposal of its result."""
+    stamps, ready, stop = [], threading.Event(), threading.Event()
 
     def ticker():
+        ready.set()
         while not stop.is_set():
             stamps.append(time.perf_counter())
             time.sleep(0)
@@ -251,28 +252,34 @@ def longest_gap(func):
     t = threading.Thread(target=ticker)
     t.start()
     try:
+        ready.wait()
         t0 = time.perf_counter()
-        func()
+        result = func()
         t1 = time.perf_counter()
+        del result
     finally:
         stop.set()
         t.join()
-    inside = [s for s in stamps if t0 <= s <= t1]
-    return np.diff([t0, *inside, t1]).max() / (t1 - t0)
+    return sum(t0 < stamp < t1 for stamp in stamps)
 
 
 def assert_releases_the_gil(func):
-    """func() with set_releasegil(True) must let other threads run.  Holding the GIL leaves one gap as long
-    as nearly the whole call, every time; a busy machine can delay the ticker now and then, hence a few
-    attempts (as in test_get_slice_releases_the_gil)."""
-    old = blosc2.set_releasegil(True)
+    """Look for ticker progress beyond what is possible at the edges of a GIL-held call."""
+    old = blosc2.set_releasegil(False)
+    held, released = [], []
     try:
-        gaps = []
-        while len(gaps) < 5 and (not gaps or gaps[-1] >= 0.5):
-            gaps.append(longest_gap(func))
+        # A tick can slip in at either edge of the native call. Require more
+        # than those two edge ticks and more than the GIL-held control.
+        # Retry if a busy worker starves the ticker during a released call.
+        held = [ticks_during_call(func) for _ in range(2)]
+        blosc2.set_releasegil(True)
+        for _ in range(5):
+            released.append(ticks_during_call(func))
+            if released[-1] >= max(3, max(held) + 1):
+                return
     finally:
         blosc2.set_releasegil(old)
-    assert gaps[-1] < 0.5, f"longest gaps, as fractions of the call: {gaps}"
+    pytest.fail(f"Ticker did not make more progress with the GIL released: {held=}, {released=}")
 
 
 # A codec or filter registered from Python only keeps the GIL for the calls that use it
