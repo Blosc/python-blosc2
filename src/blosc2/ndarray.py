@@ -6811,7 +6811,9 @@ def _menudet_ramp(
 
 def _menudet_ramp_supported(dtype, execution, *, eager=False):
     """Return whether Menudet ramp semantics/options match this constructor call."""
-    if not (eager and dtype.isnative and dtype.kind in "biu") and dtype not in (
+    if eager and dtype.kind in "biuf" and not dtype.isnative:
+        dtype = dtype.newbyteorder("=")
+    if not (eager and dtype.kind in "biu") and dtype not in (
         np.dtype(np.int64),
         np.dtype(np.float32),
         np.dtype(np.float64),
@@ -6842,6 +6844,10 @@ def _compute_menudet_ramp(
     start, step, dtype, shape, execution, kwargs, *, endpoint_stop=None, integer_inputs=False
 ):
     """Evaluate a Menudet ramp and materialize it into Blosc2 storage."""
+    if dtype.kind in "biuf" and not dtype.isnative:
+        # Source-authored eager ramps already materialize the native artifact's
+        # byte order. Use it for the allocation as well as for the kernel.
+        dtype = dtype.newbyteorder("=")
     storage_kwargs = {key: value for key, value in kwargs.items() if key not in execution}
     output = blosc2.empty(shape, dtype=dtype, **storage_kwargs)
     kernel_lazy = _menudet_ramp(

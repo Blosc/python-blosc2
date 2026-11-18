@@ -358,6 +358,26 @@ def test_ramp_jit_resolves_before_dispatch(monkeypatch, constructor, c_order):
             assert calls[-1] == (route, expected, expected)
 
 
+@pytest.mark.parametrize(("constructor", "dtype"), [("arange", "int32"), ("linspace", "float64")])
+def test_eager_non_native_ramp_bypasses_legacy_source_kernel(monkeypatch, constructor, dtype):
+    from importlib import import_module
+
+    def reject(*args, **kwargs):
+        pytest.fail("Non-native real ramps must not construct a legacy SourceKernel")
+
+    monkeypatch.setattr(import_module("blosc2.ndarray"), "SourceKernel", reject)
+    native = np.dtype(dtype)
+    requested = native.newbyteorder("S")
+    args = (35,) if constructor == "arange" else (0, 34, 35)
+    ramp = getattr(blosc2, constructor)(
+        *args, shape=(5, 7), chunks=(3, 4), blocks=(2, 2), dtype=requested, jit=False
+    )
+    assert ramp.dtype == native
+    assert ramp.chunks == (3, 4)
+    assert ramp.blocks == (2, 2)
+    np.testing.assert_array_equal(ramp[:], np.arange(35, dtype=native).reshape(5, 7))
+
+
 @pytest.mark.parametrize(
     ("start", "stop", "step"),
     [
