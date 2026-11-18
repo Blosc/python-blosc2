@@ -379,6 +379,39 @@ def test_eager_non_native_ramp_bypasses_legacy_source_kernel(monkeypatch, constr
 
 
 @pytest.mark.parametrize(
+    ("constructor", "args", "dtype", "expected"),
+    [
+        ("arange", (-0.75, 2.25, 1.0), "uint8", [0, 0, 1]),
+        ("linspace", (-128.75, -126.75, 3), "int8", [-128, -127, -126]),
+    ],
+)
+@pytest.mark.parametrize("jit", [False, True])
+def test_eager_ramp_checks_integer_bounds_after_truncation(
+    monkeypatch, constructor, args, dtype, expected, jit
+):
+    from importlib import import_module
+
+    def reject(*args, **kwargs):
+        pytest.fail("In-range truncated values should use Menudet directly")
+
+    monkeypatch.setattr(import_module("blosc2.ndarray"), "SourceKernel", reject)
+    result = getattr(blosc2, constructor)(*args, dtype=dtype, chunks=(2,), blocks=(1,), jit=jit)
+    assert result.dtype == np.dtype(dtype)
+    assert result.chunks == (2,)
+    assert result.blocks == (1,)
+    np.testing.assert_array_equal(result[:], expected)
+
+
+@pytest.mark.parametrize(
+    ("constructor", "args", "dtype"),
+    [("arange", (127.0, 130.0, 1.0), "int8"), ("linspace", (-1.0, 2.0, 4), "uint8")],
+)
+def test_eager_ramp_rejects_out_of_range_float_to_integer(constructor, args, dtype):
+    with pytest.raises(blosc2.MenudetError, match="evaluation_error"):
+        getattr(blosc2, constructor)(*args, dtype=dtype, jit=False)
+
+
+@pytest.mark.parametrize(
     ("start", "stop", "step"),
     [
         (10, 2, 1),  # stop < start, positive step

@@ -6834,10 +6834,12 @@ def _menudet_ramp_supported(dtype, execution, *, eager=False):
 
 
 def _ramp_fits_integer_dtype(start, step, size, dtype):
-    """Admit finite real ramps whose endpoint conversions are in range."""
+    """Match Menudet's checked, truncating float-to-integer conversions."""
     bounds = np.iinfo(dtype)
     last = start + (size - 1) * step
-    return bounds.min <= start < bounds.max + 1 and bounds.min <= last < bounds.max + 1
+    if not (math.isfinite(start) and math.isfinite(last)):
+        return False
+    return bounds.min <= math.trunc(start) <= bounds.max and bounds.min <= math.trunc(last) <= bounds.max
 
 
 def _compute_menudet_ramp(
@@ -7228,7 +7230,6 @@ def linspace(  # noqa: C901
         if dtype.kind in "iu":
             # Menudet checks floating-to-integer conversions. Only admit this
             # route when both ends (including the rounded last value) fit.
-            # Use an exclusive upper bound, representable even for uint64.
             first = float(start)
             if _ramp_fits_integer_dtype(first, step, num, dtype):
                 return _compute_menudet_ramp(first, step, dtype, tuple(shape), execution, kwargs)
