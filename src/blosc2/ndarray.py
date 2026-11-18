@@ -6746,7 +6746,17 @@ def ones(
     return full(shape, 1, dtype, **kwargs)
 
 
-def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None, endpoint_stop=None):
+_RAMP_JIT_MIN_ITEMS = 4_000_000
+
+
+def _resolve_ramp_jit(execution, size):
+    if execution["jit"] is None:
+        execution["jit"] = bool(size >= _RAMP_JIT_MIN_ITEMS)
+
+
+def _menudet_ramp(
+    start, step, dtype, shape, *, execution, partitions=None, endpoint_stop=None, integer_inputs=False
+):
     """Build an input-free Menudet ramp and bind it to a logical shape."""
     from .menudet_kernel import prepare_menudet_generator
 
@@ -6756,7 +6766,7 @@ def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None, endp
         execution = {**execution, "jit": False, "jit_backend": None}
 
     if (
-        dtype == np.dtype(np.int64)
+        (integer_inputs or dtype == np.dtype(np.int64))
         and isinstance(start, (int, np.integer))
         and isinstance(step, (int, np.integer))
     ):
@@ -6769,7 +6779,7 @@ def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None, endp
         start = float(start)
         step = float(step)
 
-    if dtype.kind == "f":
+    if dtype.kind == "f" or (dtype.kind in "biu" and not isinstance(start, int)):
         source = "def ramp(start, step):\n    return float(start) + _flat_idx * float(step)\n"
     else:
         source = "def ramp(start, step):\n    return start + _flat_idx * step\n"
@@ -6789,17 +6799,15 @@ def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None, endp
     backend = execution.get("jit_backend")
     if backend in {"tcc", "cc"}:
         source = f"# me:compiler={backend}\n{source}"
-    jit_option = execution.get("jit")
-    jit_mode = math.prod(shape) >= 4_000_000 if jit_option is None else bool(jit_option)
     kernel = prepare_menudet_generator(
-        source, "ramp", dtype, constants=constants, ndim=len(shape), jit=jit_mode
+        source, "ramp", dtype, constants=constants, ndim=len(shape), jit=execution["jit"]
     )
     return kernel.lazy({}, shape=shape, partitions=partitions)
 
 
-def _menudet_ramp_supported(dtype, execution):
+def _menudet_ramp_supported(dtype, execution, *, eager=False):
     """Return whether Menudet ramp semantics/options match this constructor call."""
-    if dtype not in (
+    if not (eager and dtype.isnative and dtype.kind in "biu") and dtype not in (
         np.dtype(np.int64),
         np.dtype(np.float32),
         np.dtype(np.float64),
@@ -6813,10 +6821,20 @@ def _menudet_ramp_supported(dtype, execution):
     # not every task-local C compiler/cache override.
     if builtins.any(execution.get(name) for name in ("compiler", "cflags", "cache_dir", "compiler_output")):
         return False
-    return execution.get("fp_accuracy", blosc2.FPAccuracy.DEFAULT) == blosc2.FPAccuracy.DEFAULT
+    # Ramp arithmetic has no accuracy-selectable math functions.
+    return eager or execution.get("fp_accuracy", blosc2.FPAccuracy.DEFAULT) == blosc2.FPAccuracy.DEFAULT
 
 
-def _compute_menudet_ramp(start, step, dtype, shape, execution, kwargs, *, endpoint_stop=None):
+def _ramp_fits_integer_dtype(start, step, size, dtype):
+    """Admit finite real ramps whose endpoint conversions are in range."""
+    bounds = np.iinfo(dtype)
+    last = start + (size - 1) * step
+    return bounds.min <= start < bounds.max + 1 and bounds.min <= last < bounds.max + 1
+
+
+def _compute_menudet_ramp(
+    start, step, dtype, shape, execution, kwargs, *, endpoint_stop=None, integer_inputs=False
+):
     """Evaluate a Menudet ramp and materialize it into Blosc2 storage."""
     storage_kwargs = {key: value for key, value in kwargs.items() if key not in execution}
     output = blosc2.empty(shape, dtype=dtype, **storage_kwargs)
@@ -6828,6 +6846,7 @@ def _compute_menudet_ramp(start, step, dtype, shape, execution, kwargs, *, endpo
         execution=execution,
         partitions=output.chunks,
         endpoint_stop=endpoint_stop,
+        integer_inputs=integer_inputs,
     )
     if blosc2.blosc2_ext.menudet_prefilter_inputs_eligible({}, output=output):
         kernel_lazy.kernel._handle.evaluate_prefilter({}, out=output)
@@ -6984,6 +7003,7 @@ def arange(  # noqa: C901
 
     execution = blosc2.jit_config.execution_options()
     execution.update(blosc2.jit_config.pop_execution_options(kwargs))
+    _resolve_ramp_jit(execution, NUM)
     storage_kwargs = kwargs.copy()
     if lazy:
         if storage_kwargs:
@@ -7006,19 +7026,20 @@ def arange(  # noqa: C901
 
     kwargs.update(execution)
 
-    # Avoid compilation latency for small one-shot ramps unless explicitly requested.
-    if execution["jit"] is None:
-        execution["jit"] = NUM >= 4_000_000
-    if c_order and _menudet_ramp_supported(dtype, execution):
-        if dtype == np.dtype(np.int64):
-            valid_int = (
-                isinstance(start, (int, np.integer))
-                and isinstance(step, (int, np.integer))
-                and np.iinfo(np.int64).min <= start <= np.iinfo(np.int64).max
-                and np.iinfo(np.int64).min <= step <= np.iinfo(np.int64).max
-            )
-            if valid_int:
-                return _compute_menudet_ramp(start, step, dtype, tuple(shape), execution, kwargs)
+    if c_order and _menudet_ramp_supported(dtype, execution, eager=True):
+        if dtype.kind in "biu":
+            int_bounds = np.iinfo(np.int64)
+            if builtins.all(
+                isinstance(value, (int, np.integer)) and int_bounds.min <= value <= int_bounds.max
+                for value in (start, step)
+            ):
+                return _compute_menudet_ramp(
+                    start, step, dtype, tuple(shape), execution, kwargs, integer_inputs=True
+                )
+            if isinstance(start, (float, np.floating)) or isinstance(step, (float, np.floating)):
+                first, delta = float(start), float(step)
+                if dtype.kind == "b" or _ramp_fits_integer_dtype(first, delta, NUM, dtype):
+                    return _compute_menudet_ramp(first, delta, dtype, tuple(shape), execution, kwargs)
         else:
             return _compute_menudet_ramp(start, step, dtype, tuple(shape), execution, kwargs)
 
@@ -7164,6 +7185,7 @@ def linspace(  # noqa: C901
 
     execution = blosc2.jit_config.execution_options()
     execution.update(blosc2.jit_config.pop_execution_options(kwargs))
+    _resolve_ramp_jit(execution, num)
     storage_kwargs = kwargs.copy()
     if lazy:
         if storage_kwargs:
@@ -7188,12 +7210,18 @@ def linspace(  # noqa: C901
 
     kwargs.update(execution)
 
-    if execution["jit"] is None:
-        execution["jit"] = num >= 4_000_000
-    if c_order and _menudet_ramp_supported(dtype, execution):
-        return _compute_menudet_ramp(
-            start, step, dtype, tuple(shape), execution, kwargs, endpoint_stop=endpoint_stop
-        )
+    if c_order and _menudet_ramp_supported(dtype, execution, eager=True):
+        if dtype.kind in "iu":
+            # Menudet checks floating-to-integer conversions. Only admit this
+            # route when both ends (including the rounded last value) fit.
+            # Use an exclusive upper bound, representable even for uint64.
+            first = float(start)
+            if _ramp_fits_integer_dtype(first, step, num, dtype):
+                return _compute_menudet_ramp(first, step, dtype, tuple(shape), execution, kwargs)
+        else:
+            return _compute_menudet_ramp(
+                start, step, dtype, tuple(shape), execution, kwargs, endpoint_stop=endpoint_stop
+            )
 
     # Retain the legacy path for insertion order or unsupported execution options.
     if blosc2.isdtype(dtype, "complex floating"):

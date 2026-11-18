@@ -297,6 +297,65 @@ def test_arange(sss, shape, dtype, chunks, blocks, c_order):
         pass
 
 
+def test_eager_c_order_ramps_bypass_legacy_source_kernel(monkeypatch):
+    from importlib import import_module
+
+    def reject(*args, **kwargs):
+        pytest.fail("Eligible C-order ramps must not construct a legacy SourceKernel")
+
+    monkeypatch.setattr(import_module("blosc2.ndarray"), "SourceKernel", reject)
+    layout = {"chunks": (2, 4), "blocks": (1, 2), "shape": (3, 5)}
+    ramp = blosc2.arange(120, 135, dtype=np.int8, jit=False, **layout)
+    assert ramp.chunks == layout["chunks"]
+    assert ramp.blocks == layout["blocks"]
+    np.testing.assert_array_equal(ramp[:], np.arange(120, 135).astype(np.int8).reshape(3, 5))
+
+    ramp = blosc2.linspace(-3, 3, dtype=np.int32, jit=False, **layout)
+    expected = np.linspace(-3, 3, 15).astype(np.int32).reshape(3, 5)
+    np.testing.assert_array_equal(ramp[:], expected)
+
+    ramp = blosc2.linspace(0, 1, 17, fp_accuracy=blosc2.FPAccuracy.HIGH, jit=False)
+    np.testing.assert_allclose(ramp[:], np.linspace(0, 1, 17))
+
+    ramp = blosc2.arange(-2.2, 4, 0.6, dtype=np.int16, jit=False)
+    np.testing.assert_array_equal(ramp[:], (-2.2 + np.arange(11) * 0.6).astype(np.int16))
+
+    ramp = blosc2.linspace(-1, 1, 5, dtype=np.bool_, jit=False)
+    np.testing.assert_array_equal(ramp[:], [True, True, False, True, True])
+    ramp = blosc2.arange(-2, 3, dtype=np.bool_, jit=False)
+    np.testing.assert_array_equal(ramp[:], [True, True, False, True, True])
+
+
+@pytest.mark.parametrize("constructor", ["arange", "linspace"])
+@pytest.mark.parametrize("c_order", [True, False])
+def test_ramp_jit_resolves_before_dispatch(monkeypatch, constructor, c_order):
+    from importlib import import_module
+
+    ndarray = import_module("blosc2.ndarray")
+    calls = []
+
+    def capture_menudet(start, step, dtype, shape, execution, kwargs, **options):
+        calls.append(("menudet", execution["jit"], kwargs["jit"]))
+
+    class CaptureLegacy:
+        def compute(self, **kwargs):
+            calls.append(("legacy", kwargs["jit"], kwargs["jit"]))
+
+    monkeypatch.setattr(ndarray, "_compute_menudet_ramp", capture_menudet)
+    monkeypatch.setattr(blosc2, "lazyudf", lambda *args, **kwargs: CaptureLegacy())
+    route = "menudet" if c_order else "legacy"
+    with blosc2.compute_options(jit=None):
+        for size, override, expected in (
+            (3_999_999, None, False),
+            (4_000_000, None, True),
+            (4_000_000, False, False),
+            (10, True, True),
+        ):
+            args = (size,) if constructor == "arange" else (0, 1, size)
+            getattr(blosc2, constructor)(*args, c_order=c_order, jit=override)
+            assert calls[-1] == (route, expected, expected)
+
+
 @pytest.mark.parametrize(
     ("start", "stop", "step"),
     [

@@ -494,7 +494,9 @@ def test_native_cc_options_and_cache_identity(tmp_path, capfd):
         pytest.skip("CC unavailable")
     before = dict(os.environ)
     cache = tmp_path / "direct cache's $data"
-    with blosc2.jit_options(jit_backend="cc", compiler="cc", cflags="-O1", cache_dir=cache, trace=True):
+    with blosc2.jit_options(
+        jit=True, jit_backend="cc", compiler="cc", cflags="-O1", cache_dir=cache, trace=True
+    ):
         blosc2.linspace(0, 9, 64)
         cold = capfd.readouterr()
         assert cold.out == ""
@@ -523,7 +525,7 @@ def test_native_cc_options_and_cache_identity(tmp_path, capfd):
 def test_environment_overrides_and_tcc_ignores_cc_settings(tmp_path, capfd, monkeypatch):
     monkeypatch.setenv("ME_DSL_JIT_COMPILER", "tcc")
     with blosc2.jit_options(
-        jit_backend="cc", compiler="/no/compiler", cache_dir=tmp_path / "cache", trace=True
+        jit=True, jit_backend="cc", compiler="/no/compiler", cache_dir=tmp_path / "cache", trace=True
     ):
         blosc2.arange(64)
     assert "compiler=tcc" in capfd.readouterr().err
@@ -591,7 +593,7 @@ def test_compiler_output(tmp_path, capfd):
     compiler.write_text("#!/bin/sh\necho scoped-compiler-output >&2\nexit 1\n")
     compiler.chmod(0o700)
     with blosc2.jit_options(
-        jit_backend="cc", compiler=compiler, cache_dir=tmp_path / "cache", compiler_output=True
+        jit=True, jit_backend="cc", compiler=compiler, cache_dir=tmp_path / "cache", compiler_output=True
     ):
         blosc2.linspace(0, 3, 71)
     captured = capfd.readouterr()
@@ -611,7 +613,12 @@ def test_cc_environment_precedence(tmp_path, capfd, monkeypatch, variable, value
     monkeypatch.setenv(variable, value)
     monkeypatch.setenv("ME_DSL_JIT_CACHE_DIR", str(tmp_path / "env-cache"))
     with blosc2.jit_options(
-        jit_backend="cc", compiler="cc", cflags="-O1", cache_dir=tmp_path / "python-cache", trace=True
+        jit=True,
+        jit_backend="cc",
+        compiler="cc",
+        cflags="-O1",
+        cache_dir=tmp_path / "python-cache",
+        trace=True,
     ):
         blosc2.linspace(0, 11, 79)
     assert reason in capfd.readouterr().err
