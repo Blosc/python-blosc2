@@ -20,12 +20,8 @@ def value_promotion_policy(monkeypatch):
         monkeypatch.setattr(module, "_NUMPY_VALUE_PROMOTION", True)
 
 
-@pytest.mark.parametrize("mode", ["legacy", "typed"])
 @pytest.mark.parametrize("persisted", [False, True])
-def test_automatic_evaluation_uses_bounded_numpy(
-    value_promotion_policy, monkeypatch, tmp_path, mode, persisted
-):
-    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", mode)
+def test_automatic_evaluation_uses_bounded_numpy(value_promotion_policy, monkeypatch, tmp_path, persisted):
     values = np.arange(96, dtype=np.float32).reshape(12, 8)
     options = {"urlpath": str(tmp_path / "a.b2nd")} if persisted else {}
     a = blosc2.asarray(values, chunks=(3, 8), blocks=(1, 4), **options)

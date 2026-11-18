@@ -61,7 +61,6 @@ from .expression_evaluator import (
     binary_result_dtype,
     compute_typed_prefilter,
     compute_typed_reduction,
-    typed_evaluator_enabled,
 )
 from .expression_graph import (
     _NUMPY_VALUE_PROMOTION,
@@ -198,7 +197,6 @@ def _prepare_chunk_schedule(expression, operands, optimization, policy, state):
         cache_key = (
             expression,
             optimization,
-            typed_evaluator_enabled(),
             tuple(policy.items()),
             tuple((name, value.dtype, value.shape) for name, value in sorted(operands.items())),
         )
@@ -215,7 +213,7 @@ def _prepare_chunk_schedule(expression, operands, optimization, policy, state):
             else False
         )
         plan, arrays, _ = lower_native_graph(stub, jit=graph_jit, allow_output=True)
-        if typed_evaluator_enabled() and not native_weak_scalars_eligible(plan, expression, operands):
+        if not native_weak_scalars_eligible(plan, expression, operands):
             return None
     except (NotImplementedError, ValueError, TypeError):
         return None
@@ -274,7 +272,6 @@ def evaluate_chunk(expression, local_dict=None, **kwargs):
             state is not None
             and graph.arithmetic
             and optimization == "moderate"
-            and typed_evaluator_enabled()
             and policy["jit"] is None
             and policy["jit_backend"] is None
             and policy["math_backend"] is None
@@ -2075,12 +2072,7 @@ def fast_eval(  # noqa: C901
         isinstance(value, blosc2.NDArray | np.ndarray) and value.dtype.kind in "SU"
         for value in operands.values()
     )
-    typed_expression = (
-        not is_dsl
-        and isinstance(expression, str)
-        and not string_operands
-        and (typed_evaluator_enabled() or _NUMPY_VALUE_PROMOTION)
-    )
+    typed_expression = not is_dsl and isinstance(expression, str) and not string_operands
     if typed_expression:
         # This route may use typed artifacts or explicit NumPy fallback, never
         # the uniform-output-dtype expression compiler.
@@ -3226,16 +3218,6 @@ def reduce_slices(  # noqa: C901
     :ref:`NDArray` or np.ndarray
         The resulting output array.
     """
-    global try_miniexpr
-
-    # Use a local copy so we don't modify the global
-    use_miniexpr = try_miniexpr and not (typed_evaluator_enabled() or _NUMPY_VALUE_PROMOTION)
-
-    if blosc2.IS_WASM:
-        # Reduction miniexpr on wasm is currently unstable for scalar reductions (axis=None).
-        # Keep wasm reduction evaluation on the regular chunked path until stabilized.
-        use_miniexpr = False
-
     out = kwargs.pop("_output", None)
     res_out_ = None  # temporary required to store max/min for argmax/argmin
     eval_kwargs: dict = kwargs.pop("_eval_kwargs", {})
@@ -3315,7 +3297,6 @@ def reduce_slices(  # noqa: C901
     all_ndarray = False
     any_persisted = False
     chunks = None
-    blocks = None
     if blosc2_arrs:  # fast path only relevant if there are blosc2 arrays
         operand = max(blosc2_arrs, key=lambda x: len(x.shape))
 
@@ -3328,7 +3309,6 @@ def reduce_slices(  # noqa: C901
         iter_disk = False
         if fast_path:
             chunks = operand.chunks
-            blocks = operand.blocks
             # Check that all operands are NDArray for fast path
             all_ndarray = all(
                 isinstance(value, blosc2.NDArray) and value.shape != () for value in operands.values()
@@ -3363,8 +3343,7 @@ def reduce_slices(  # noqa: C901
         del temp
 
     if (
-        typed_evaluator_enabled()
-        and try_miniexpr
+        try_miniexpr
         and isinstance(expression, str)
         and not _is_dsl_kernel_expression(expression)
         and fast_path
@@ -3389,129 +3368,6 @@ def reduce_slices(  # noqa: C901
         )
         if result is not None:
             return result
-
-    # miniexpr reduction path only supported for some cases so far
-    if not (fast_path and all_ndarray and reduced_shape == () and _slice == ()):
-        use_miniexpr = False
-
-    # Some reductions are not supported yet in miniexpr
-    if reduce_op in (ReduceOp.ARGMAX, ReduceOp.ARGMIN, ReduceOp.CUMULATIVE_PROD, ReduceOp.CUMULATIVE_SUM):
-        use_miniexpr = False
-
-    # Check whether we can use miniexpr
-    if use_miniexpr and isinstance(expression, str):
-        if _miniexpr_integer_atan2(expression, operands):
-            use_miniexpr = False
-        tree = _parse_expression(expression)
-        if _miniexpr_inexact_int_literal(expression) or (
-            tree is not None and any(isinstance(node, ast.Compare) for node in ast.walk(tree))
-        ):
-            # Legacy scalar reductions type intermediate conditions using the
-            # accumulator dtype, losing float32 rounding and int64 precision.
-            # The chunk evaluator retains the condition's own NumPy semantics.
-            use_miniexpr = False
-        has_complex = any(
-            isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
-            for op in operands.values()
-        )
-        if has_complex and any(tok in expression for tok in ("!=", "==", "<=", ">=", "<", ">")):
-            use_miniexpr = False
-        if where is not None and len(where) != 2:
-            use_miniexpr = False
-
-    if use_miniexpr:
-        cparams = kwargs.pop("cparams", None)
-        if cparams is None:
-            # Experiments say that not splitting is best (at least on Apple Silicon M4 Pro)
-            cparams = blosc2.CParams(splitmode=blosc2.SplitMode.NEVER_SPLIT)
-            _restore_code_unit_shuffle(cparams, dtype)
-        # Create a fake NDArray just to drive the miniexpr evaluation (values won't be used)
-        res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
-        # Compute the number of blocks in the result
-        nblocks = res_eval.schunk.nbytes // res_eval.blocksize
-        # Initialize aux_reduc based on the reduction operation
-        # Padding blocks won't be written, so initial values matter for the final reduction
-        if reduce_op in {ReduceOp.SUM, ReduceOp.ANY, ReduceOp.CUMULATIVE_SUM}:
-            aux_reduc = np.zeros(nblocks, dtype=dtype)
-        elif reduce_op in {ReduceOp.PROD, ReduceOp.ALL, ReduceOp.CUMULATIVE_PROD}:
-            aux_reduc = np.ones(nblocks, dtype=dtype)
-        elif reduce_op == ReduceOp.MIN:
-            # Bool is not an np.integer, and -inf/inf would both be True
-            if dtype == np.bool_:
-                aux_reduc = np.ones(nblocks, dtype=dtype)
-            elif np.issubdtype(dtype, np.integer):
-                aux_reduc = np.full(nblocks, np.iinfo(dtype).max, dtype=dtype)
-            else:
-                aux_reduc = np.full(nblocks, np.inf, dtype=dtype)
-        elif reduce_op == ReduceOp.MAX:
-            if dtype == np.bool_:
-                aux_reduc = np.zeros(nblocks, dtype=dtype)
-            elif np.issubdtype(dtype, np.integer):
-                aux_reduc = np.full(nblocks, np.iinfo(dtype).min, dtype=dtype)
-            else:
-                aux_reduc = np.full(nblocks, -np.inf, dtype=dtype)
-        else:
-            # For other operations, zeros should be safe
-            aux_reduc = np.zeros(nblocks, dtype=dtype)
-        prefilter_set = False
-        expression_miniexpr = None
-        try:
-            if where is not None:
-                expression_miniexpr = f"{reduce_op_str}(where({expression}, _where_x, _where_y))"
-            else:
-                expression_miniexpr = f"{reduce_op_str}({expression})"
-            # Keep reductions as native scalar expressions. A DSL return
-            # broadcasts a reduced value across the output block, whereas this
-            # prefilter supplies only one accumulator slot per block. Explicit
-            # JIT_ON also auto-lifts plain expressions in the native compiler,
-            # so use the scalar interpreter until reduction JIT has a separate
-            # output-cardinality contract.
-            res_eval._set_pref_expr(expression_miniexpr, operands, fp_accuracy, aux_reduc, jit=False)
-            prefilter_set = True
-            # print("expr->miniexpr:", expression, reduce_op, fp_accuracy)
-            # Data won't even try to be compressed, so buffers can be unitialized and reused
-            data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
-            chunk_data = np.empty(res_eval.schunk.chunksize + blosc2.MAX_OVERHEAD, dtype=np.uint8)
-            # Exercise prefilter for each chunk
-            # The prefilter reads the operands' super-chunks from C, outside their methods
-            operand_locks = blosc2.blosc2_ext.HandleLocks(operands.values())
-            for nchunk in range(res_eval.schunk.nchunks):
-                with operand_locks:
-                    res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
-        except Exception as e:
-            if blosc2.jit_config.execution_options()["math_backend"] is not None:
-                raise
-            if callable(expression) and _is_dsl_kernel_expression(expression):
-                reason = "miniexpr compilation or execution failed for this DSL kernel."
-                backend_error = str(e)
-                parse_hint = None
-                if isinstance(expression_miniexpr, str):
-                    parse_hint = _format_dsl_parse_error_hint(expression_miniexpr, backend_error)
-                reason = f"{reason}\nBackend error: {backend_error}"
-                if parse_hint is not None:
-                    reason = f"{reason}\n{parse_hint}"
-                raise RuntimeError(_dsl_miniexpr_required_message(reason)) from e
-            if prefilter_set:
-                raise
-            use_miniexpr = False
-        finally:
-            if prefilter_set:
-                res_eval.schunk.remove_prefilter("miniexpr")
-
-        if not use_miniexpr:
-            # If miniexpr failed, fallback to regular evaluation
-            # (continue to the manual chunked evaluation below)
-            pass
-        else:
-            if reduce_op in {ReduceOp.ANY, ReduceOp.ALL}:
-                result = reduce_op.value(aux_reduc, **reduce_args)
-            else:
-                # The accumulator is always 1-D (one slot per output block).
-                # The original axis may refer to dimensions that no longer
-                # exist after per-block reduction.  Use axis=0 to combine
-                # all block results.
-                result = reduce_op.value.reduce(aux_reduc, axis=0)
-            return np.asarray(result)
 
     # Iterate over the operands and get the chunks
     chunk_operands = {}
@@ -4091,10 +3947,9 @@ def check_dtype(op, value1, value2):
     if op == "/" and v1_dtype == np.int32 and v2_dtype == np.int32:
         return blosc2.float32
 
-    if typed_evaluator_enabled():
-        result = binary_result_dtype(op, value1, value2)
-        if result is not None:
-            return result
+    result = binary_result_dtype(op, value1, value2)
+    if result is not None:
+        return result
 
     if op == "/" and np.issubdtype(v1_dtype, np.integer) and np.issubdtype(v2_dtype, np.integer):
         return blosc2.float64

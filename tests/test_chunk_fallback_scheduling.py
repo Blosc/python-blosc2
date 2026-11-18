@@ -13,11 +13,6 @@ lazy = importlib.import_module("blosc2.lazyexpr")
 native = importlib.import_module("blosc2.native_graph")
 
 
-@pytest.fixture(autouse=True)
-def typed_mode(monkeypatch):
-    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "typed")
-
-
 def test_nonflat_private_output_avoids_general_assignment(monkeypatch):
     values = np.arange(9 * 13, dtype=np.float32).reshape(9, 13)
     a = blosc2.asarray(values, chunks=(4, 5), blocks=(2, 3))

@@ -11,27 +11,13 @@ from blosc2.expression_graph import _NUMPY_VALUE_PROMOTION
 
 @pytest.fixture(autouse=True)
 def typed_route(monkeypatch):
-    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "typed")
-
     def forbidden(*args, **kwargs):
         pytest.fail("Ordinary typed expressions reached the uniform-dtype evaluator")
 
     monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", forbidden)
 
 
-@pytest.mark.parametrize(("selector", "expected"), [(None, True), ("typed", True), ("legacy", False)])
-def test_default_and_escape_hatch(monkeypatch, selector, expected):
-    from blosc2.expression_evaluator import typed_evaluator_enabled
-
-    if selector is None:
-        monkeypatch.delenv("BLOSC2_EXPRESSION_EVALUATOR", raising=False)
-    else:
-        monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", selector)
-    assert typed_evaluator_enabled() is expected
-
-
-def test_unset_selector_uses_typed_execution(monkeypatch):
-    monkeypatch.delenv("BLOSC2_EXPRESSION_EVALUATOR", raising=False)
+def test_nonflat_expression_uses_typed_execution():
     values = np.arange(63, dtype=np.float32).reshape(7, 9)
     a = blosc2.asarray(values, chunks=(3, 4), blocks=(2, 3))
     expr = (a + 1) * 2
@@ -229,12 +215,6 @@ def test_typed_prefilter_failure_is_not_replayed(monkeypatch, native_graph_runti
         expr.compute(out=output, _require_native=False)
     assert output[0] == 123
     np.testing.assert_array_equal(output[1:], -99)
-
-
-def test_invalid_evaluator_selector(monkeypatch):
-    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "typo")
-    with pytest.raises(ValueError, match="BLOSC2_EXPRESSION_EVALUATOR"):
-        blosc2.asarray(np.arange(4.0)) + 1
 
 
 @pytest.mark.parametrize(

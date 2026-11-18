@@ -7,18 +7,9 @@ variable is needed:
 python your_program.py
 ```
 
-During qualification, the previous evaluator remains available as a temporary
-escape hatch. Select it before constructing expressions:
-
-```sh
-BLOSC2_EXPRESSION_EVALUATOR=legacy python your_program.py
-```
-
-Explicit `BLOSC2_EXPRESSION_EVALUATOR=typed` is also accepted. This selector is
-temporary, not permanent API configuration. Explicit compatibility DSL kernels
-and Python UDFs keep their existing execution contracts. The development default
-has switched ahead of fresh full platform CI; that qualification remains required
-before deleting the ordinary-expression legacy path.
+The temporary `BLOSC2_EXPRESSION_EVALUATOR` selector has been removed after
+qualification on macOS, Linux, Windows, and Pyodide. Explicit compatibility
+DSL kernels and Python UDFs keep their existing execution contracts.
 
 The typed route reuses Menudet graph plans and admitted compression prefilters.
 Other layouts/signatures use bounded chunk evaluation through typed graph
@@ -60,8 +51,7 @@ block pipeline for arbitrary N-D geometry. Profile evidence and remaining gaps
 are recorded in the migration plan; performance parity is not claimed for those
 layouts.
 
-Use `bench/ndarray/evaluator_migration.py` for an interleaved timing probe and
-`bench/ndarray/evaluator_fallbacks.py` for route-aware fallback measurements.
+Use `bench/ndarray/evaluator_fallbacks.py` for route-aware fallback measurements.
 Cross-platform correctness, output/scratch-memory contracts, WASM, and the
 recorded performance tradeoffs are still being qualified under the new default.
 Some tests intentionally inspect the legacy prefilter or its allocation format;

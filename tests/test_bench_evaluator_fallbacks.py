@@ -15,7 +15,6 @@ def test_fallback_probe_reports_correctness_routes_and_memory(monkeypatch, capsy
     benchmark = runpy.run_path(
         str(Path(__file__).resolve().parents[1] / "bench/ndarray/evaluator_fallbacks.py")
     )
-    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "typed")
     monkeypatch.setattr("sys.argv", ["evaluator_fallbacks.py", "--side", "16", "--rounds", "1"])
     previous_threads = blosc2.nthreads
     try:
@@ -26,12 +25,9 @@ def test_fallback_probe_reports_correctness_routes_and_memory(monkeypatch, capsy
     assert len(report["rows"]) == 11
     for row in report["rows"]:
         assert row["correct"]
-        for mode, data in row["modes"].items():
-            assert data["median_ms"] >= 0
-            assert data["tracked_peak_bytes"] > 0
-            assert "numpy_evaluations" in data["dispatch_calls"]
-            if mode == "typed":
-                assert data["dispatch_calls"]["uniform_prefilters"] == 0
-    import os
-
-    assert os.environ["BLOSC2_EXPRESSION_EVALUATOR"] == "typed"
+        assert row["modes"].keys() == {"typed"}
+        data = row["modes"]["typed"]
+        assert data["median_ms"] >= 0
+        assert data["tracked_peak_bytes"] > 0
+        assert "numpy_evaluations" in data["dispatch_calls"]
+        assert data["dispatch_calls"]["uniform_prefilters"] == 0

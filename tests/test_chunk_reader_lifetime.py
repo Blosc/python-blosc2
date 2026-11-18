@@ -9,13 +9,10 @@ import blosc2
 
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Persisted prefetch uses Python threads")
-@pytest.mark.parametrize("mode", ["legacy", "typed"])
 @pytest.mark.parametrize("nested_error", [False, True])
-def test_nested_persisted_evaluation_owns_and_closes_reader(monkeypatch, tmp_path, mode, nested_error):
-    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", mode)
+def test_nested_persisted_evaluation_owns_and_closes_reader(monkeypatch, tmp_path, nested_error):
     module = importlib.import_module("blosc2.lazyexpr")
-    # Exercise persisted chunk readers in both modes, rather than letting the
-    # legacy scalar reduction complete without entering the reader scheduler.
+    # Exercise persisted chunk readers without entering the native prefilter.
     monkeypatch.setattr(module, "try_miniexpr", False)
     original = module.read_nchunk
     closed = []

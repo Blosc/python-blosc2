@@ -67,31 +67,6 @@ _RESULT_DTYPE_EXPRESSIONS = [
     "sin({n})",
     "sqrt(a)",
 ]
-# Cases where BLOSC2_EXPRESSION_EVALUATOR=legacy still gives the uniform evaluator's result dtype, or
-# computes integer true division in integer arithmetic on expr[:]; the typed evaluator is the default
-_ALL_INT_DTYPES = (np.bool_, np.int8, np.uint16, np.int32, np.int64)
-_LEGACY_RESULT_DTYPE_FAILURES = {
-    "hypot({n}, b)": _ALL_INT_DTYPES,
-    "copysign({n}, b)": _ALL_INT_DTYPES,
-    "nextafter({n}, b)": (np.int32, np.int64),
-    "hypot(a, b * 1)": _ALL_INT_DTYPES,
-    "hypot({n}, 2)": _ALL_INT_DTYPES,
-    "(a < b) / b": _ALL_INT_DTYPES,
-    "a / 2": (np.bool_,),
-    "a / b": (np.bool_,),
-    "{n} / b": (np.bool_,),
-    "{n} // b": (np.bool_,),
-    "{n} % b": (np.bool_,),
-    "a ** b": (np.bool_,),
-    "{n} ** 2": (np.bool_,),
-}
-# The string (lazyexpr) path matches NumPy for these true divisions, including
-# bool operands. The functions path still fails for bool-valued numerators.
-_LEGACY_STRING_FIXED = {
-    "(a < b) / b",
-    "a / b",
-    "{n} / b",
-}
 
 
 @pytest.mark.parametrize(
@@ -110,23 +85,13 @@ _LEGACY_STRING_FIXED = {
         )
     ],
 )
-def test_lazyexpr_result_dtype_matches_numpy(dtype, expression, build, request):
-    from blosc2.expression_evaluator import typed_evaluator_enabled
-
+def test_lazyexpr_result_dtype_matches_numpy(dtype, expression, build):
     # Float functions and true division of integer (or bool) subexpressions give floats, and bool
     # //, % and ** give int8, as in NumPy; with the operand dtype, their results were truncated
     if dtype is np.int32 and expression in ("a / b", "{n} / b"):
         pytest.skip("int32 / int32 gives float32 on purpose")
     if "nextafter" in expression and dtype not in (np.int32, np.int64):
         pytest.skip("a float16 or float32 nextafter() is computed in float64 on every path")
-    legacy_fixed = build == "string" and expression in _LEGACY_STRING_FIXED
-    if (
-        not typed_evaluator_enabled()
-        and not legacy_fixed
-        and dtype in _LEGACY_RESULT_DTYPE_FAILURES.get(expression, ())
-    ):
-        reason = "the legacy evaluator keeps its uniform result dtypes and integer true division"
-        request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
     # A subexpression of the operand dtype (bool + bool is an or in NumPy)
     expression = expression.format(n="(a & b)" if dtype is np.bool_ else "(a + b)")
     na = (np.arange(1200).reshape(30, 40) % 5).astype(dtype)
@@ -208,17 +173,11 @@ def test_arctan2_rejects_complex_when_built(other):
 @pytest.mark.skipif(_NUMPY_VALUE_PROMOTION, reason="NumPy < 2.0 has different casting rules")
 @pytest.mark.parametrize("how", ["getitem", "compute", "sum"])
 def test_comparison_with_out_of_range_python_int(how, request):
-    from blosc2.expression_evaluator import typed_evaluator_enabled
-
     # NumPy 2 compares an int8 array with a Python int outside the int8 range (all True here);
     # only arithmetic with such an int raises
-    if typed_evaluator_enabled():
-        # Raised by expression_graph._numpy_binary_dtype(), which treats the comparison as arithmetic
-        reason = "the typed evaluator raises OverflowError: Python integer 300 out of bounds for int8"
-        request.applymarker(pytest.mark.xfail(raises=OverflowError, reason=reason, strict=True))
-    elif how != "sum":
-        reason = "the legacy evaluator casts 300 to int8 (44): 144 True of 200"
-        request.applymarker(pytest.mark.xfail(raises=AssertionError, reason=reason, strict=True))
+    # Raised by expression_graph._numpy_binary_dtype(), which treats the comparison as arithmetic
+    reason = "the typed evaluator raises OverflowError: Python integer 300 out of bounds for int8"
+    request.applymarker(pytest.mark.xfail(raises=OverflowError, reason=reason, strict=True))
     na = np.arange(-100, 100, dtype=np.int8)
     a = blosc2.asarray(na, chunks=(50,), blocks=(10,))
     expected = na < 300
@@ -1829,41 +1788,6 @@ def test_numpy_funcs(array_fixture, func):
         pytest.skip("NumPy version has no cumulative_sum function.")
 
 
-def test_string_scalar_keeps_miniexpr_path(monkeypatch, automatic_native_runtime):
-    import importlib
-
-    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "legacy")
-    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
-    old_try_miniexpr = lazyexpr_mod.try_miniexpr
-    lazyexpr_mod.try_miniexpr = True
-
-    original_set_pref_expr = blosc2.NDArray._set_pref_expr
-    captured = {"calls": 0, "expr": None, "keys": None}
-
-    def wrapped_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
-        captured["calls"] += 1
-        captured["expr"] = expression.decode("utf-8") if isinstance(expression, bytes) else expression
-        captured["keys"] = tuple(inputs.keys())
-        return original_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc, jit=jit)
-
-    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
-
-    try:
-        na = np.arange(32 * 32, dtype=np.float32).reshape(32, 32)
-        a = blosc2.asarray(na, chunks=(16, 16), blocks=(8, 8))
-        b = 3
-        expr = blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
-        res = expr.compute()
-
-        np.testing.assert_allclose(res[...], na + b, rtol=1e-6, atol=1e-6)
-        assert captured["calls"] >= 1
-        assert captured["keys"] == ("o0",)
-        assert captured["expr"] in {"o0 + 3", "(o0 + 3)"}
-        assert "b" not in captured["expr"]
-    finally:
-        lazyexpr_mod.try_miniexpr = old_try_miniexpr
-
-
 def test_unary_negative_literal_matches_sub(monkeypatch):
     import importlib
 
@@ -1895,52 +1819,6 @@ def test_unary_negative_literal_matches_sub(monkeypatch):
         # goal is semantic equivalence of unary-negative literals and subtraction.
         if captured["calls"] >= 1:
             assert any("-1" in expr for expr in captured["exprs"])
-    finally:
-        lazyexpr_mod.try_miniexpr = old_try_miniexpr
-
-
-def test_miniexpr_failure_falls_back_default(monkeypatch):
-    import importlib
-
-    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
-    old_try_miniexpr = lazyexpr_mod.try_miniexpr
-    lazyexpr_mod.try_miniexpr = True
-
-    def failing_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
-        raise ValueError("forced miniexpr failure")
-
-    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", failing_set_pref_expr)
-
-    try:
-        na = np.arange(32 * 32, dtype=np.float32).reshape(32, 32)
-        a = blosc2.asarray(na, chunks=(16, 16), blocks=(8, 8))
-        b = blosc2.asarray(np.ones_like(na), chunks=(16, 16), blocks=(8, 8))
-        res = blosc2.lazyexpr("a + b", operands={"a": a, "b": b}).compute()
-        np.testing.assert_allclose(res[...], na + 1.0, rtol=1e-6, atol=1e-6)
-    finally:
-        lazyexpr_mod.try_miniexpr = old_try_miniexpr
-
-
-def test_lazyexpr_miniexpr_failure_raises_when_strict(monkeypatch, automatic_native_runtime):
-    import importlib
-
-    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "legacy")
-    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
-    old_try_miniexpr = lazyexpr_mod.try_miniexpr
-    lazyexpr_mod.try_miniexpr = True
-
-    def failing_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
-        raise ValueError("forced miniexpr failure")
-
-    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", failing_set_pref_expr)
-
-    try:
-        na = np.arange(32 * 32, dtype=np.float32).reshape(32, 32)
-        a = blosc2.asarray(na, chunks=(16, 16), blocks=(8, 8))
-        b = blosc2.asarray(np.ones_like(na), chunks=(16, 16), blocks=(8, 8))
-        expr = blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
-        with pytest.raises(RuntimeError, match="strict_miniexpr=True"):
-            _ = expr.compute(strict_miniexpr=True)
     finally:
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
@@ -2689,8 +2567,6 @@ def _record_typed_prefilter(monkeypatch):
 )
 @pytest.mark.parametrize("getitem", [False, True])
 def test_where_scalar_uses_miniexpr(monkeypatch, dtype, x, y, getitem):
-    from blosc2.expression_evaluator import typed_evaluator_enabled
-
     compiled = _record_miniexpr(monkeypatch)
     na = np.arange(40 * 30, dtype=dtype).reshape(40, 30)
     nb = (na // 3).astype(dtype)
@@ -2702,12 +2578,7 @@ def test_where_scalar_uses_miniexpr(monkeypatch, dtype, x, y, getitem):
     res = expr[:] if getitem else expr.compute()[:]
     assert res.dtype == expected.dtype
     np.testing.assert_array_equal(res, expected)
-    if typed_evaluator_enabled():
-        assert not compiled
-    else:
-        # The scalar is inlined, so miniexpr (rather than the numexpr fallback) did the work
-        assert len(compiled) == 1
-        assert "_where_x" in compiled[0] or "_where_y" in compiled[0]
+    assert not compiled
 
 
 @pytest.mark.parametrize(
@@ -2715,8 +2586,6 @@ def test_where_scalar_uses_miniexpr(monkeypatch, dtype, x, y, getitem):
 )
 @pytest.mark.parametrize("getitem", [False, True])
 def test_where_mixed_dtypes_use_miniexpr(monkeypatch, case, getitem):
-    from blosc2.expression_evaluator import typed_evaluator_enabled
-
     # Conditions whose operands cast safely to the output dtype stay on miniexpr
     compiled = _record_miniexpr(monkeypatch)
     rng = np.random.default_rng(1)
@@ -2739,11 +2608,7 @@ def test_where_mixed_dtypes_use_miniexpr(monkeypatch, case, getitem):
     res = expr[:] if getitem else expr.compute()[:]
     assert res.dtype == expected.dtype
     np.testing.assert_array_equal(res, expected)
-    if typed_evaluator_enabled():
-        assert not compiled
-    else:
-        assert len(compiled) == 1
-        assert "where(" in compiled[0]
+    assert not compiled
 
 
 def test_where_float32_condition_inexact_literal():
@@ -2949,8 +2814,6 @@ def test_getitem_into_numpy_layouts(monkeypatch, shape, chunks, blocks, direct, 
     # getitem writes the miniexpr results straight into the NumPy result when the chunks tile it
     import importlib
 
-    from blosc2.expression_evaluator import typed_evaluator_enabled
-
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
     monkeypatch.setattr(lazyexpr_mod, "try_miniexpr", True)
     typed_sources = _record_typed_prefilter(monkeypatch)
@@ -2975,27 +2838,14 @@ def test_getitem_into_numpy_layouts(monkeypatch, shape, chunks, blocks, direct, 
             base = res
             while isinstance(getattr(base, "base", None), np.ndarray):
                 base = base.base
-            if typed_evaluator_enabled():
-                # The typed prefilter writes directly into an exact-sized NumPy array.
-                assert base is res
-                if (
-                    dtype is not np.complex128
-                    and not blosc2.IS_WASM
-                    and getattr(
-                        blosc2.blosc2_ext, "menudet_prefilter_flat_chunks_available", lambda: False
-                    )()
-                ):
-                    assert bool(typed_sources) is (direct and not _NUMPY_VALUE_PROMOTION)
-            else:
-                # The direct path's buffer holds a header prefix and at most one chunk of padding
-                chunk_nbytes = math.prod(chunks) * res.itemsize
-                nchunks = math.prod(-(-s // c) for s, c in zip(shape, chunks, strict=True))
-                in_place = base.dtype == np.uint8 and base.nbytes == nchunks * chunk_nbytes + (
-                    blosc2.EXTENDED_HEADER_LENGTH
-                )
-                if dtype is np.complex128 and not in_place:
-                    continue  # miniexpr is not used for complex numbers on some platforms
-                assert in_place is direct
+            # The typed prefilter writes directly into an exact-sized NumPy array.
+            assert base is res
+            if (
+                dtype is not np.complex128
+                and not blosc2.IS_WASM
+                and getattr(blosc2.blosc2_ext, "menudet_prefilter_flat_chunks_available", lambda: False)()
+            ):
+                assert bool(typed_sources) is (direct and not _NUMPY_VALUE_PROMOTION)
 
 
 @pytest.mark.parametrize("source", ["contiguous", "cframe"])

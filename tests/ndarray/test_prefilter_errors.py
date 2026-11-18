@@ -30,23 +30,10 @@ import blosc2
 from blosc2.utils import _toggle_miniexpr
 
 TIMEOUT = 30  # seconds
-# The miniexpr prefilter only runs with the legacy expression evaluator (or without native Menudet
-# support), with NumPy >= 2 (NumPy 1 evaluates numeric expressions with the typed evaluator) and,
-# for reductions, not on WASM; the typed evaluator (default) uses the Menudet prefilter for 1-D
-# operands.  typed-getitem is large enough for the parallel native graph map (none on WASM), whose
-# workers decode the inputs.
-NO_LEGACY_MINIEXPR = pytest.mark.skipif(
-    blosc2.IS_WASM or np.lib.NumpyVersion(np.__version__) < "2.0.0",
-    reason="the legacy evaluator does not use the miniexpr prefilter here",
-)
-ERROR_OPS = [
-    "matmul",
-    pytest.param("legacy-expr", marks=NO_LEGACY_MINIEXPR),
-    pytest.param("legacy-sum", marks=NO_LEGACY_MINIEXPR),
-]
+# typed-getitem is large enough for the parallel native graph map, whose workers decode inputs.
 # The gate looks at the codec and at the filters: the filter on every route, the codec on two
 CALLBACK_CASES = [
-    *[(op, "filter") for op in ["matmul", "legacy-expr", "legacy-sum", "typed-expr", "typed-sum"]],
+    *[(op, "filter") for op in ["matmul", "typed-expr", "typed-sum"]],
     pytest.param(
         "typed-getitem", "filter", marks=pytest.mark.skipif(blosc2.IS_WASM, reason="no native graphs")
     ),
@@ -84,13 +71,8 @@ def _run_op(op, x1, x2, cparams, messages):
     append the messages of the warnings it emits to `messages`."""
     old = blosc2.utils.try_miniexpr
     _toggle_miniexpr(True)
-    evaluator = "legacy" if op.startswith("legacy") else "typed"
     try:
-        with (
-            pytest.MonkeyPatch.context() as mp,
-            warnings.catch_warnings(record=True) as caught,
-        ):
-            mp.setenv("BLOSC2_EXPRESSION_EVALUATOR", evaluator)
+        with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             try:
                 if op == "matmul":
@@ -208,20 +190,13 @@ def _run_in_child(case, *args):
 
 @pytest.mark.parametrize("releasegil", RELEASEGIL)
 @pytest.mark.parametrize("nthreads", NTHREADS)
-@pytest.mark.parametrize("op", ERROR_OPS)
-def test_prefilter_error_raises(op, nthreads, releasegil):
-    outcome = _run_in_child(broken_operand_case, op, nthreads, releasegil)
+def test_prefilter_error_raises(nthreads, releasegil):
+    outcome = _run_in_child(broken_operand_case, "matmul", nthreads, releasegil)
     assert outcome["raised"] == "RuntimeError", outcome
-    if op != "matmul":
-        # The prefilter's own error, also for the reduction, where C-Blosc2 ignores the return code
-        # of the prefilter (its output is disposable)
-        assert outcome["message"] == "miniexpr: error decompressing the chunk", outcome
-        assert outcome["warnings"] == [], outcome
-    else:
-        # It falls back to its chunked path (with a warning), which then reads the broken chunk
-        assert len(outcome["warnings"]) == 1, outcome
-        assert outcome["warnings"][0].startswith("RuntimeWarning: "), outcome
-        assert "falling back to chunked path" in outcome["warnings"][0], outcome
+    # Matmul falls back to its chunked path, which then reads the broken chunk.
+    assert len(outcome["warnings"]) == 1, outcome
+    assert outcome["warnings"][0].startswith("RuntimeWarning: "), outcome
+    assert "falling back to chunked path" in outcome["warnings"][0], outcome
 
 
 @pytest.mark.parametrize("nthreads", NTHREADS)

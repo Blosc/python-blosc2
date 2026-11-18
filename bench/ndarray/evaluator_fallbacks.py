@@ -1,4 +1,4 @@
-"""Interleaved, route-aware legacy/typed fallback qualification on a host runtime.
+"""Route-aware typed fallback qualification on a host runtime.
 
 Timing excludes preparation and validation. Allocation probes run separately and
 report tracemalloc-visible peak bytes, not total native scratch or process RSS.
@@ -9,7 +9,6 @@ import argparse
 import contextlib
 import importlib
 import json
-import os
 import statistics
 import tempfile
 import time
@@ -122,62 +121,45 @@ def main():
     if any(size < 1 for size in (*args.chunks, *args.blocks)):
         parser.error("chunks and blocks must be positive")
     blosc2.set_nthreads(args.threads)
-    previous = os.environ.get("BLOSC2_EXPRESSION_EVALUATOR")
     rows = []
-    try:
-        with tempfile.TemporaryDirectory(prefix="blosc2-evaluator-") as directory:
-            cases = workloads(args.side, directory, args.chunks, args.blocks)
-            if args.case and set(args.case) - cases.keys():
-                parser.error(f"Unknown cases: {sorted(set(args.case) - cases.keys())}")
-            for name, (prepare, execute, expected) in cases.items():
-                if args.case and name not in args.case:
-                    continue
-                expressions, timings, diagnostics = {}, {}, {}
-                for mode in ("legacy", "typed"):
-                    os.environ["BLOSC2_EXPRESSION_EVALUATOR"] = mode
-                    start = time.perf_counter()
-                    expressions[mode] = prepare()
-                    prepare_ms = 1000 * (time.perf_counter() - start)
-                    with route_probe() as (calls, reports):
-                        result = execute(expressions[mode])
-                    validate(result, expected)
-                    del result
-                    diagnostics[mode] = {
-                        "prepare_ms": prepare_ms,
-                        "dispatch_calls": calls,
-                        "native_report": getattr(expressions[mode], "_native_execution_report", None),
-                        "prefilter_reports": reports,
-                    }
-                    timings[mode] = []
-                for round_ in range(args.rounds):
-                    order = ("legacy", "typed") if round_ % 2 == 0 else ("typed", "legacy")
-                    for mode in order:
-                        os.environ["BLOSC2_EXPRESSION_EVALUATOR"] = mode
-                        start = time.perf_counter()
-                        result = execute(expressions[mode])
-                        timings[mode].append(1000 * (time.perf_counter() - start))
-                        del result
-                for mode in timings:
-                    os.environ["BLOSC2_EXPRESSION_EVALUATOR"] = mode
-                    tracemalloc.start()
-                    try:
-                        result = execute(expressions[mode])
-                        _, peak = tracemalloc.get_traced_memory()
-                    finally:
-                        tracemalloc.stop()
-                    validate(result, expected)
-                    del result
-                    diagnostics[mode].update(
-                        median_ms=statistics.median(timings[mode]),
-                        samples_ms=timings[mode],
-                        tracked_peak_bytes=peak,
-                    )
-                rows.append({"case": name, "correct": True, "modes": diagnostics})
-    finally:
-        if previous is None:
-            os.environ.pop("BLOSC2_EXPRESSION_EVALUATOR", None)
-        else:
-            os.environ["BLOSC2_EXPRESSION_EVALUATOR"] = previous
+    with tempfile.TemporaryDirectory(prefix="blosc2-evaluator-") as directory:
+        cases = workloads(args.side, directory, args.chunks, args.blocks)
+        if args.case and set(args.case) - cases.keys():
+            parser.error(f"Unknown cases: {sorted(set(args.case) - cases.keys())}")
+        for name, (prepare, execute, expected) in cases.items():
+            if args.case and name not in args.case:
+                continue
+            start = time.perf_counter()
+            expression = prepare()
+            prepare_ms = 1000 * (time.perf_counter() - start)
+            with route_probe() as (calls, reports):
+                result = execute(expression)
+            validate(result, expected)
+            del result
+            diagnostics = {
+                "prepare_ms": prepare_ms,
+                "dispatch_calls": calls,
+                "native_report": getattr(expression, "_native_execution_report", None),
+                "prefilter_reports": reports,
+            }
+            timings = []
+            for _ in range(args.rounds):
+                start = time.perf_counter()
+                result = execute(expression)
+                timings.append(1000 * (time.perf_counter() - start))
+                del result
+            tracemalloc.start()
+            try:
+                result = execute(expression)
+                _, peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            validate(result, expected)
+            del result
+            diagnostics.update(
+                median_ms=statistics.median(timings), samples_ms=timings, tracked_peak_bytes=peak
+            )
+            rows.append({"case": name, "correct": True, "modes": {"typed": diagnostics}})
     print(
         json.dumps(
             {

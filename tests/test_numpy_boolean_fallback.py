@@ -9,11 +9,6 @@ import blosc2
 from blosc2.expression_graph import _NUMPY_VALUE_PROMOTION, expression_evaluation
 
 
-@pytest.fixture(params=["legacy", "typed"], autouse=True)
-def evaluator_mode(monkeypatch, request):
-    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", request.param)
-
-
 @pytest.mark.parametrize("evaluation", ["full", "safe"])
 @pytest.mark.parametrize(
     ("expression", "expected"),

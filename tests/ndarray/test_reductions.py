@@ -1155,39 +1155,23 @@ def test_comparison_reduction_preserves_operand_typing(monkeypatch, case):
 def test_numeric_reduction_retains_miniexpr(monkeypatch, automatic_native_runtime):
     import importlib
 
-    from blosc2.expression_evaluator import typed_evaluator_enabled
-
     monkeypatch.setattr(importlib.import_module("blosc2.lazyexpr"), "try_miniexpr", True)
     data = np.arange(12, dtype=np.float32)
     a = blosc2.asarray(data, chunks=(6,), blocks=(3,))
-    if typed_evaluator_enabled():
-        if not getattr(blosc2.blosc2_ext, "menudet_prefilter_reductions_available", lambda: False)():
-            pytest.skip("Rebuilt native prefilter reduction bindings are required")
-        original = blosc2.NDArray._execute_menudet_prefilter
-        reports = []
+    if not getattr(blosc2.blosc2_ext, "menudet_prefilter_reductions_available", lambda: False)():
+        pytest.skip("Rebuilt native prefilter reduction bindings are required")
+    original = blosc2.NDArray._execute_menudet_prefilter
+    reports = []
 
-        def record_typed(self, *args, **kwargs):
-            result, report = original(self, *args, **kwargs)
-            reports.append(report)
-            return result, report
+    def record_typed(self, *args, **kwargs):
+        result, report = original(self, *args, **kwargs)
+        reports.append(report)
+        return result, report
 
-        monkeypatch.setattr(blosc2.NDArray, "_execute_menudet_prefilter", record_typed)
-        np.testing.assert_array_equal(a.sum(), data.sum())
-        assert len(reports) == 1
-        assert reports[0]["output_destination"] == "reduction"
-    else:
-        original = blosc2.NDArray._set_pref_expr
-        compiled = []
-
-        def record_prefilter(self, expression, *args, **kwargs):
-            result = original(self, expression, *args, **kwargs)
-            compiled.append(expression)
-            return result
-
-        monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", record_prefilter)
-        np.testing.assert_array_equal(a.sum(), data.sum())
-        assert len(compiled) == 1
-        assert compiled[0].startswith("sum(")
+    monkeypatch.setattr(blosc2.NDArray, "_execute_menudet_prefilter", record_typed)
+    np.testing.assert_array_equal(a.sum(), data.sum())
+    assert len(reports) == 1
+    assert reports[0]["output_destination"] == "reduction"
 
 
 @pytest.mark.parametrize(

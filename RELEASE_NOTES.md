@@ -21,10 +21,9 @@
 - NumPy older than 2 uses the installed NumPy for automatic ordinary-expression
   evaluation, retaining bounded Blosc2 storage/reduction scheduling. Explicit
   Menudet/native-only APIs keep their own numerical contract.
-- Keep `BLOSC2_EXPRESSION_EVALUATOR=legacy` as a temporary qualification escape
-  hatch, selected before constructing expressions. Explicit compatibility DSL
-  and Python UDF contracts are unchanged. Unsupported typed execution never
-  silently retries through the uniform evaluator after numerical execution starts.
+- Remove the temporary `BLOSC2_EXPRESSION_EVALUATOR` switch. Ordinary numerical
+  expressions always use the typed evaluator or its bounded fallback. Explicit
+  compatibility DSL and Python UDF contracts are unchanged.
 - Summary-index OR queries no longer prune with a single column's candidate-block
   bitmap; only conjunctions may combine such masks. OR predicates use the plan's
   combined candidate segments, preserving rows that match only the other branch.

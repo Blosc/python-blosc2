@@ -6,7 +6,6 @@ Unsupported signatures use the existing bounded typed-graph/NumPy chunk path.
 """
 
 import operator
-import os
 from types import SimpleNamespace
 
 import numpy as np
@@ -28,14 +27,6 @@ _BINARY_OPERATIONS = {
     "|": operator.or_,
     "^": operator.xor,
 }
-
-
-def typed_evaluator_enabled():
-    """Temporary rollout selector; explicit compatibility DSL kernels are unaffected."""
-    value = os.environ.get("BLOSC2_EXPRESSION_EVALUATOR", "typed")
-    if value not in {"legacy", "typed"}:
-        raise ValueError("BLOSC2_EXPRESSION_EVALUATOR must be 'legacy' or 'typed'")
-    return value == "typed"
 
 
 def binary_result_dtype(op, value1, value2):

@@ -109,7 +109,6 @@ def test_automatic_medium_typed_math(monkeypatch, automatic_native_runtime, dtyp
     from blosc2 import native_graph
 
     monkeypatch.delenv("ME_SIMD_MATH_BACKEND", raising=False)
-    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "typed")
     x = np.resize(np.array([-np.inf, -0.0, 0.0, 0.25, 1.0, np.inf, np.nan], dtype=dtype), 513)
     a = blosc2.asarray(x, chunks=(128,), blocks=(64,))
     with np.errstate(invalid="ignore", divide="ignore"):
@@ -410,7 +409,6 @@ def kernel(x):
 def test_compute_accuracy_full_slice(monkeypatch, automatic_native_runtime):
     from blosc2 import native_graph
 
-    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "typed")
     monkeypatch.delenv("ME_SIMD_MATH_BACKEND", raising=False)
     original = native_graph.configured_map_kernel
     observed = []
@@ -449,26 +447,23 @@ def test_compute_accuracy_full_slice(monkeypatch, automatic_native_runtime):
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Native miniexpr prefilter observation")
 def test_fp_accuracy_precedence(monkeypatch, automatic_native_runtime):
-    monkeypatch.setenv("BLOSC2_EXPRESSION_EVALUATOR", "legacy")
+    from blosc2 import native_graph
+
     observed = []
-    original = blosc2.NDArray._set_pref_expr
+    original = native_graph.configured_map_kernel
 
-    def capture(self, *args, **kwargs):
-        observed.append(kwargs.get("fp_accuracy", args[2] if len(args) > 2 else None))
-        return original(self, *args, **kwargs)
+    def capture(plan, jit, configuration, environment):
+        observed.append(dict(configuration)["fp_accuracy"])
+        return original(plan, jit, configuration, environment)
 
-    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", capture)
+    monkeypatch.setattr(native_graph, "configured_map_kernel", capture)
     arr = blosc2.asarray(np.arange(32, dtype=np.float64))
     blosc2.set_jit_options(fp_accuracy=blosc2.FPAccuracy.HIGH)
-    expr = arr + 1
+    expr = blosc2.sin(arr)
     expr.compute()
-    assert observed[-1] == blosc2.FPAccuracy.HIGH
     with blosc2.jit_options(fp_accuracy=blosc2.FPAccuracy.MEDIUM):
         expr.compute(fp_accuracy=blosc2.FPAccuracy.HIGH)
-        assert observed[-1] == blosc2.FPAccuracy.HIGH
-        udf = blosc2.lazyudf(kernel, (arr,), dtype=arr.dtype)
-        udf.compute(fp_accuracy=blosc2.FPAccuracy.HIGH)
-        assert observed[-1] == blosc2.FPAccuracy.HIGH
+    assert observed == [blosc2.FPAccuracy.HIGH] * 2
 
 
 @pytest.mark.skipif(blosc2.IS_WASM or os.name == "nt", reason="Native POSIX TCC execution")
@@ -558,8 +553,6 @@ def test_synthesized_backend_respects_environment_and_source(monkeypatch, backen
 def test_reduction_backend_preserves_scalar_accumulator(monkeypatch, backend, jit, automatic_native_runtime):
     import importlib
 
-    from blosc2.expression_evaluator import typed_evaluator_enabled
-
     lazyexpr = importlib.import_module("blosc2.lazyexpr")
 
     def reject_elementwise_wrapper(*args):
@@ -587,16 +580,9 @@ def test_reduction_backend_preserves_scalar_accumulator(monkeypatch, backend, ji
     values = np.arange(128, dtype=np.float64)
     expr = blosc2.asarray(values) * 2 + 1
     assert expr.sum(jit=jit, jit_backend=backend) == (values * 2 + 1).sum()
-    if blosc2.IS_WASM:
-        # WASM currently uses the non-prefilter reduction path. It must still
-        # produce correct results without introducing an elementwise wrapper.
-        assert not calls
-    elif typed_evaluator_enabled():
-        assert not calls
+    assert not calls
+    if not blosc2.IS_WASM:
         assert typed_calls == [1]
-    else:
-        assert calls
-    assert all(expression.startswith("sum(") for expression in calls)
 
 
 @pytest.mark.skipif(blosc2.IS_WASM or os.name == "nt", reason="POSIX compiler-output injection")
