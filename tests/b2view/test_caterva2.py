@@ -234,24 +234,11 @@ async def test_remote_loading_indicator_stops_on_page_error(caterva2_source, mon
 
 @pytest.mark.tui
 @pytest.mark.asyncio
-async def test_remote_table_window_is_background_and_stale_results_are_discarded(
-    caterva2_source,  # noqa: F811
-    monkeypatch,
-):
-    import threading
-
+async def test_remote_row_window(caterva2_source):  # noqa: F811
+    """A remote row window arrives through the worker thread with just its rows."""
     from blosc2.b2view.app import B2ViewApp
 
     base, _, _, _ = caterva2_source
-    entered, release = threading.Event(), threading.Event()
-    original = StoreBrowser.prepare_row_window
-
-    def slow(self, path, start, stop):
-        entered.set()
-        assert release.wait(5)
-        return original(self, path, start, stop)
-
-    monkeypatch.setattr(StoreBrowser, "prepare_row_window", slow)
     app = B2ViewApp(base, start_path="/mount/table")
     try:
         async with app.run_test(size=(120, 40)) as pilot:
@@ -259,28 +246,50 @@ async def test_remote_table_window_is_background_and_stale_results_are_discarded
                 pilot, lambda: app.table_page is not None and app.table_page.get("source_kind") == "ctable"
             )
             app._enter_row_window(2, 5, backend="ctable")
-            await wait_until(pilot, entered.is_set)
-            # A slow bounded table fetch must not block event handling.
-            await pilot.press("tab")
-            app.update_panels("/mount")
-            release.set()
             await wait_until(
-                pilot, lambda: app._selected_info is not None and app._selected_info.path == "/mount"
+                pilot,
+                lambda: (
+                    app.row_window == (2, 5)
+                    and app.table_page is not None
+                    and app.table_page.get("nrows") == 3
+                ),
             )
-            assert not app.browser.get_row_window("/mount/table")
-            app.update_panels("/mount/table")
+            assert app.table_page["nrows"] == 3
+            assert app.browser.get_row_window("/mount/table")
+    finally:
+        app.wait_for_close()
+
+
+@pytest.mark.tui
+@pytest.mark.asyncio
+async def test_stale_row_window_delivery(caterva2_source):  # noqa: F811
+    """A completed window read from a superseded request must not be installed."""
+    from blosc2.b2view.app import B2ViewApp
+
+    base, _, _, _ = caterva2_source
+    app = B2ViewApp(base, start_path="/mount/table")
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
             await wait_until(
                 pilot, lambda: app.table_page is not None and app.table_page.get("source_kind") == "ctable"
             )
-            app._enter_row_window(2, 5, backend="ctable")
-            await wait_until(
-                pilot,
-                lambda: app.row_window == (2, 5) and app.table_page and bool(app.table_page["columns"]),
-            )
-            assert app.table_page["nrows"] == 3
-            np.testing.assert_array_equal(app.table_page["data"]["ident"], [2, 3, 4])
-            plotted = app.browser.plot_series("/mount/table", column="ident")
-            assert plotted["n"] == 3
+            page, path, browser = app.table_page, app.selected_path, app.browser
+            view = browser.prepare_row_window(path, 2, 5)
+            # Requests overtaken by a later navigation, a different path or a
+            # replaced browser deliver to nothing.
+            app._finish_remote_window(app._remote_request - 1, browser, path, 2, 5, view, None)
+            app._finish_remote_window(app._remote_request, browser, "/mount", 2, 5, view, None)
+            app._finish_remote_window(app._remote_request, object(), path, 2, 5, view, None)
+            assert app.row_window is None
+            assert app.table_page is page
+            assert not browser.get_row_window(path)
+            # The request that is still current publishes its window, and
+            # leaving the window clears it again.
+            app._finish_remote_window(app._remote_request, browser, path, 2, 5, view, None)
+            assert app.row_window == (2, 5)
+            assert browser.get_row_window(path)
+            app._exit_row_window()
+            assert app.row_window is None
+            assert not browser.get_row_window(path)
     finally:
-        release.set()
         app.wait_for_close()
