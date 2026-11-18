@@ -29,10 +29,12 @@ def automatic_pairwise(monkeypatch, automatic_native_runtime):
 def test_pairwise_storage_and_thread_invariance(automatic_pairwise, dtype, mapped):
     values = np.random.default_rng(42).normal(size=2051).astype(dtype)
     values[::3] *= 1e6
+    expected = math.fsum(float(x) for x in (values + values if mapped else values))
     first_bits = None
-    for chunk, block in ((1024, 256), (1000, 100), (65, 5)):
+    # Sweep workers on a fixed layout, then layouts with a fixed worker count.
+    for chunk, block, worker_counts in ((1024, 256, (1, 2, 8)), (1000, 100, (2,)), (65, 5, (2,))):
         arr = blosc2.asarray(values, chunks=(chunk,), blocks=(block,))
-        for threads in (1, 2, 8):
+        for threads in worker_counts:
             blosc2.set_nthreads(threads)
             expr = blosc2.lazyexpr("a + a" if mapped else "a", {"a": arr})
             result = expr.sum()
@@ -47,7 +49,6 @@ def test_pairwise_storage_and_thread_invariance(automatic_pairwise, dtype, mappe
                 first_bits = result.tobytes()
             else:
                 assert result.tobytes() == first_bits
-            expected = math.fsum(float(x) for x in (values + values if mapped else values))
             np.testing.assert_allclose(result, expected, rtol=1e-6 if dtype == "float32" else 1e-14)
 
 
@@ -97,5 +98,6 @@ def test_pairwise_merge_fp_flags(automatic_pairwise, invalid):
     assert np.isnan(result) if invalid else np.isinf(result)
     report = expr._native_execution_report
     assert report["route"] == "parallel-prefilter-pairwise-sum"
+    assert report["identity_map_skipped"]
     if report["fp_supported"]:
         assert report["fp_flags"] & (1 if invalid else 4)

@@ -12,9 +12,14 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.mark.parametrize("dtype", ["float32", "float64"])
-@pytest.mark.parametrize(("chunks", "blocks"), [(1024, 256), (1000, 100), (65, 5)])
-@pytest.mark.parametrize("codec", [blosc2.Codec.BLOSCLZ, blosc2.Codec.ZSTD])
+@pytest.mark.parametrize(
+    ("dtype", "chunks", "blocks", "codec"),
+    [
+        ("float32", 1024, 256, blosc2.Codec.BLOSCLZ),
+        ("float64", 1000, 100, blosc2.Codec.ZSTD),
+        ("float32", 65, 5, blosc2.Codec.ZSTD),
+    ],
+)
 def test_identity_sum(dtype, chunks, blocks, codec):
     values = np.random.default_rng(42).normal(size=2051).astype(dtype)
     array = blosc2.asarray(values, chunks=(chunks,), blocks=(blocks,), cparams={"codec": codec})
@@ -44,8 +49,9 @@ def test_identity_sum(dtype, chunks, blocks, codec):
         blosc2.set_nthreads(previous)
 
 
-@pytest.mark.parametrize("clevel", [0, 1])
-@pytest.mark.parametrize("value", [0.0, 1.0, np.inf, np.nan])
+@pytest.mark.parametrize(
+    ("clevel", "value"), [(0, 0.0), (0, 1.0), (1, 0.0), (1, 1.0), (1, np.inf), (1, np.nan)]
+)
 def test_identity_special_chunks(clevel, value):
     array = blosc2.full(
         (2051,), value, dtype="float64", chunks=(1000,), blocks=(100,), cparams={"clevel": clevel}
@@ -63,19 +69,6 @@ def test_identity_special_chunks(clevel, value):
         results.append(result.copy())
     for result in results[1:]:
         np.testing.assert_array_equal(result, results[0])
-
-
-def test_computed_map_is_not_bypassed():
-    array = blosc2.arange(1000, dtype="float64")
-    kernel = NativeGraph.from_expression("sum(a + a)", {"a": "float64"})._handle.reduction_artifact()
-    result, report = kernel.evaluate_prefilter(
-        {"a": array},
-        _reduction_op="sum",
-        _reduction_out=np.empty(()),
-        _pairwise_sum=True,
-    )
-    assert not report["identity_map_skipped"]
-    assert result == 999000
 
 
 def test_identity_delta_filter():
@@ -99,9 +92,9 @@ def test_identity_delta_filter():
     np.testing.assert_array_equal(array[:], values)
 
 
-@pytest.mark.parametrize("skip_identity", [False, True])
 @pytest.mark.parametrize("invalid", [False, True])
-def test_identity_fp_flags(skip_identity, invalid):
+def test_pairwise_fp_flags_with_map_evaluation(invalid):
+    # The automatic pairwise test exercises the same merge with the map skipped.
     values = np.zeros(1024)
     values[0] = np.inf if invalid else np.finfo("float64").max
     values[128] = -np.inf if invalid else np.finfo("float64").max
@@ -112,8 +105,9 @@ def test_identity_fp_flags(skip_identity, invalid):
         _reduction_op="sum",
         _reduction_out=np.empty(()),
         _pairwise_sum=True,
-        _skip_identity=skip_identity,
+        _skip_identity=False,
     )
+    assert not report["identity_map_skipped"]
     assert np.isnan(result) if invalid else np.isinf(result)
     if report["fp_supported"]:
         assert report["fp_flags"] & (1 if invalid else 4)

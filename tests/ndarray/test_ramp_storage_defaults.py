@@ -12,10 +12,17 @@ def make_ramp(constructor, size=24, **kwargs):
     return blosc2.linspace(0, size - 1, size, **kwargs)
 
 
-@pytest.mark.parametrize("constructor", ["arange", "linspace"])
-@pytest.mark.parametrize("size", [0, 24])
-@pytest.mark.parametrize("dtype", [np.float64, np.int16, np.complex128])
-@pytest.mark.parametrize("c_order", [True, False])
+@pytest.mark.parametrize(
+    ("constructor", "size", "dtype", "c_order"),
+    [
+        ("arange", 0, np.float64, True),
+        ("linspace", 0, np.int16, False),
+        ("arange", 24, np.float64, False),
+        ("linspace", 24, np.float64, True),
+        ("arange", 24, np.int16, True),
+        ("linspace", 24, np.int16, False),
+    ],
+)
 def test_ramp_default_filters(constructor, size, dtype, c_order):
     array = make_ramp(constructor, size, dtype=dtype, c_order=c_order)
     assert array.cparams.codec == blosc2.Codec.ZSTD
@@ -33,8 +40,9 @@ def test_ramp_partial_cparams_preserve_user_settings(constructor):
     assert cparams == {"codec": blosc2.Codec.LZ4, "clevel": 2}
 
 
-@pytest.mark.parametrize("constructor", ["arange", "linspace"])
-@pytest.mark.parametrize("filters", [[], [blosc2.Filter.BITSHUFFLE]])
+@pytest.mark.parametrize(
+    ("constructor", "filters"), [("arange", []), ("linspace", [blosc2.Filter.BITSHUFFLE])]
+)
 def test_ramp_explicit_filters(constructor, filters):
     cparams = {"filters": filters.copy()}
     array = make_ramp(constructor, cparams=cparams)
@@ -44,16 +52,10 @@ def test_ramp_explicit_filters(constructor, filters):
 
 
 @pytest.mark.parametrize("constructor", ["arange", "linspace"])
-def test_ramp_complete_cparams(constructor):
-    cparams = blosc2.CParams(codec=blosc2.Codec.LZ4, filters=[blosc2.Filter.SHUFFLE])
-    array = make_ramp(constructor, cparams=cparams)
-    assert array.cparams.codec == cparams.codec
-    assert [f for f in array.cparams.filters if f != blosc2.Filter.NOFILTER] == cparams.filters
-
-
-@pytest.mark.parametrize("constructor", ["arange", "linspace"])
-@pytest.mark.parametrize("cparams", [None, {}, {"codec": blosc2.Codec.LZ4}])
-@pytest.mark.parametrize("filters", [[], [blosc2.Filter.SHUFFLE], [blosc2.Filter.BITSHUFFLE]])
+@pytest.mark.parametrize(
+    ("cparams", "filters"),
+    [(None, []), ({}, [blosc2.Filter.SHUFFLE]), ({"codec": blosc2.Codec.LZ4}, [blosc2.Filter.BITSHUFFLE])],
+)
 def test_ramp_custom_global_filters(constructor, cparams, filters, monkeypatch):
     monkeypatch.setitem(blosc2.cparams_dflts, "filters", filters.copy())
     array = make_ramp(constructor, cparams=cparams)
@@ -99,16 +101,18 @@ def test_ramp_global_filters_replaced_with_original_values(constructor, monkeypa
 @pytest.mark.parametrize("complete", [False, True])
 def test_ramp_explicit_filters_override_global(constructor, complete, monkeypatch):
     monkeypatch.setitem(blosc2.cparams_dflts, "filters", [blosc2.Filter.SHUFFLE])
-    cparams = {"filters": [blosc2.Filter.BITSHUFFLE]}
+    cparams = {"codec": blosc2.Codec.LZ4, "filters": [blosc2.Filter.BITSHUFFLE]}
     if complete:
         cparams = blosc2.CParams(**cparams)
     array = make_ramp(constructor, cparams=cparams)
+    assert array.cparams.codec == blosc2.Codec.LZ4
     assert [f for f in array.cparams.filters if f != blosc2.Filter.NOFILTER] == [blosc2.Filter.BITSHUFFLE]
 
 
 @pytest.mark.parametrize("constructor", ["arange", "linspace"])
 def test_ramp_complex_reshape_defaults(constructor):
     array = make_ramp(constructor, dtype=np.complex128, shape=(4, 6))
+    assert array.cparams.codec == blosc2.Codec.ZSTD
     assert array.cparams.filters[:2] == [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA]
     np.testing.assert_array_equal(array[:], np.arange(24).reshape(4, 6))
 

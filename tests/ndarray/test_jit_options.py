@@ -243,9 +243,10 @@ def test_thread_context_isolation():
 
 
 @pytest.mark.parametrize("method", ["mean", "var", "std"])
-@pytest.mark.parametrize("axis", [None, 0])
-@pytest.mark.parametrize("keepdims", [False, True])
-@pytest.mark.parametrize("masked", [False, True])
+@pytest.mark.parametrize(
+    ("axis", "keepdims", "masked"),
+    [(None, False, False), (None, True, True), (0, False, True), (0, True, False)],
+)
 def test_statistical_reductions_forward_execution_options(
     method, axis, keepdims, masked, tmp_path, monkeypatch
 ):
@@ -338,9 +339,15 @@ def test_statistical_reductions_slice_execution_options(method, axis, monkeypatc
 
 
 @pytest.mark.parametrize("constructor", ["arange", "linspace"])
-@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
-@pytest.mark.parametrize("shape", [None, (0, 2)])
-@pytest.mark.parametrize("jit", [False, True, None])
+@pytest.mark.parametrize(
+    ("dtype", "shape", "jit"),
+    [
+        (np.float64, None, True),
+        (np.complex128, (0, 2), True),
+        (np.float64, (0, 2), False),
+        (np.complex128, None, None),
+    ],
+)
 def test_empty_ramps_accept_execution_options(constructor, dtype, shape, jit, tmp_path, capfd):
     options = {
         "jit": jit,

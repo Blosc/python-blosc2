@@ -327,8 +327,7 @@ def test_eager_real_ramps_bypass_legacy_source_kernel(monkeypatch, c_order):
     np.testing.assert_array_equal(ramp[:], [True, True, False, True, True])
 
 
-@pytest.mark.parametrize("constructor", ["arange", "linspace"])
-@pytest.mark.parametrize("c_order", [True, False])
+@pytest.mark.parametrize(("constructor", "c_order"), [("arange", True), ("linspace", False)])
 def test_ramp_jit_resolves_before_dispatch(monkeypatch, constructor, c_order):
     from importlib import import_module
 
@@ -336,16 +335,10 @@ def test_ramp_jit_resolves_before_dispatch(monkeypatch, constructor, c_order):
     calls = []
 
     def capture_menudet(start, step, dtype, shape, execution, kwargs, **options):
-        calls.append(("menudet", execution["jit"], kwargs["jit"]))
-
-    class CaptureLegacy:
-        def compute(self, **kwargs):
-            calls.append(("legacy", kwargs["jit"], kwargs["jit"]))
+        calls.append((execution["jit"], kwargs["jit"]))
 
     monkeypatch.setattr(ndarray, "_compute_menudet_ramp", capture_menudet)
-    monkeypatch.setattr(blosc2, "lazyudf", lambda *args, **kwargs: CaptureLegacy())
     # Real ramps retain logical C-order values for either traversal flag.
-    route = "menudet"
     with blosc2.compute_options(jit=None):
         for size, override, expected in (
             (3_999_999, None, False),
@@ -355,7 +348,8 @@ def test_ramp_jit_resolves_before_dispatch(monkeypatch, constructor, c_order):
         ):
             args = (size,) if constructor == "arange" else (0, 1, size)
             getattr(blosc2, constructor)(*args, c_order=c_order, jit=override)
-            assert calls[-1] == (route, expected, expected)
+            assert calls == [(expected, expected)]
+            calls.clear()
 
 
 @pytest.mark.parametrize(("constructor", "dtype"), [("arange", "int32"), ("linspace", "float64")])

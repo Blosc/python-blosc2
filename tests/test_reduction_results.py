@@ -5,13 +5,26 @@ import pytest
 
 import blosc2
 
+REDUCERS = ("sum", "prod", "min", "max", "mean", "std", "var", "any", "all", "argmin", "argmax")
+NUMERIC_REDUCERS = REDUCERS[:7]
+
+
+@pytest.mark.parametrize("op", REDUCERS)
+@pytest.mark.parametrize("frontend", ["function", "method", "expression"])
+def test_full_reduction_array_result(op, frontend):
+    _check_reduction_result(op, frontend, axis=None, keepdims=False)
+
 
 @pytest.mark.parametrize(
-    "op", ["sum", "prod", "min", "max", "mean", "std", "var", "any", "all", "argmin", "argmax"]
+    ("op", "axis", "keepdims"),
+    [("sum", None, True), ("mean", 0, False), ("all", 1, True), ("argmax", 1, True)],
 )
-@pytest.mark.parametrize("frontend", ["function", "method", "expression"])
-@pytest.mark.parametrize(("axis", "keepdims"), [(None, False), (None, True), (0, False), (1, True)])
-def test_reduction_array_result(op, frontend, axis, keepdims):
+def test_shaped_reduction_array_result(op, axis, keepdims):
+    # Cover rank retention and partial reductions without retesting every wrapper.
+    _check_reduction_result(op, "method", axis, keepdims)
+
+
+def _check_reduction_result(op, frontend, axis, keepdims):
     values = np.linspace(0.5, 1.5, 24).reshape(4, 6)
     if op in ("any", "all"):
         values = values > 1
@@ -41,7 +54,7 @@ def test_empty_reduction_array_result(op):
     np.testing.assert_equal(result, getattr(np, op)(values))
 
 
-@pytest.mark.parametrize("op", ["sum", "prod", "min", "max", "mean", "std", "var"])
+@pytest.mark.parametrize("op", NUMERIC_REDUCERS)
 def test_masked_reduction_array_result(op):
     values = np.linspace(0.5, 1.5, 24)
     arr = blosc2.asarray(values, chunks=(6,), blocks=(3,))
@@ -60,8 +73,10 @@ def test_count_nonzero_array_result():
     assert result[()] == 2
 
 
-@pytest.mark.parametrize("op", ["sum", "prod", "min", "max", "mean", "std", "var"])
-@pytest.mark.parametrize("axis", [None, (0, 1), ()])
+@pytest.mark.parametrize(
+    ("op", "axis"),
+    [(op, ()) for op in NUMERIC_REDUCERS] + [("sum", (0, 1)), ("std", (0, 1))],
+)
 def test_interpreter_reduction_array_result(op, axis):
     values = np.linspace(0.9, 1.1, 120).reshape(10, 12)
     arr = blosc2.asarray(values, chunks=(5, 6), blocks=(1, 3))

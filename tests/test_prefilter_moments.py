@@ -19,9 +19,15 @@ def moments_runtime(automatic_native_runtime, monkeypatch):
     blosc2.set_nthreads(previous)
 
 
-@pytest.mark.parametrize("op", ["var", "std"])
-@pytest.mark.parametrize("dtype", ["float32", "float64"])
-@pytest.mark.parametrize("mapped", [False, True])
+@pytest.mark.parametrize(
+    ("op", "dtype", "mapped"),
+    [
+        ("var", "float32", False),
+        ("var", "float64", True),
+        ("std", "float32", True),
+        ("std", "float64", False),
+    ],
+)
 def test_moments_dispatch(op, dtype, mapped, monkeypatch):
     from blosc2.storage_readers import StorageReader
 

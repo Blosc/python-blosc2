@@ -190,3 +190,20 @@ numerical assertions and tolerances are unchanged.
 Validation in conda `blosc2`: **12,865 passed, 109 skipped, 3 xfailed in
 32.74 seconds**, versus 34.81 seconds before this pass on the same machine.
 The opt-in directory cframe stress case also passes. Ruff lint/format checks pass.
+
+## Reduction and ramp integration sampling
+
+- Full reductions still check the zero-dimensional array contract for every
+  reducer through the function, method, and expression APIs. Shaped results
+  sample those combinations; empty, masked, and no-axis results keep dedicated
+  cases.
+- Direct compressed reductions retain route checks for all reducers, NaN and
+  signed-zero checks for both extrema, and true and false results for both truth
+  reducers. Pairwise sums compare worker counts on one layout and layouts at a
+  fixed worker count, keeping bitwise parity, special chunk, filter, and floating
+  status checks. Fallback and no-replay tests are unchanged.
+- Ramp cases sample dtype, traversal order, and layout rather than crossing
+  them with every default or execution option. Explicit overrides, global
+  default mutation, lazy storage, and integer-boundary regressions remain.
+
+No tests were moved behind opt-in markers.
