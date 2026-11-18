@@ -167,7 +167,7 @@ def trace_enabled():
     return env != "0" if env else execution_options()["trace"]
 
 
-def compute_execution(*names):
+def scope_compute_options(*names):
     """Scope selected per-call options without forwarding them to the wrapped function."""
 
     def decorate(func):

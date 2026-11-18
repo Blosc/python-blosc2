@@ -5403,7 +5403,7 @@ class LazyExpr(LazyArray):
         return indexing.explain_query(self)
 
     @expression_method
-    @blosc2.jit_config.compute_execution("math_backend")
+    @blosc2.jit_config.scope_compute_options("math_backend")
     def compute(  # noqa: C901 -- native-first/strict dispatch plus legacy output policies
         self,
         item=(),
@@ -7011,7 +7011,7 @@ def _array_owner(value):
 
 
 @remember_evaluation
-@blosc2.jit_config.compute_execution("jit", "jit_backend", "math_backend", "fp_accuracy")
+@blosc2.jit_config.scope_compute_options("jit", "jit_backend", "math_backend", "fp_accuracy")
 def evaluate(
     ex: str,
     local_dict: dict | None = None,
