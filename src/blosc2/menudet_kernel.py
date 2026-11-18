@@ -14,7 +14,7 @@ import os
 import tokenize
 from collections.abc import Mapping
 from io import StringIO
-from types import FunctionType, MappingProxyType
+from types import FunctionType, MappingProxyType, SimpleNamespace
 
 import numpy as np
 
@@ -337,6 +337,14 @@ def _artifact_semantics(source, version, casting):
 def export_menudet_kernel(kernel, input_dtypes, output_dtype, **options):
     """Export an internally normalized source kernel without calling its Python body."""
     return prepare_menudet_kernel(kernel, input_dtypes, output_dtype, **options).to_json()
+
+
+def prepare_menudet_generator(source, entry_point, output_dtype, *, constants, ndim, jit):
+    """Prepare trusted, normalized Menudet source with explicit constant bindings."""
+    kernel = SimpleNamespace(
+        dsl_source=source, __name__=entry_point, input_names=tuple(constants), func=None
+    )
+    return prepare_menudet_kernel(kernel, {}, output_dtype, constants=constants, ndim=ndim, jit=jit)
 
 
 def prepare_menudet_kernel(

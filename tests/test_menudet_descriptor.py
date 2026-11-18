@@ -175,14 +175,20 @@ def test_constructor_ramp_explicit_interpreter():
 
 
 def test_constructor_ramp_imports_once_and_keeps_default_partitions(monkeypatch):
+    from importlib import import_module
+
     imports = []
     original = blosc2.MenudetKernel.from_json
+
+    def reject_source_kernel(*args, **kwargs):
+        pytest.fail("The Menudet constructor path must not use SourceKernel")
 
     def from_json(*args, **kwargs):
         imports.append(kwargs)
         return original(*args, **kwargs)
 
     monkeypatch.setattr(blosc2.MenudetKernel, "from_json", from_json)
+    monkeypatch.setattr(import_module("blosc2.ndarray"), "SourceKernel", reject_source_kernel)
     shape = (9, 11, 13)
     partitions = blosc2.compute_chunks_blocks(shape, dtype=np.float64)
     result = blosc2.linspace(0, 1, shape=shape, jit=False)
@@ -190,6 +196,10 @@ def test_constructor_ramp_imports_once_and_keeps_default_partitions(monkeypatch)
     assert imports[0]["jit"] is False
     assert (result.chunks, result.blocks) == partitions
     np.testing.assert_array_equal(result[:], np.linspace(0, 1, np.prod(shape)).reshape(shape))
+
+    np.testing.assert_array_equal(blosc2.arange(19, jit=False)[:], np.arange(19))
+    if not blosc2.IS_WASM:
+        np.testing.assert_array_equal(blosc2.eye(7, jit=False)[:], np.eye(7))
 
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Native prefilter scheduling is unavailable on WASM")

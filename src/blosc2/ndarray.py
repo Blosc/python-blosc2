@@ -6748,7 +6748,7 @@ def ones(
 
 def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None, endpoint_stop=None):
     """Build an input-free Menudet ramp and bind it to a logical shape."""
-    from .menudet_kernel import prepare_menudet_kernel
+    from .menudet_kernel import prepare_menudet_generator
 
     # Complex kernels have no JIT backend; use portable interpretation even
     # when the caller requests JIT, as for the existing WASM ramp path.
@@ -6770,17 +6770,15 @@ def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None, endp
         step = float(step)
 
     if dtype.kind == "f":
-        ramp = SourceKernel.from_source(
-            "def ramp(start, step):\n    return float(start) + _flat_idx * float(step)\n"
-        )
+        source = "def ramp(start, step):\n    return float(start) + _flat_idx * float(step)\n"
     else:
-        ramp = SourceKernel.from_source("def ramp(start, step):\n    return start + _flat_idx * step\n")
+        source = "def ramp(start, step):\n    return start + _flat_idx * step\n"
 
     constants = {"start": start, "step": step}
     if endpoint_stop is not None:
         # Avoid accumulated rounding at the endpoint, also for partial reads
         # and rechunked materialization of a complex lazy linspace.
-        ramp = SourceKernel.from_source(
+        source = (
             "def ramp(start, step, stop, last):\n"
             "    if _flat_idx == last:\n"
             "        return stop\n"
@@ -6790,12 +6788,12 @@ def _menudet_ramp(start, step, dtype, shape, *, execution, partitions=None, endp
 
     backend = execution.get("jit_backend")
     if backend in {"tcc", "cc"}:
-        ramp.dsl_source = f"# me:compiler={backend}\n" + ramp.dsl_source
+        source = f"# me:compiler={backend}\n{source}"
     jit_option = execution.get("jit")
     jit_mode = math.prod(shape) >= 4_000_000 if jit_option is None else bool(jit_option)
-    # Export validates by importing an artifact too. Retain that validated kernel
-    # rather than exporting JSON and compiling the same ramp a second time.
-    kernel = prepare_menudet_kernel(ramp, {}, dtype, constants=constants, ndim=len(shape), jit=jit_mode)
+    kernel = prepare_menudet_generator(
+        source, "ramp", dtype, constants=constants, ndim=len(shape), jit=jit_mode
+    )
     return kernel.lazy({}, shape=shape, partitions=partitions)
 
 
@@ -6961,10 +6959,6 @@ def arange(  # noqa: C901
         else:  # use linspace to have finer control over exclusion of endpoint for float types
             output[:] = np.linspace(start, stop, lout, endpoint=False, dtype=output.dtype)
 
-    @SourceKernel
-    def ramp_arange(start, step):
-        return start + _flat_idx * step  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
-
     if step is None:  # not array-api compliant but for backwards compatibility
         step = 1
     if stop is None:
@@ -7039,6 +7033,11 @@ def arange(  # noqa: C901
 
         return reshape(lazyarr, shape, c_order=c_order, **storage_kwargs)
     else:
+
+        @SourceKernel
+        def ramp_arange(start, step):
+            return start + _flat_idx * step  # noqa: F821  # DSL index resolved by miniexpr
+
         lazyarr = blosc2.lazyudf(ramp_arange, (start, step), dtype=dtype, shape=shape)
         return lazyarr.compute(**kwargs)
 
@@ -7128,10 +7127,6 @@ def linspace(  # noqa: C901
         else:
             output[:] = np.linspace(start_, stop_, lout, endpoint=False, dtype=output.dtype)
 
-    @SourceKernel
-    def ramp_linspace(start, step):
-        return float(start) + _flat_idx * float(step)  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
-
     if shape is None:
         if num is None:
             raise ValueError("Either `shape` or `num` must be specified.")
@@ -7210,6 +7205,11 @@ def linspace(  # noqa: C901
 
         return reshape(lazyarr, shape, c_order=c_order, **storage_kwargs)
     else:
+
+        @SourceKernel
+        def ramp_linspace(start, step):
+            return float(start) + _flat_idx * float(step)  # noqa: F821  # DSL index resolved by miniexpr
+
         inputs = (start, step)
         lazyarr = blosc2.lazyudf(ramp_linspace, inputs, dtype=dtype, shape=shape)
         return lazyarr.compute(**kwargs)
@@ -7309,15 +7309,15 @@ def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any) -> NDArray:
         lazyarr = blosc2.lazyudf(fill_eye, (k,), dtype=dtype, shape=shape)
         return lazyarr.compute(**kwargs)
 
-    @SourceKernel
-    def diagonal(k):
-        return _i1 - _i0 == k  # noqa: F821
+    from .menudet_kernel import prepare_menudet_generator
 
+    source = "def diagonal(k):\n    return _i1 - _i0 == k\n"
     backend = execution.get("jit_backend")
     if backend in {"tcc", "cc"}:
-        diagonal.dsl_source = f"# me:compiler={backend}\n" + diagonal.dsl_source
-    artifact = diagonal.export({}, dtype, constants={"k": k}, ndim=2)
-    kernel = blosc2.MenudetKernel.from_json(artifact, jit=execution.get("jit"))
+        source = f"# me:compiler={backend}\n{source}"
+    kernel = prepare_menudet_generator(
+        source, "diagonal", dtype, constants={"k": k}, ndim=2, jit=execution["jit"]
+    )
     # Square blocks localize the diagonal. Row-wide default blocks would all
     # intersect it, preventing the scheduler from skipping zero-only blocks.
     if kwargs.get("chunks") is None:
