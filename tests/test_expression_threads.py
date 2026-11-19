@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -82,3 +83,33 @@ def test_blosc_nthreads_env():
     # classes; repeated strtol spellings only pay for additional package imports.
     for invalid in ["0", "abc"]:
         assert _import_blosc2_and_print({"BLOSC_NTHREADS": invalid}, "print(blosc2.nthreads)") == default
+
+
+@pytest.mark.skipif(blosc2.IS_WASM, reason="threads are not supported on emscripten/wasm32")
+def test_set_nthreads_concurrent_sync():
+    old = blosc2.nthreads
+    try:
+        for _ in range(10):
+            barrier = threading.Barrier(4)
+            errors = []
+
+            def worker(tid, barrier=barrier, errors=errors):
+                try:
+                    barrier.wait()
+                    for i in range(50):
+                        blosc2.set_nthreads(1 + ((tid + i) % 4))
+                except Exception as exc:
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=worker, args=(tid,)) for tid in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            assert not errors
+            py_nthreads = blosc2.nthreads
+            c_nthreads = blosc2.set_nthreads(old)
+            assert c_nthreads == py_nthreads
+    finally:
+        blosc2.set_nthreads(old)

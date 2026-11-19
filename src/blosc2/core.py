@@ -24,6 +24,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
 import urllib.parse
 import urllib.request
 import uuid
@@ -43,6 +44,7 @@ if TYPE_CHECKING:
     import torch
 
 _wasm_releasegil_state = False
+_nthreads_lock = threading.Lock()
 
 
 def _check_typesize(typesize):
@@ -1323,8 +1325,9 @@ def set_nthreads(nthreads: int) -> int:
             raise ValueError("nthreads must be a positive integer.")
         nthreads = 1
 
-    rc = blosc2_ext.set_nthreads(nthreads)
-    blosc2.nthreads = nthreads
+    with _nthreads_lock:
+        rc = blosc2_ext.set_nthreads(nthreads)
+        blosc2.nthreads = nthreads
     return rc
 
 
