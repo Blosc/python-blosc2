@@ -15,7 +15,7 @@ from blosc2.dsl_kernel import SourceKernel as DSLKernel
 
 @pytest.fixture(autouse=True)
 def restore_options(monkeypatch):
-    previous = blosc2.get_jit_options()
+    previous = blosc2.jit_config.configured_execution_options()
     for name in (
         "CC",
         "CFLAGS",

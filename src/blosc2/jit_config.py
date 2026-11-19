@@ -20,7 +20,7 @@ _BUILTIN = {
     "jit": None,
     "jit_backend": None,
     "math_backend": None,
-    "fp_accuracy": blosc2.FPAccuracy.DEFAULT,
+    "fp_accuracy": None,
     "trace": False,
     "compiler": None,
     "cflags": None,
@@ -70,7 +70,7 @@ def _validate(values, *, check_platform=True):
             if check_platform and value == "js" and not blosc2.IS_WASM:
                 raise ValueError("jit_backend='js' is only available under WebAssembly/Pyodide")
         elif name == "fp_accuracy":
-            if not isinstance(value, blosc2.FPAccuracy):
+            if value is not None and not isinstance(value, blosc2.FPAccuracy):
                 raise TypeError("fp_accuracy must be a blosc2.FPAccuracy value or None")
         elif name == "math_backend":
             value = _validate_math_backend(value)
@@ -105,7 +105,19 @@ def set_compute_options(
     with _lock:
         previous = _defaults.copy()
         _defaults = {**_defaults, **updates}
-    return previous
+    return _evaluation_defaults(previous)
+
+
+def _configured_options():
+    with _lock:
+        defaults = _defaults.copy()
+    return {**defaults, **(_context.get() or {})}
+
+
+def _evaluation_defaults(options):
+    if options["fp_accuracy"] is None:
+        options["fp_accuracy"] = blosc2.FPAccuracy.DEFAULT
+    return options
 
 
 def get_compute_options():
@@ -114,9 +126,7 @@ def get_compute_options():
     Does not include environment overrides or per-evaluation settings.
     See :ref:`JITOptions`.
     """
-    with _lock:
-        defaults = _defaults.copy()
-    return {**defaults, **(_context.get() or {})}
+    return _evaluation_defaults(_configured_options())
 
 
 @contextlib.contextmanager
@@ -154,12 +164,17 @@ get_jit_options = get_compute_options
 jit_options = compute_options
 
 
-def execution_options():
-    """Internal snapshot consumed synchronously by native compilation."""
+def configured_execution_options():
+    """Snapshot retaining an unset accuracy preference for portable kernels."""
     execution = _execution.get()
     if execution is not None and execution[1] is _context.get():
         return execution[0].copy()
-    return get_compute_options()
+    return _configured_options()
+
+
+def execution_options():
+    """Internal snapshot with ordinary-expression defaults applied."""
+    return _evaluation_defaults(configured_execution_options())
 
 
 def trace_enabled():
@@ -177,7 +192,7 @@ def scope_compute_options(*names):
             overrides = {name: value for name, value in overrides.items() if value is not None}
             if not overrides:
                 return func(*args, **kwargs)
-            options = execution_options()
+            options = configured_execution_options()
             options.update(_validate(overrides))
             token = _execution.set((options, _context.get()))
             try:
@@ -206,10 +221,11 @@ def jit_execution(func):
 
     @functools.wraps(func)
     def wrapped(*args, **kwargs):
-        options = execution_options()
+        options = configured_execution_options()
         options.update(pop_execution_options(kwargs))
         token = _execution.set((options, _context.get()))
-        kwargs.update({name: options[name] for name in ("jit", "jit_backend", "fp_accuracy")})
+        effective = _evaluation_defaults(options.copy())
+        kwargs.update({name: effective[name] for name in ("jit", "jit_backend", "fp_accuracy")})
         try:
             return func(*args, **kwargs)
         finally:

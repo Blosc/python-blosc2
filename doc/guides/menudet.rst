@@ -142,9 +142,17 @@ specializing a Menudet function, for example:
 not the backend.
 Kernel preparation fixes the execution policy; changing a context later does not
 recompile an existing lazy result. Specialize/call again to select another policy.
-Runtime compiler defaults are not embedded in saved artifact source. Menudet's
-native floating-point policy is distinct from the expression evaluator's
-``fp_accuracy`` knob; see :doc:`../reference/menudet_accuracy`.
+Runtime compiler defaults are not embedded in saved artifact source.
+
+Set ``fp_accuracy`` with :func:`blosc2.compute_options` before calling or
+specializing a Menudet function. It is a portable preference for supported math
+functions: ``FPAccuracy.HIGH`` prefers SLEEF's ``u10`` variant, and
+``FPAccuracy.MEDIUM`` prefers Accelerate on macOS or SLEEF's ``u35`` variant
+where available. If you leave the preference unset, Menudet retains its native
+default. A specific backend constrains the choice, and an authored ``me:ulp``
+setting takes precedence when SLEEF is in use. This does not change ``me:fp``,
+which controls compiler transformations, or the accuracy of an already
+specialized kernel. See :doc:`../reference/menudet_accuracy`.
 
 The Menudet decorator takes kernel-authoring options, not storage controls.
 Materialize with ``result.compute(cparams=..., chunks=...)`` instead. Menudet is

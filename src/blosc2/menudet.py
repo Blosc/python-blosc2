@@ -167,11 +167,11 @@ class MenudetFunction:
         return inputs
 
     def _specialize(self, inputs):
-        from . import FPAccuracy, jit_config
+        from . import jit_config
         from .menudet_kernel import MENUDET_EXECUTION_ENV
 
         dtypes = {name: np.dtype(value.dtype).newbyteorder("=") for name, value in inputs.items()}
-        options = jit_config.execution_options()
+        options = jit_config.configured_execution_options()
         key = (
             tuple((name, dtype.str) for name, dtype in dtypes.items()),
             tuple(options.items()),
@@ -224,7 +224,7 @@ class MenudetFunction:
                     and self._export_options["ndim"] == 0
                     and self._export_options["casting"] == "unsafe"
                     and not configured
-                    and options["fp_accuracy"] == FPAccuracy.DEFAULT
+                    and options["fp_accuracy"] is None
                     and all(dtype.kind in "biuf" for dtype in dtypes.values())
                 ):
                     from .graph_plan import NativeGraph

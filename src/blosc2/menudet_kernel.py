@@ -530,7 +530,7 @@ def menudet_execution_environment():
     }
 
 
-def menudet_execution_snapshot(info, authored, options, environment):
+def menudet_execution_snapshot(info, authored, options, environment, accuracy_fields=()):
     """Pair the native handle's policy with the requests used to prepare it."""
     from . import IS_WASM
 
@@ -545,6 +545,8 @@ def menudet_execution_snapshot(info, authored, options, environment):
             value, source = options[option], f"option:{option}"
         else:
             value, source = None, "default"
+        if key in accuracy_fields:
+            source = "option:fp_accuracy"
         if key == "compiler":
             effective = ("wasm32" if IS_WASM else value or "tcc") if info["jit"] else None
         else:
@@ -580,7 +582,7 @@ def _authored_execution(semantics, pragmas):
 
 def _execution_artifact(data, options, environment):  # noqa: C901 -- preserve native validation on rewrites
     """Prepare an ephemeral policy override, keeping the validated recipe portable."""
-    if not environment and options["jit_backend"] is None:
+    if not environment and options["jit_backend"] is None and options["fp_accuracy"] is None:
         return data, None  # Keep ordinary import native-only.
 
     def unique_object(pairs):
@@ -594,13 +596,13 @@ def _execution_artifact(data, options, environment):  # noqa: C901 -- preserve n
     try:
         manifest = json.loads(data.decode("utf-8"), object_pairs_hook=unique_object)
     except (ValueError, UnicodeError):
-        return data, {}  # Preserve native artifact validation/error reporting.
+        return data, None  # Preserve native artifact validation/error reporting.
     if not isinstance(manifest, dict) or not isinstance(manifest.get("source"), str):
-        return data, {}
+        return data, None
     source = manifest["source"]
     semantics = manifest.get("semantics")
     if not isinstance(semantics, dict):
-        return data, {}
+        return data, None
     pragmas = _header_pragmas(source)
     authored = _authored_execution(semantics, pragmas)
     # Keep the ordinary per-call math option authoritative when there is no
@@ -664,6 +666,57 @@ def _execution_artifact(data, options, environment):  # noqa: C901 -- preserve n
         return data, authored  # Invalid numeric/Unicode content is still rejected natively.
 
 
+def _accuracy_artifact(data, authored, options, environment):
+    """Prefer a math implementation without changing the portable artifact."""
+    from . import FPAccuracy
+
+    accuracy = options["fp_accuracy"]
+    if accuracy is None or authored is None or "ulp" in authored:
+        return data, (), False
+    declaration = authored.get("math")
+    backend = environment.get("math") or (declaration[1] if declaration else options["math_backend"])
+    if backend not in (None, "auto", "sleef"):
+        return data, (), False
+    if accuracy == FPAccuracy.HIGH or backend == "sleef":
+        fields = {"math": "sleef", "ulp": "u10" if accuracy == FPAccuracy.HIGH else "u35"}
+    else:
+        from .native_graph import preferred_expression_math
+
+        preferred = preferred_expression_math(accuracy, automatic=True)
+        if preferred is None:
+            return data, (), False
+        fields = {"math": preferred}
+        if preferred == "sleef":
+            fields["ulp"] = "u35"
+    try:
+        manifest = json.loads(data)
+        semantics, source, requires = manifest["semantics"], manifest["source"], manifest["requires"]
+        if not isinstance(semantics, dict) or not isinstance(source, str) or not isinstance(requires, list):
+            return data, (), False
+        if (
+            "math" in authored or authored.get("fp", (None, "strict"))[1] != "strict"
+        ) and "flexible-math" not in requires:
+            return data, (), False
+        # A surviving source pragma is authoritative. In particular, do not
+        # rewrite an authored `me:math=auto` into a different backend.
+        if "math" in _header_pragmas(source) or "math" in semantics:
+            if semantics.get("math") == fields["math"] or (
+                _header_pragmas(source).get("math") == fields["math"] and "math" not in semantics
+            ):
+                fields.pop("math")
+            else:
+                return data, (), False
+        elif backend == "sleef":
+            # An explicit runtime backend already selects SLEEF.
+            fields.pop("math")
+        semantics.update(fields)
+        if "flexible-math" not in requires:
+            requires.append("flexible-math")
+        return json.dumps(manifest, ensure_ascii=False, allow_nan=False).encode(), fields, backend != "sleef"
+    except (KeyError, TypeError, ValueError, UnicodeError):
+        return data, (), False
+
+
 class MenudetKernel:
     """An already specialized Menudet kernel, with no Python fallback.
 
@@ -690,7 +743,7 @@ class MenudetKernel:
             data = artifact.encode("utf-8") if isinstance(artifact, str) else artifact
         except UnicodeEncodeError as error:
             raise MenudetError("Artifact text must be valid UTF-8", status="invalid_artifact") from error
-        options = jit_config.execution_options()
+        options = jit_config.configured_execution_options()
         environment = menudet_execution_environment()
         runtime_data, authored = _execution_artifact(data, options, environment)
         policy = options["jit"] if jit is None else jit
@@ -703,20 +756,32 @@ class MenudetKernel:
             if policy
             else 2
         )
+
         # The native per-call math option would otherwise mask the env variable.
-        args = (runtime_data, mode, True) if infer_output else (runtime_data, mode)
-        if "math" in environment and options["math_backend"] is not None:
-            with jit_config.compute_options(math_backend=None):
-                handle = handle_type(*args)
-        else:
-            handle = handle_type(*args)
+        def load(document):
+            args = (document, mode, True) if infer_output else (document, mode)
+            if "math" in environment and options["math_backend"] is not None:
+                with jit_config.compute_options(math_backend=None):
+                    return handle_type(*args)
+            return handle_type(*args)
+
+        preferred_data, accuracy_fields, optional_backend = _accuracy_artifact(
+            runtime_data, authored, options, environment
+        )
+        try:
+            handle = load(preferred_data)
+        except MenudetError as error:
+            if not optional_backend or "requested math backend 'sleef' is unavailable" not in str(error):
+                raise
+            handle = load(runtime_data)
+            accuracy_fields = ()
         instance = cls.__new__(cls)
         instance._handle = handle
         instance._expression_handle = handle
         instance._info = handle.info()
         if getattr(blosc2_ext, "menudet_descriptor_available", lambda: False)():
             instance._info.update(handle.descriptor_info())
-        instance._execution_policy = authored, options, environment
+        instance._execution_policy = authored, options, environment, accuracy_fields
         instance._execution_info = None
         if infer_output:
             data = _artifact_with_output(data, instance._info["output_dtype"])
@@ -766,13 +831,15 @@ class MenudetKernel:
         the requested compiler when JIT did not produce a kernel.
         """
         if self._execution_info is None:
-            authored, options, environment = self._execution_policy
+            authored, options, environment, accuracy_fields = self._execution_policy
             if authored is None:
                 # The runtime already validated this artifact. Decode metadata
                 # only on inspection, without consulting the live environment.
                 manifest = json.loads(self._artifact)
                 authored = _authored_execution(manifest["semantics"], _header_pragmas(manifest["source"]))
-            self._execution_info = menudet_execution_snapshot(self._info, authored, options, environment)
+            self._execution_info = menudet_execution_snapshot(
+                self._info, authored, options, environment, accuracy_fields
+            )
         return {
             key: dict(row) if isinstance(row, dict) else row for key, row in self._execution_info.items()
         }

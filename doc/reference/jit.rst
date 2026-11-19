@@ -146,8 +146,9 @@ Menudet functions resolve their policy at preparation time as described above.
 Compiler command/flags and explicit cache directories participate in native cache
 identity, including process-local positive/negative caches. Changing them must not
 reuse an incompatible kernel. Tracing/compiler-output toggles do not change cache
-identity. ``fp_accuracy`` retains the existing evaluator accuracy semantics;
-it does not select miniexpr's separate strict/contract/fast compiler mode.
+identity. An explicitly configured ``fp_accuracy`` also applies at Menudet
+specialization. It does not select miniexpr's separate strict/contract/fast
+compiler mode. See :ref:`menudet-execution-info`.
 
 Existing nonempty environment overrides remain authoritative: ``CC`` overrides
 ``compiler``, ``CFLAGS`` overrides ``cflags``, ``ME_DSL_TRACE`` overrides ``trace``,

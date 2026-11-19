@@ -1729,15 +1729,20 @@ def _expression_math_available(backend):
     return json.loads(plan.map_json())["semantics"].get("math") == backend
 
 
-def preferred_expression_math(fp_accuracy):
+def preferred_expression_math(fp_accuracy, *, automatic=False):
     """Resolve the automatic MEDIUM policy for ordinary typed expressions."""
     import blosc2
 
     if (
         fp_accuracy != blosc2.FPAccuracy.MEDIUM
         or blosc2.IS_WASM
-        or blosc2.jit_config.execution_options()["math_backend"] is not None
-        or os.environ.get("ME_SIMD_MATH_BACKEND") not in (None, "", "auto")
+        or (
+            not automatic
+            and (
+                blosc2.jit_config.execution_options()["math_backend"] is not None
+                or os.environ.get("ME_SIMD_MATH_BACKEND") not in (None, "", "auto")
+            )
+        )
     ):
         return None
     if sys.platform == "darwin":
@@ -1847,23 +1852,12 @@ def configured_map_kernel(plan, jit, configuration, environment):
 
     options = dict(configuration)
     artifact = plan.map_json()
-    backend = options["math_backend"] or os.environ.get("ME_SIMD_MATH_BACKEND") or "auto"
+    # MEDIUM is resolved during ordinary graph preparation; HIGH uses the
+    # same artifact specialization policy as decorated Menudet.
+    if options["fp_accuracy"] != blosc2.FPAccuracy.HIGH:
+        options["fp_accuracy"] = None
     with blosc2.compute_options(**options):
-        kernel = None
-        if options["fp_accuracy"] == blosc2.FPAccuracy.HIGH and backend in {"auto", "sleef"}:
-            manifest = json.loads(artifact)
-            manifest["semantics"].update(math="sleef", ulp="u10")
-            if "flexible-math" not in manifest["requires"]:
-                manifest["requires"].append("flexible-math")
-            try:
-                kernel = MenudetKernel.from_json(json.dumps(manifest), jit=jit)
-            except blosc2.MenudetError as error:
-                # Automatic selection must continue to work on builds without
-                # SLEEF. Don't discard a backend the caller explicitly chose.
-                if backend != "auto" or "requested math backend 'sleef' is unavailable" not in str(error):
-                    raise
-        if kernel is None:
-            kernel = MenudetKernel.from_json(artifact, jit=jit)
+        kernel = MenudetKernel.from_json(artifact, jit=jit)
     kernel.graph_partitionable = plan.partitionable
     return kernel
 

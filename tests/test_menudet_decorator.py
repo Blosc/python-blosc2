@@ -509,3 +509,61 @@ def test_execution_info_for_automatic_expression(monkeypatch):
         kernel = inferred.specialize(x, x)
     assert kernel.execution_info["math_backend"] == {"effective": "system", "source": "option:math_backend"}
     assert kernel.execution_info["fp_mode"] == {"effective": "strict", "source": "default"}
+
+
+def test_specialization_applies_fp_accuracy_without_serializing_it(monkeypatch):
+    from blosc2 import native_graph
+
+    monkeypatch.delenv("ME_SIMD_MATH_BACKEND", raising=False)
+
+    @blosc2.menudet(jit=False)
+    def wave(x):
+        return np.sin(x)
+
+    x = np.arange(8.0)
+    with blosc2.compute_options(fp_accuracy=None, math_backend=None):
+        default = wave.specialize(x)
+    with blosc2.compute_options(fp_accuracy=blosc2.FPAccuracy.HIGH, math_backend=None):
+        high = wave.specialize(x)
+    assert high is not default
+    assert high.to_json() == default.to_json()
+    if native_graph._expression_math_available("sleef"):
+        assert high.execution_info["math_backend"] == {"effective": "sleef", "source": "option:fp_accuracy"}
+        assert high.execution_info["sleef_accuracy"] == {"effective": "u10", "source": "option:fp_accuracy"}
+    else:
+        assert high.execution_info["math_backend"] == default.execution_info["math_backend"]
+    with blosc2.compute_options(fp_accuracy=blosc2.FPAccuracy.MEDIUM, math_backend=None):
+        medium = wave.specialize(x)
+        expected = native_graph.preferred_expression_math(blosc2.FPAccuracy.MEDIUM)
+    assert medium.to_json() == default.to_json()
+    if expected:
+        assert medium.execution_info["math_backend"] == {
+            "effective": expected,
+            "source": "option:fp_accuracy",
+        }
+    with blosc2.compute_options(fp_accuracy=blosc2.FPAccuracy.HIGH, math_backend="system"):
+        system = wave.specialize(x)
+    assert system.execution_info["math_backend"] == {"effective": "system", "source": "option:math_backend"}
+    assert system.execution_info["sleef_accuracy"]["effective"] is None
+    np.testing.assert_allclose(high.evaluate({"x": x}), np.sin(x))
+
+
+def test_authored_sleef_accuracy_overrides_fp_accuracy(monkeypatch):
+    monkeypatch.delenv("ME_SIMD_MATH_BACKEND", raising=False)
+
+    @blosc2.menudet(jit=False)
+    def wave(x) -> np.float64:
+        """
+        # me:math=sleef
+        # me:ulp=u35
+        """
+        return np.sin(x)
+
+    with blosc2.compute_options(fp_accuracy=blosc2.FPAccuracy.HIGH):
+        try:
+            kernel = wave.specialize(np.arange(4.0))
+        except blosc2.MenudetError as error:
+            if "requested math backend 'sleef' is unavailable" in str(error):
+                pytest.skip("SLEEF is unavailable on this build")
+            raise
+    assert kernel.execution_info["sleef_accuracy"] == {"effective": "u35", "source": "pragma"}
