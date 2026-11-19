@@ -177,10 +177,11 @@ def test_complex_evaluate(array_fixture):
     expr = blosc2.tan(a1) * (blosc2.sin(a2) * blosc2.sin(a2) + blosc2.cos(a3)) + (blosc2.sqrt(a4) * 2)
     expr += 2
     nres = ne_evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
-    # This slightly differs from numexpr, but it is correct (kind of)
-    # nres = np.tan(na1) * (np.sin(na2) * np.sin(na2) + np.cos(na3)) + (np.sqrt(na4) * 2) + 2
     res = expr.compute()
-    np.testing.assert_allclose(res[:], nres)
+    # A float64 result can still contain float32 transcendental intermediates.
+    # Different math backends can round those differently before cancellation.
+    rtol = 5e-7 if any(x.dtype == np.float32 for x in (na1, na2, na3, na4)) else 1e-7
+    np.testing.assert_allclose(res[:], nres, rtol=rtol)
 
 
 def test_complex_getitem_slice(array_fixture):

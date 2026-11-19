@@ -291,7 +291,7 @@ def test_native_first_inherited_policy_retains_legacy(monkeypatch, compressed, s
         return original(*args, **kwargs)
 
     monkeypatch.setattr(native, "lower_native_graph", record)
-    previous = blosc2.get_jit_options()
+    previous = blosc2.jit_config.configured_execution_options()
     try:
         if scoped:
             with blosc2.jit_options(**policy):

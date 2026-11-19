@@ -13,7 +13,7 @@ TOLERANCE = {"rtol": 1e-12, "atol": 1e-12}
 
 @pytest.fixture(autouse=True)
 def restore_options():
-    previous = blosc2.get_jit_options()
+    previous = blosc2.jit_config.configured_execution_options()
     yield
     blosc2.set_jit_options(**previous)
 

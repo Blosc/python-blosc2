@@ -11,6 +11,7 @@
 
 import collections
 import contextlib
+import sys
 import threading
 import time
 import zlib
@@ -266,11 +267,12 @@ def ticks_during_call(func):
 def assert_releases_the_gil(func):
     """Look for ticker progress beyond what is possible at the edges of a GIL-held call."""
     old = blosc2.set_releasegil(False)
+    switch_interval = sys.getswitchinterval()
     held, released = [], []
     try:
-        # A tick can slip in at either edge of the native call. Require more
-        # than those two edge ticks and more than the GIL-held control.
-        # Retry if a busy worker starves the ticker during a released call.
+        # Don't let a periodic Python thread switch at a measurement edge
+        # produce a burst of ticks unrelated to the native call.
+        sys.setswitchinterval(1.0)
         held = [ticks_during_call(func) for _ in range(2)]
         blosc2.set_releasegil(True)
         for _ in range(5):
@@ -278,6 +280,7 @@ def assert_releases_the_gil(func):
             if released[-1] >= max(3, max(held) + 1):
                 return
     finally:
+        sys.setswitchinterval(switch_interval)
         blosc2.set_releasegil(old)
     pytest.fail(f"Ticker did not make more progress with the GIL released: {held=}, {released=}")
 

@@ -13,7 +13,8 @@ import blosc2
 def policy_probe(monkeypatch, native_graph_runtime):
     monkeypatch.delenv("ME_DSL_JIT", raising=False)
     monkeypatch.delenv("BLOSC_ME_JIT", raising=False)
-    previous = blosc2.set_jit_options(jit=None, jit_backend=None)
+    previous = blosc2.jit_config.configured_execution_options()
+    blosc2.set_jit_options(jit=None, jit_backend=None)
     native = importlib.import_module("blosc2.native_graph")
     original = native.prepare_native_first
     original_resident = native.prepare_resident
