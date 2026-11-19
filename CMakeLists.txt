@@ -147,8 +147,8 @@ endif()
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    # Thread-safe JIT caches and observable FP flags for unused assignments.
-    GIT_TAG 03cb22b6e48002f1f2368d1d539be351f55880dc
+    # Thread-safe JIT/SIMD caches, FP flags, and negative integer power message.
+    GIT_TAG daa302b748381fe8ddd7e77681757f34e9b071d9
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
