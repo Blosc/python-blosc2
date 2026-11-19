@@ -46,7 +46,7 @@
 ### Documentation and wheels
 
 - Add a [ListArray tutorial](https://www.blosc.org/python-blosc2/tutorials/12b.listarray.html)
-  and simplify the API reference.
+  and simplify the API reference.   Thanks to Tyler Riccardi (@tylrcc).
 - Native wheels support CPython 3.11–3.15, with separate free-threaded builds
   for 3.14 and 3.15. Pyodide wheels target Python 3.13 and 3.14.
 

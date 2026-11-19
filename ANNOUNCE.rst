@@ -1,8 +1,9 @@
 Announcing Python-Blosc2 4.16.0
 ===============================
 
-Python-Blosc2 4.16.0 speeds up reductions on compressed arrays and array
-construction, adds more control over compute settings, and bundles C-Blosc2 3.7.0.
+In this release, we are speeding up reductions on compressed arrays and array
+construction, adding more control over compute settings, and bundling
+C-Blosc2 3.7.0.
 
 - **Faster reductions on compressed arrays.** Eligible sums, extrema, index
   reductions, variance, and standard deviation use new native paths. Full
@@ -21,7 +22,8 @@ construction, adds more control over compute settings, and bundles C-Blosc2 3.7.
   a kernel actually uses and where it came from.
 
 - **New ListArray tutorial.** Learn how to work with compressed,
-  variable-length lists in the documentation.
+  variable-length lists in the documentation.  Thanks to Tyler Riccardi
+  (@tylrcc).
 
 Install it with::
 
