@@ -12,6 +12,8 @@ Preliminaries
 
     python -c "import blosc2; print(blosc2.__version__)"
 
+* Update the version number and release date in the ``doc/python-blosc2.rst`` file too.
+
 * Make sure that the c-blosc2 repository is updated to the latest version (or a specific
   version that will be documented in the ``RELEASE_NOTES.md``). In ``CMakeLists.txt`` edit::
 
@@ -77,12 +79,6 @@ Tagging
     rm wheelhouse/*
     # download artifacts from the tag in GitHub
     twine upload --repository blosc2 wheelhouse/*
-
-* Update the latest release in the ``doc/python-blosc2.rst`` file with the new version
-  number and date.  Do a commit::
-
-    git commit -a -m "Update latest release in doc"
-    git push
 
 * Go to ``https://github.com/Blosc/blogsite`` repo, then to "Actions", click
   on the most recent workflow run (at the top of the list), and then click on
