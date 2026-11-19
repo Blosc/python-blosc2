@@ -773,6 +773,28 @@ def test_contains(values):
     np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
 
 
+def test_contains_numpy_arrays():
+    s1 = np.array([b"hello", b"world", b"hell", b"foo"])
+    s2 = np.array([b"ell", b"xyz", b"he", b"oo"])
+    for a, b in [
+        (s1, s2),
+        (s1.astype("U"), s2.astype("U")),
+        (blosc2.asarray(s1), s2),
+        (s1, blosc2.asarray(s2)),
+        (s1.reshape(2, 2), np.array([b"ell", b"oo"])),
+    ]:
+        a_np = a[:] if isinstance(a, blosc2.NDArray) else a
+        b_np = b[:] if isinstance(b, blosc2.NDArray) else b
+        expected = np.char.find(a_np, b_np) >= 0
+        np.testing.assert_array_equal(
+            blosc2.evaluate("contains(a, b)", local_dict={"a": a, "b": b}), expected
+        )
+        np.testing.assert_array_equal(blosc2.contains(a, b)[:], expected)
+
+    with pytest.raises(TypeError, match="value should be a string, bytes or an Array"):
+        blosc2.contains(s1, 123)
+
+
 @pytest.mark.parametrize("values", [("NDArray", "str"), ("NDArray", "NDArray"), ("str", "NDArray")])
 def test_stringops(values):
     # Unpack the value fixture

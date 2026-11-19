@@ -2081,8 +2081,8 @@ def contains(ndarr: blosc2.Array, value: str | bytes | blosc2.Array, /) -> blosc
     #     # output[...] = np.isin(x1, x2, assume_unique=assume_unique, invert=invert, kind=kind)
     #     output[...] = np.char.find(x1, x2) != -1
 
-    if not isinstance(value, str | bytes | NDArray):
-        raise TypeError("value should be a string, bytes or a NDArray!")
+    if not isinstance(value, str | bytes | np.ndarray | Operand):
+        raise TypeError("value should be a string, bytes or an Array!")
 
     return blosc2.LazyExpr(new_op=(ndarr, "contains", value))
 
