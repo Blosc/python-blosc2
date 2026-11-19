@@ -3,7 +3,8 @@ Announcing Python-Blosc2 4.16.0
 
 In this release, we are speeding up reductions on compressed arrays and array
 construction, adding more control over compute settings, and bundling
-C-Blosc2 3.7.0.
+C-Blosc2 3.7.0.  This is further consolidating the Menudet DSL as a stable and
+portable computational kernel for future inclusion in C-Blosc2 core library.
 
 - **Faster reductions on compressed arrays.** Eligible sums, extrema, index
   reductions, variance, and standard deviation use new native paths. Full
