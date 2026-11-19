@@ -1,39 +1,27 @@
-Announcing Python-Blosc2 4.15.0
+Announcing Python-Blosc2 4.16.0
 ===============================
 
-Python-Blosc2 4.15.0 is a major feature release introducing Menudet 0.1 beta
-(a little language for portable computation on arrays and tables), typed
-ordinary-expression evaluation by default, bundled C-Blosc2 3.6.1 and
-miniexpr 0.3.1, and faster frame serialization for containers with postfilters.
+Python-Blosc2 4.16.0 speeds up reductions on compressed arrays and array
+construction, adds more control over compute settings, and bundles C-Blosc2 3.7.0.
 
-- **Introducing Menudet 0.1 beta.** Menudet is a little language for portable
-  computation on arrays and tables. Use ``@blosc2.menudet`` (``MenudetFunction``)
-  for decorated authors, ``MenudetKernel`` for executable specializations,
-  ``MenudetError`` for errors, and ``validate_menudet`` for source validation.
-  Export normalized Menudet authoring as validated, standalone JSON artifacts with
-  typed signatures and exact captured constants. Native miniexpr executes imports
-  without reconstructing Python functions or falling back to Python. Supports
-  checked integer arithmetic, operand-typed floating computation, control flow,
-  fixed-width strings, logical array coordinates, and ordered block reductions.
+- **Faster reductions on compressed arrays.** Eligible sums, extrema, index
+  reductions, variance, and standard deviation use new native paths. Full
+  reductions now consistently return zero-dimensional arrays; use ``.item()``
+  for a scalar.
 
-- **Typed ordinary-expression evaluation by default.** Ordinary lazy expressions
-  now default to typed native execution where admitted, with bounded
-  typed-graph/NumPy fallback otherwise. Intermediate computation dtypes remain
-  separate from output and reduction accumulator dtypes. Unsupported typed
-  execution never silently retries through the uniform evaluator after numerical
-  execution starts.
+- **Faster array construction and compression.** ``arange()`` and
+  ``linspace()`` make greater use of native Menudet kernels, and ``eye()``
+  avoids computing all-zero chunks. C-Blosc2 3.7.0 brings faster BloscLZ and
+  SIMD filter improvements. The default compression level is now 1 instead
+  of 5; set ``clevel=5`` to retain the previous level.
 
-- **Serializing containers with a postfilter.** ``SChunk.to_cframe()`` and
-  ``NDArray.to_cframe()`` now return stored chunks for every storage, also when a
-  postfilter is set. Containers with a prefilter or postfilter no longer
-  decompress and recompress every chunk during ``to_cframe()``, dramatically
-  improving serialization performance.
+- **More control over compute settings.** Use ``blosc2.compute_options()``
+  to scope JIT and floating-point settings. ``evaluate()`` also accepts
+  settings per call, and ``MenudetKernel.execution_info`` shows the policy
+  a kernel actually uses and where it came from.
 
-- **Bundled C-Blosc2 and miniexpr updates.** Bundled C-Blosc2 has been updated
-  to 3.6.1 and miniexpr to 0.3.1. ``blosc2.print_versions()`` now also reports
-  the compiled miniexpr version.
-
-Special thanks to Fabian Isensee for his outstanding contributions!
+- **New ListArray tutorial.** Learn how to work with compressed,
+  variable-length lists in the documentation.
 
 Install it with::
 

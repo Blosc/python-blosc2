@@ -1,23 +1,54 @@
 # Release notes
 
-## Changes from 4.15.0 to 4.15.1
+## Changes from 4.15.0 to 4.16.0
 
-### Menudet
+### Compute options and Menudet
 
+- Configure process-wide or scoped compute defaults with `set_compute_options()`,
+  `get_compute_options()`, and `compute_options()`. The `*_jit_options` names
+  and `jit_options()` remain aliases. `evaluate()` also accepts per-call
+  compute settings such as `jit_backend`, `math_backend`, and `fp_accuracy`.
+- Honor floating-point accuracy settings in typed expressions and Menudet
+  specialization. Medium accuracy prefers Accelerate on macOS when available,
+  or SLEEF otherwise when available.
 - Menudet execution environment variables now override matching source pragmas.
   Inspect the effective policy and its provenance with `MenudetKernel.execution_info`.
+- Retire the legacy internal expression evaluator. Ordinary expressions use
+  the typed evaluator or its bounded fallback.
+- `blosc2.contains()` accepts NumPy arrays and Blosc2 operands as the value,
+  in addition to strings and bytes.
 
-### Native generation and compression
+### Reductions, constructors, and compression
+
+- Full reductions such as `sum()`, `argmax()`, and `count_nonzero()` consistently
+  return zero-dimensional arrays rather than scalars. Use `.item()` to extract
+  a scalar.
+- Speed up eligible compressed reductions with fixed-leaf pairwise floating
+  sums, direct extrema and truth reductions, mergeable index reductions, and
+  centered moments for variance and standard deviation.
+- Improve `arange()` and `linspace()` with native Menudet generation and reuse
+  of validated kernels. Eager ramps default to Zstd with SHUFFLE followed by
+  BYTEDELTA unless overridden by storage settings. `eye()` avoids computing
+  chunks that contain only zeros.
 
 - Lower the default compression level from 5 to 1 to reduce compression
-  overhead during computation, potentially at the cost of a lower compression
-  ratio. Set `clevel=5` explicitly to retain the previous level.
-- Reduce native block-scheduling lock acquisitions and reuse worker-local LZ4
-  compression state when using bundled LZ4. External LZ4 keeps its existing
-  compressor entry point.
-- Import constructor ramp artifacts only once and avoid runtime loop-limit
-  environment lookups for loop-free native kernels. Default chunk/block selection
-  and floating-point semantics are unchanged.
+  overhead, potentially at the cost of a lower compression ratio. Set
+  `clevel=5` explicitly to retain the previous level. Expression outputs now
+  honor process-wide compression defaults.
+- Preserve explicit block sizes when selecting chunks automatically. Large
+  arrays can exceed 2⁴⁸ elements by using larger chunks.
+- Bundle and require **C-Blosc2 3.7.0**, which includes faster BloscLZ 2.6.0,
+  SIMD improvements for shuffle and bitshuffle, and fused SHUFFLE+BYTEDELTA.
+- Bundle miniexpr **0.3.2.dev** at `daa302b`, including thread-safe JIT caches
+  and SIMD initialization, correct JIT floating-point flags for unused
+  assignments, and clearer errors for negative integer powers.
+
+### Documentation and wheels
+
+- Add a [ListArray tutorial](https://www.blosc.org/python-blosc2/tutorials/12b.listarray.html)
+  and simplify the API reference.
+- Native wheels support CPython 3.11–3.15, with separate free-threaded builds
+  for 3.14 and 3.15. Pyodide wheels target Python 3.13 and 3.14.
 
 ## Changes from 4.14.2 to 4.15.0
 
