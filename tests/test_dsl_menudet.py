@@ -330,7 +330,7 @@ def test_menudet_artifact_math_policy_conflict_and_capability():
         blosc2.MenudetKernel.from_json(json.dumps(manifest), jit=False)
 
 
-def test_menudet_math_environment_inheritance_and_source_override(monkeypatch):
+def test_menudet_math_environment_inheritance_and_pragma_override(monkeypatch):
     plain = "def k(x):\n    return sin(x)\n"
     manifest = json.loads(DSLKernel.from_source(plain).export({"x": "float64"}, "float64"))
     assert "math" not in manifest["semantics"]
@@ -346,9 +346,14 @@ def test_menudet_math_environment_inheritance_and_source_override(monkeypatch):
     assert loaded._info["sleef_accuracy"] == "u35"
 
     source = "# me:math=system\ndef k(x):\n    return sin(x)\n"
-    explicit = json.loads(DSLKernel.from_source(source).export({"x": "float64"}, "float64"))
-    loaded = blosc2.MenudetKernel.from_json(json.dumps(explicit), jit=False)
-    assert loaded._info["math_backend"] == "system"
+    explicit = DSLKernel.from_source(source).export({"x": "float64"}, "float64")
+    loaded = blosc2.MenudetKernel.from_json(explicit, jit=False)
+    assert loaded.execution_info["math_backend"] == {
+        "effective": "sleef",
+        "source": "env:ME_SIMD_MATH_BACKEND",
+        "overridden": "pragma:system",
+    }
+    assert loaded.to_json() == explicit
 
 
 def test_menudet_concurrent_math_backends_are_kernel_local():

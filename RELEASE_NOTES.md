@@ -2,6 +2,11 @@
 
 ## Changes from 4.15.0 to 4.15.1
 
+### Menudet
+
+- Menudet execution environment variables now override matching source pragmas.
+  Inspect the effective policy and its provenance with `MenudetKernel.execution_info`.
+
 ### Native generation and compression
 
 - Lower the default compression level from 5 to 1 to reduce compression

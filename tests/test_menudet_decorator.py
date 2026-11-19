@@ -434,3 +434,78 @@ def test_menudet_preserves_docstring_pragmas():
     assert kernel._info["fp_mode"] == "fast"
     assert "compiler=cc" in kernel._info["source"]
     np.testing.assert_allclose(kernel.evaluate({"x": x}), np.sin(x) + 1.0)
+
+
+def test_execution_info_tracks_environment_and_preserves_artifact(monkeypatch, capsys):
+    @blosc2.menudet(jit=False)
+    def wave(x):
+        """
+        # me:math=sleef
+        # me:ulp=u10
+        # me:fp=fast
+        # me:compiler=cc
+        """
+        return np.sin(x)
+
+    monkeypatch.setenv("ME_SIMD_MATH_BACKEND", "scalar")
+    monkeypatch.setenv("ME_DSL_FP_MODE", "strict")
+    monkeypatch.setenv("ME_DSL_JIT_COMPILER", "tcc")
+    x = np.arange(4.0)
+    with blosc2.compute_options(trace=True, math_backend="system"):
+        kernel = wave.specialize(x)
+    assert kernel.execution_info == {
+        "jit": False,
+        "math_backend": {
+            "effective": "scalar",
+            "source": "env:ME_SIMD_MATH_BACKEND",
+            "overridden": "pragma:sleef",
+        },
+        "fp_mode": {"effective": "strict", "source": "env:ME_DSL_FP_MODE", "overridden": "pragma:fast"},
+        "jit_backend": {
+            "effective": None,
+            "source": "env:ME_DSL_JIT_COMPILER",
+            "requested": "tcc",
+            "overridden": "pragma:cc",
+        },
+        "sleef_accuracy": {
+            "effective": None,
+            "source": "env:ME_SIMD_MATH_BACKEND",
+            "overridden": "pragma:u10",
+        },
+    }
+    assert (
+        "math_backend=scalar (env:ME_SIMD_MATH_BACKEND) overriding pragma:sleef" in capsys.readouterr().err
+    )
+    assert "# me:compiler=tcc" in kernel._info["source"]
+    assert "# me:math=sleef" in kernel.to_json()
+    assert "# me:ulp=u10" in kernel.to_json()
+    monkeypatch.setenv("ME_SIMD_MATH_BACKEND", "system")
+    assert kernel.execution_info["math_backend"]["effective"] == "scalar"
+    assert wave.specialize(x).execution_info["math_backend"]["effective"] == "system"
+    np.testing.assert_allclose(kernel.evaluate({"x": x}), np.sin(x))
+
+
+@pytest.mark.parametrize("name", ["ME_SIMD_MATH_BACKEND", "ME_DSL_FP_MODE", "ME_DSL_JIT_COMPILER"])
+def test_execution_info_rejects_invalid_environment(monkeypatch, name):
+    @blosc2.menudet(jit=False)
+    def wave(x):
+        """
+        # me:math=system
+        # me:fp=strict
+        # me:compiler=tcc
+        """
+        return np.sin(x)
+
+    monkeypatch.setenv(name, "invalid")
+    with pytest.raises(blosc2.MenudetError, match=name):
+        wave.specialize(np.arange(4.0))
+
+
+def test_execution_info_for_automatic_expression(monkeypatch):
+    for name in ("ME_SIMD_MATH_BACKEND", "ME_DSL_FP_MODE", "ME_DSL_JIT_COMPILER"):
+        monkeypatch.delenv(name, raising=False)
+    x = np.arange(4.0)
+    with blosc2.compute_options(math_backend="system"):
+        kernel = inferred.specialize(x, x)
+    assert kernel.execution_info["math_backend"] == {"effective": "system", "source": "option:math_backend"}
+    assert kernel.execution_info["fp_mode"] == {"effective": "strict", "source": "default"}

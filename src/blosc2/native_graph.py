@@ -1871,7 +1871,7 @@ def configured_map_kernel(plan, jit, configuration, environment):
 @lru_cache(maxsize=128)
 def resident_map_kernel(plan):
     from . import blosc2_ext
-    from .menudet_kernel import MenudetError, MenudetKernel
+    from .menudet_kernel import MenudetError, MenudetKernel, menudet_execution_snapshot
 
     handle = getattr(plan._handle, "resident_artifact", lambda: None)()
     if handle is not None:
@@ -1882,6 +1882,9 @@ def resident_map_kernel(plan):
         kernel._info = handle.info()
         if getattr(blosc2_ext, "menudet_descriptor_available", lambda: False)():
             kernel._info.update(handle.descriptor_info())
+        kernel._execution_info = menudet_execution_snapshot(
+            kernel._info, {}, plan._execution_options, plan._execution_environment
+        )
         kernel.graph_partitionable = bool(plan.info().get("partitionable", False))
         return kernel
     artifact = plan.map_json()

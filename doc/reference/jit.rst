@@ -21,8 +21,8 @@ interpret, ``jit=True`` to prefer compilation, or ``require_jit=True`` to requir
 JIT. Select backend/compiler options with ``blosc2.compute_options(...)`` when
 specializing/calling the function. A prepared kernel's policy is fixed; call or
 specialize again to select a different one. Runtime backend defaults reach
-artifact preparation but are not written into serialized author source. Existing
-source-pragma/environment precedence remains authoritative. See
+artifact preparation but are not written into serialized author source. Nonempty
+Menudet execution environment variables override the corresponding pragmas. See
 :doc:`../guides/menudet` for types, captures, domains and persistence.
 
 Global defaults and scoped options
@@ -154,7 +154,7 @@ Existing nonempty environment overrides remain authoritative: ``CC`` overrides
 ``ME_DSL_JIT_DEBUG_CC`` overrides ``compiler_output``, and
 ``ME_DSL_JIT_CACHE_DIR`` overrides ``cache_dir``. ``TMPDIR`` is used only when no
 explicit cache directory is selected. An explicit ``math_backend`` overrides
-``ME_SIMD_MATH_BACKEND`` for that evaluation. The JIT enable/backend environment
+``ME_SIMD_MATH_BACKEND`` for ordinary expression evaluation. The JIT enable/backend environment
 rules below remain unchanged. Configuration does not require changing environment
 variables; native compilation receives a call-local settings snapshot.
 
@@ -202,8 +202,9 @@ kernel instead; their ``compute()`` options are storage/materialization options.
 Automatic policy uses miniexpr's validated structural classification: a single
 ``return <expression>`` defaults to interpretation, while programs with multiple
 statements, assignments, branches or loops prefer JIT. Physical source line count
-does not determine the classification. Explicit ``jit`` settings and source
-compiler pragmas retain priority. The policy is selected before compilation.
+does not determine the classification. Explicit ``jit`` settings take priority,
+and a source compiler pragma can opt a kernel into JIT in automatic mode.
+The policy is selected before compilation.
 This is a conservative structural heuristic, not a profitability guarantee;
 explicit overrides remain useful for unusual or repeatedly executed workloads.
 
@@ -348,17 +349,18 @@ controls have different scopes; neither is an indication that JIT actually ran.
       - Disable applicable process-local positive-cache reuse. This does not
         disable persistent CC disk-cache reuse.
     * - ``ME_DSL_JIT_COMPILER``
-      - Advanced miniexpr-wide compiler default, ``tcc`` or ``cc``. It overrides
-        Python's ``jit_backend`` selection, but an explicit author-written
-        ``# me:compiler=tcc|cc`` pragma remains authoritative.
+      - Advanced miniexpr-wide compiler selection, ``tcc`` or ``cc``. For
+        Python-Blosc2 Menudet kernels it overrides ``jit_backend`` and
+        ``# me:compiler=tcc|cc``.
     * - ``ME_SIMD_MATH_BACKEND``
-      - Default math library, ``auto|system|sleef|accelerate|scalar``. ``auto``
+      - Math library, ``auto|system|sleef|accelerate|scalar``. Overrides
+        ``# me:math=...`` in Python-Blosc2 Menudet kernels. ``auto``
         and ``system`` select system math; ``scalar`` forces system scalar math.
         Explicit ``sleef``/``accelerate`` requests fail when unavailable.
     * - ``ME_DSL_FP_MODE``
-      - Default floating-point mode, ``strict|contract|fast`` (``relaxed`` is an
-        alias of ``fast``). An explicit ``# me:fp=...`` pragma remains
-        authoritative. ``contract``/``fast`` require the ``cc`` backend.
+      - Floating-point mode, ``strict|contract|fast`` (``relaxed`` is an
+        alias of ``fast``). Overrides ``# me:fp=...`` in Python-Blosc2 Menudet
+        kernels. ``contract``/``fast`` require the ``cc`` backend.
 
 Tracing and restricted environments
 -----------------------------------

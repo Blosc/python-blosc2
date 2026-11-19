@@ -139,7 +139,7 @@ specializing a Menudet function, for example:
         kernel = adjusted.specialize(x, y)
 
 ``jit_backend`` selects TCC or system CC; ``compiler=`` specifies the CC command,
-not the backend. Existing native environment/source-pragma precedence is unchanged.
+not the backend.
 Kernel preparation fixes the execution policy; changing a context later does not
 recompile an existing lazy result. Specialize/call again to select another policy.
 Runtime compiler defaults are not embedded in saved artifact source. Menudet's
@@ -150,6 +150,42 @@ The Menudet decorator takes kernel-authoring options, not storage controls.
 Materialize with ``result.compute(cparams=..., chunks=...)`` instead. Menudet is
 not a pandas engine: pass NumPy/Blosc2 arrays explicitly and materialize the lazy
 result. Ordinary ``@jit`` pandas integration is unchanged.
+
+.. _menudet-execution-info:
+
+Inspecting execution settings
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Nonempty ``ME_SIMD_MATH_BACKEND``, ``ME_DSL_FP_MODE``, and
+``ME_DSL_JIT_COMPILER`` override ``me:math``, ``me:fp``, and ``me:compiler``,
+respectively, when Python-Blosc2 prepares a Menudet kernel. A math override to a
+non-SLEEF backend also disables any SLEEF ULP setting. These overrides do not
+change the exported artifact. Invalid values raise :class:`blosc2.MenudetError`.
+
+Save this example as ``wave.py`` and run it with
+``ME_SIMD_MATH_BACKEND=scalar python wave.py``:
+
+.. code-block:: python
+
+    import blosc2
+    import numpy as np
+
+
+    @blosc2.menudet(jit=False)
+    def wave(x):
+        """# me:math=system"""
+        return np.sin(x)
+
+
+    kernel = wave.specialize(np.arange(4.0))
+    print(kernel.execution_info["math_backend"])
+    # {'effective': 'scalar', 'source': 'env:ME_SIMD_MATH_BACKEND', 'overridden': 'pragma:system'}
+
+:attr:`blosc2.MenudetKernel.execution_info` reports the policy selected at
+preparation time, not the current environment. It also reports whether JIT
+compiled the kernel. If the kernel is interpreted, the effective JIT backend is
+``None``, even if a compiler was requested. To log the policy when a kernel is
+prepared, specialize it inside ``with blosc2.compute_options(trace=True):``.
 
 Specialized kernels
 -------------------

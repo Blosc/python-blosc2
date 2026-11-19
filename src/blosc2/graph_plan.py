@@ -8,6 +8,7 @@ import numpy as np
 
 from . import blosc2_ext, jit_config
 from .blosc2_ext import NativeGraphHandle
+from .menudet_kernel import menudet_execution_environment
 
 
 class NativeGraph:
@@ -33,6 +34,7 @@ class NativeGraph:
             if jit is None
             else 2
         )
+        self._capture_execution_policy()
         self._handle = NativeGraphHandle(graph, mode, require_jit)
         self._info = self._handle.info()
 
@@ -54,11 +56,18 @@ class NativeGraph:
             if jit is None
             else 2
         )
+        result._capture_execution_policy()
         result._handle = NativeGraphHandle.from_expression(
             expression.encode("utf-8"), input_dtypes, mode, require_jit
         )
         result._info = result._handle.info()
         return result
+
+    def _capture_execution_policy(self):
+        self._execution_options = jit_config.execution_options()
+        self._execution_environment = menudet_execution_environment()
+        if self._execution_options["math_backend"] is not None:
+            self._execution_environment.pop("math", None)
 
     @property
     def input_dtypes(self):

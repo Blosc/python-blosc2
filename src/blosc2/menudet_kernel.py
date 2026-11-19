@@ -11,6 +11,8 @@ import builtins
 import json
 import math
 import os
+import re
+import sys
 import tokenize
 from collections.abc import Mapping
 from io import StringIO
@@ -501,13 +503,85 @@ def _artifact_with_output(artifact, output_dtype):
     return (encoded + "\n").encode("utf-8")
 
 
-def _execution_artifact(data, options):
-    """Apply a runtime compiler default without baking machine policy into recipes."""
-    backend = options["jit_backend"]
-    if backend is None:
-        return data
-    if backend == "js":
-        raise NotImplementedError("Menudet artifacts do not support the JavaScript JIT backend")
+MENUDET_EXECUTION_ENV = {
+    "math": ("ME_SIMD_MATH_BACKEND", {"auto", "system", "scalar", "sleef", "accelerate"}),
+    "fp": ("ME_DSL_FP_MODE", {"strict", "contract", "fast", "relaxed"}),
+    "compiler": ("ME_DSL_JIT_COMPILER", {"cc", "tcc"}),
+}
+_PRAGMA_VALUES = {
+    "math": MENUDET_EXECUTION_ENV["math"][1] - {"scalar"},
+    "fp": MENUDET_EXECUTION_ENV["fp"][1],
+    "compiler": MENUDET_EXECUTION_ENV["compiler"][1],
+    "ulp": {"u10", "u35"},
+}
+_EXECUTION_FIELDS = {
+    "math": "math_backend",
+    "fp": "fp_mode",
+    "compiler": "jit_backend",
+    "ulp": "sleef_accuracy",
+}
+_EXECUTION_OPTIONS = {"math": "math_backend", "compiler": "jit_backend"}
+
+
+def menudet_execution_environment():
+    """Capture execution environment values; empty variables are unset."""
+    return {
+        key: value for key, (name, _) in MENUDET_EXECUTION_ENV.items() if (value := os.environ.get(name))
+    }
+
+
+def menudet_execution_snapshot(info, authored, options, environment):
+    """Pair the native handle's policy with the requests used to prepare it."""
+    from . import IS_WASM
+
+    snapshot = {"jit": info["jit"]}
+    for key, field in _EXECUTION_FIELDS.items():
+        option = _EXECUTION_OPTIONS.get(key)
+        if key in environment:
+            value, source = environment[key], f"env:{MENUDET_EXECUTION_ENV[key][0]}"
+        elif key in authored:
+            source, value = authored[key]
+        elif option and options[option] is not None:
+            value, source = options[option], f"option:{option}"
+        else:
+            value, source = None, "default"
+        if key == "compiler":
+            effective = ("wasm32" if IS_WASM else value or "tcc") if info["jit"] else None
+        else:
+            effective = info.get(field) or None
+        row = {"effective": effective, "source": source}
+        if key == "compiler":
+            row["requested"] = value
+        if key in environment and key in authored:
+            old_source, old_value = authored[key]
+            if old_value != value:
+                row["overridden"] = f"{old_source}:{old_value}"
+        if key == "ulp" and value is not None and effective is None and "math" in environment:
+            row.update(source=f"env:{MENUDET_EXECUTION_ENV['math'][0]}", overridden=f"{source}:{value}")
+        snapshot[field] = row
+    return snapshot
+
+
+def _trace_execution(entry_point, snapshot):
+    fields = ", ".join(
+        f"{key}={row['effective']} ({row['source']})"
+        + (f" overriding {row['overridden']}" if "overridden" in row else "")
+        for key, row in snapshot.items()
+        if key != "jit"
+    )
+    print(f"blosc2: Menudet {entry_point}: jit={snapshot['jit']}, {fields}", file=sys.stderr)
+
+
+def _authored_execution(semantics, pragmas):
+    authored = {key: ("artifact", semantics[key]) for key in ("math", "fp", "ulp") if key in semantics}
+    authored.update({key: ("pragma", value) for key, value in pragmas.items()})
+    return authored
+
+
+def _execution_artifact(data, options, environment):  # noqa: C901 -- preserve native validation on rewrites
+    """Prepare an ephemeral policy override, keeping the validated recipe portable."""
+    if not environment and options["jit_backend"] is None:
+        return data, None  # Keep ordinary import native-only.
 
     def unique_object(pairs):
         result = {}
@@ -520,20 +594,74 @@ def _execution_artifact(data, options):
     try:
         manifest = json.loads(data.decode("utf-8"), object_pairs_hook=unique_object)
     except (ValueError, UnicodeError):
-        return data  # Preserve native artifact validation/error reporting.
+        return data, {}  # Preserve native artifact validation/error reporting.
     if not isinstance(manifest, dict) or not isinstance(manifest.get("source"), str):
-        return data
+        return data, {}
     source = manifest["source"]
-    if "compiler" in _header_pragmas(source):
-        return data  # Author-supplied native pragmas remain authoritative.
-    environment = os.environ.get("ME_DSL_JIT_COMPILER", "").strip().lower()
-    if environment in ("cc", "tcc"):
-        backend = environment
-    manifest["source"] = f"# me:compiler={backend}\n{source}"
+    semantics = manifest.get("semantics")
+    if not isinstance(semantics, dict):
+        return data, {}
+    pragmas = _header_pragmas(source)
+    authored = _authored_execution(semantics, pragmas)
+    # Keep the ordinary per-call math option authoritative when there is no
+    # authored backend to override, as with evaluate(..., math_backend=...).
+    if "math" not in authored and options["math_backend"] is not None:
+        environment.pop("math", None)
+    for key, value in environment.items():
+        name, accepted = MENUDET_EXECUTION_ENV[key]
+        if value not in accepted:
+            raise MenudetError(
+                f"invalid {name}={value!r} (expected {', '.join(sorted(accepted))})", status="invalid_source"
+            )
+    replace = environment.keys() & authored.keys()
+    if "math" in environment and environment["math"] != "sleef" and "ulp" in authored:
+        replace.add("ulp")  # SLEEF accuracy is inapplicable after a backend override.
+    for key in replace:
+        if key in semantics:
+            value = semantics[key]
+            accepted = _PRAGMA_VALUES[key] - ({"relaxed"} if key == "fp" else set())
+            if not isinstance(value, str) or value not in accepted:
+                return data, authored
+            pragma = pragmas.get(key, value)
+            if pragma != value and not (
+                (key == "fp" and pragma == "relaxed" and value == "fast")
+                or (key == "math" and {pragma, value} == {"auto", "system"})
+            ):
+                return data, authored
+    if replace & {"math", "fp", "ulp"} and (
+        "math" in authored or "ulp" in authored or authored.get("fp", (None, "strict"))[1] != "strict"
+    ):
+        requires = manifest.get("requires")
+        if not isinstance(requires, list) or "flexible-math" not in requires:
+            return data, authored
+    lines = source.splitlines(keepends=True)
+    seen = set()
+    for index, line in enumerate(lines):
+        if line.strip() and not line.lstrip().startswith("#"):
+            break
+        match = re.fullmatch(r"[ \t]*#[ \t]*me:(\w+)[ \t]*=[ \t]*(\w+)[ \t]*(\r?\n)?", line)
+        if match and (key := match[1]) in replace:
+            if key in seen or match[2] not in _PRAGMA_VALUES[key]:
+                return data, authored
+            seen.add(key)
+            # Preserve line numbers and the compiler pragma's auto-JIT trigger.
+            directive = f"# me:compiler={environment[key]}" if key == "compiler" else ""
+            lines[index] = directive + (match[3] or "")
+    if replace & pragmas.keys() != seen:
+        return data, authored
+    for key in replace:
+        semantics.pop(key, None)
+    backend = environment.get("compiler", options["jit_backend"])
+    add_compiler = options["jit_backend"] is not None and "compiler" not in authored
+    if add_compiler and backend == "js":
+        raise NotImplementedError("Menudet artifacts do not support the JavaScript JIT backend")
+    if not replace and not add_compiler:
+        return data, authored
+    manifest["source"] = (f"# me:compiler={backend}\n" if add_compiler else "") + "".join(lines)
     try:
-        return json.dumps(manifest, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        return json.dumps(manifest, ensure_ascii=False, allow_nan=False).encode("utf-8"), authored
     except (ValueError, UnicodeError):
-        return data  # Invalid numeric/Unicode content is still rejected natively.
+        return data, authored  # Invalid numeric/Unicode content is still rejected natively.
 
 
 class MenudetKernel:
@@ -563,7 +691,8 @@ class MenudetKernel:
         except UnicodeEncodeError as error:
             raise MenudetError("Artifact text must be valid UTF-8", status="invalid_artifact") from error
         options = jit_config.execution_options()
-        runtime_data = _execution_artifact(data, options)
+        environment = menudet_execution_environment()
+        runtime_data, authored = _execution_artifact(data, options, environment)
         policy = options["jit"] if jit is None else jit
         if policy is None and os.environ.get("BLOSC_ME_JIT", "").lower() in ("1", "true", "on", "tcc", "cc"):
             policy = True
@@ -574,20 +703,27 @@ class MenudetKernel:
             if policy
             else 2
         )
-        if infer_output:
-            handle = handle_type(runtime_data, mode, True)
+        # The native per-call math option would otherwise mask the env variable.
+        args = (runtime_data, mode, True) if infer_output else (runtime_data, mode)
+        if "math" in environment and options["math_backend"] is not None:
+            with jit_config.compute_options(math_backend=None):
+                handle = handle_type(*args)
         else:
-            handle = handle_type(runtime_data, mode)
+            handle = handle_type(*args)
         instance = cls.__new__(cls)
         instance._handle = handle
         instance._expression_handle = handle
         instance._info = handle.info()
         if getattr(blosc2_ext, "menudet_descriptor_available", lambda: False)():
             instance._info.update(handle.descriptor_info())
+        instance._execution_policy = authored, options, environment
+        instance._execution_info = None
         if infer_output:
             data = _artifact_with_output(data, instance._info["output_dtype"])
         instance._artifact = data
         instance._expression_artifact = data
+        if jit_config.trace_enabled():
+            _trace_execution(instance.entry_point, instance.execution_info)
         return instance
 
     @property
@@ -619,6 +755,27 @@ class MenudetKernel:
     def execution_kind(self):
         """Native structural classification: expression, program, or unknown on older runtimes."""
         return self._info.get("execution_kind", "unknown")
+
+    @property
+    def execution_info(self):
+        """Return a snapshot of the effective execution policy and its provenance.
+
+        ``jit`` is a bool. The ``math_backend``, ``fp_mode``, ``jit_backend``
+        and ``sleef_accuracy`` entries each have ``effective`` and ``source``
+        fields, and may include ``overridden``. ``jit_backend`` also reports
+        the requested compiler when JIT did not produce a kernel.
+        """
+        if self._execution_info is None:
+            authored, options, environment = self._execution_policy
+            if authored is None:
+                # The runtime already validated this artifact. Decode metadata
+                # only on inspection, without consulting the live environment.
+                manifest = json.loads(self._artifact)
+                authored = _authored_execution(manifest["semantics"], _header_pragmas(manifest["source"]))
+            self._execution_info = menudet_execution_snapshot(self._info, authored, options, environment)
+        return {
+            key: dict(row) if isinstance(row, dict) else row for key, row in self._execution_info.items()
+        }
 
     @property
     def schema_version(self):

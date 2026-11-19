@@ -61,7 +61,13 @@ def test_backend_environment_and_author_pragma_precedence(monkeypatch):
     author["source"] = "# me:compiler = cc\n" + author["source"]
     with blosc2.jit_options(jit_backend="tcc"):
         kernel = blosc2.MenudetKernel.from_json(json.dumps(author), jit=False)
-    assert kernel.source == author["source"]
+    assert kernel.source.startswith("# me:compiler=tcc\n")
+    assert kernel.execution_info["jit_backend"] == {
+        "effective": None,
+        "source": "env:ME_DSL_JIT_COMPILER",
+        "requested": "tcc",
+        "overridden": "pragma:cc",
+    }
     assert json.loads(kernel.to_json())["source"] == author["source"]
 
 

@@ -31,6 +31,9 @@ See :doc:`dsl_syntax`, :doc:`menudet_accuracy`, and :doc:`save_load` for syntax,
 numerical rules, and deserialization policies. Menudet is not a general sandbox
 for arbitrary untrusted source or data.
 
+See :ref:`menudet-execution-info` in the Menudet guide for an example of
+overriding and inspecting a kernel's execution settings.
+
 Specifications
 --------------
 
