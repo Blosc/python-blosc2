@@ -1,53 +1,11 @@
 Reduction Functions
 -------------------
 
-Contrarily to lazy functions, reduction functions are evaluated eagerly. Full
-reductions with ``keepdims=False`` return a zero-dimensional NumPy array, not a
-Python or NumPy scalar, consistently across evaluation backends. Use ``result[()]``
-to extract a NumPy scalar or ``result.item()`` for a Python scalar.
-Partial reductions return arrays with the remaining dimensions; ``keepdims=True``
-retains reduced axes with size one. Nonzero-dimensional results can be converted
-internally into an :ref:`NDArray <NDArray>` by passing :func:`blosc2.empty`
-arguments in ``kwargs``.
+Contrarily to lazy functions, reduction functions are evaluated eagerly, and the result is always a NumPy array (although this can be converted internally into an :ref:`NDArray <NDArray>` if you pass any :func:`blosc2.empty` arguments in ``kwargs``).
 
 Reduction operations can be used with any of :ref:`NDArray <NDArray>`, :ref:`C2Array <C2Array>`, :ref:`NDField <NDField>` and :ref:`LazyExpr <LazyExpr>`. Again, although these can be part of a :ref:`LazyExpr <LazyExpr>`, you must be aware that they are not lazy, but will be evaluated eagerly during the construction of a LazyExpr instance (this might change in the future). When the input is a :ref:`LazyExpr`, reductions accept ``fp_accuracy`` to control floating-point accuracy, and it is forwarded to :func:`LazyExpr.compute`.
 
 For lazy-expression inputs, see :ref:`JITOptions` for shared evaluation options.
-
-When supported by the native runtime, eligible automatic whole-domain floating
-``sum`` reductions over aligned one-dimensional compressed inputs, with matching
-mapped and accumulator dtypes, use parallel prefilters.
-Storage blocks drive decompression and expression evaluation, but
-arithmetic uses fixed 128-element logical leaves and a pairwise merge tree.
-Partial leaves crossing storage boundaries are completed in logical order.
-For plain sums, a proven input-only map skips elementwise evaluation and the
-mapped-block copy, reducing directly from the worker's decoded input buffer.
-Results are independent of thread count and compression partitioning for the
-same mapped values, with scratch bounded by chunk size rather than array size.
-This improves accumulation accuracy without guaranteeing correctly rounded sums.
-Explicit strict native execution retains its serial-order contract;
-``fp_accuracy`` continues to control transcendental accuracy, not summation order.
-
-Eligible aligned one-dimensional compressed ``min``, ``max``, ``any`` and
-``all`` reductions also use parallel prefilters, bypassing proven input-only
-maps. Block results are combined with the native reducer to preserve its NaN
-and signed-zero rules. Partial-result storage is capped at 1 MiB; larger
-domains retain the streaming bounded-reader route.
-Floating extrema require the native shared-extrema capability; older runtimes
-keep the bounded-reader route rather than maintaining duplicate numerical rules.
-Prefilter workers are bounded by work per chunk, not only by total array size.
-
-When the native runtime provides shared value/index reductions, eligible
-whole-domain one-dimensional ``argmin`` and ``argmax`` calls also use parallel
-prefilters. Inputs must have matching aligned chunk/block geometry; boolean,
-integer and float32/float64 mapped values are supported. Each block produces
-its best value and absolute logical index. Native merging preserves the first
-occurrence on ties (including signed zeros) and selects the first NaN.
-Index results use ``blosc2.DEFAULT_INDEX``, including on 32-bit platforms.
-Value/index partials together are capped at 1 MiB. Single-thread requests,
-larger scratch requirements, multidimensional inputs, slices and unsupported
-options keep their existing execution path. Explicit strict native graph
-execution is unchanged.
 
 .. currentmodule:: blosc2
 
