@@ -20,6 +20,7 @@ Topics
     remote_tables
     sharing_across_processes
     pandas_engine
+    memory_mapped_storage
 
 Command line tools
 ------------------
