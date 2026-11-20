@@ -18,7 +18,7 @@ project(python-blosc2)
 set(BLOSC2_MIN_VERSION 3.7.0)
 # set(BLOSC2_BUNDLED_VERSION v3.7.0)
 # If you prefer some C-Blosc2 3.7 development snapshot
-set(BLOSC2_BUNDLED_VERSION 93f23d4f26cc7482e7db6443f309bb74c3ab62ee)
+set(BLOSC2_BUNDLED_VERSION c02db223e4969668db143c837b19475bc9c1d19d)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
@@ -147,8 +147,8 @@ endif()
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    # Vectorize Menudet batch ramp kernels with SSE2 and AVX2.
-    GIT_TAG 84af0148fe779601762e1f2c1f92f8a13a1f05cf
+    # Optimize ARM64 NEON ramp batch kernels, FPCR guard, and libtcc JIT cache.
+    GIT_TAG f6ec7acd9a5a223c8c7eef679077265fbe679267
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
