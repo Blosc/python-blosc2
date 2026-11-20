@@ -16,9 +16,9 @@ project(python-blosc2)
 
 # Update to the latest minimum C-Blosc2 version, and to the actual bundled one
 set(BLOSC2_MIN_VERSION 3.7.0)
-set(BLOSC2_BUNDLED_VERSION v3.7.0)
+# set(BLOSC2_BUNDLED_VERSION v3.7.0)
 # If you prefer some C-Blosc2 3.7 development snapshot
-# set(BLOSC2_BUNDLED_VERSION be06f086511bcc1ff101b8cba1809b575f811bad)
+set(BLOSC2_BUNDLED_VERSION 93f23d4f26cc7482e7db6443f309bb74c3ab62ee)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
@@ -147,8 +147,8 @@ endif()
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    # Thread-safe JIT/SIMD caches, FP flags, and negative integer power message.
-    GIT_TAG daa302b748381fe8ddd7e77681757f34e9b071d9
+    # Vectorize Menudet batch ramp kernels with SSE2 and AVX2.
+    GIT_TAG 84af0148fe779601762e1f2c1f92f8a13a1f05cf
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
