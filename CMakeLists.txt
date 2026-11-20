@@ -148,7 +148,7 @@ endif()
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
     # Optimize ARM64 NEON ramp batch kernels, FPCR guard, and libtcc JIT cache.
-    GIT_TAG f6ec7acd9a5a223c8c7eef679077265fbe679267
+    GIT_TAG 7b6841578367d99cd293720f123f684d58507e8d
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
