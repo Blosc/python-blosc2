@@ -646,7 +646,17 @@ from .remote_store import RemoteNode, RemoteStore
 from .remote_file import RemoteFile
 from .remote_repository import RemoteRepository
 from . import linalg
-from .linalg import tensordot, vecdot, permute_dims, matrix_transpose, matmul, transpose, diagonal, outer
+from .linalg import (
+    tensordot,
+    vecdot,
+    permute_dims,
+    matrix_transpose,
+    matmul,
+    transpose,
+    diagonal,
+    outer,
+    moveaxis,
+)
 from .utils import linalg_funcs as linalg_funcs_list
 from . import fft
 from . import random
@@ -1110,6 +1120,7 @@ __all__ = [  # noqa : RUF022
     "meshgrid",
     "min",
     "minimum",
+    "moveaxis",
     "multiply",
     "nans",
     "ndarray_from_cframe",

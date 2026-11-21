@@ -604,6 +604,9 @@ def permute_dims(
             raise ValueError(f"axes {axes} is not a valid permutation of {ndim} dimensions")
 
     new_shape = tuple(arr.shape[axis] for axis in axes)
+    if 0 in new_shape:
+        # Nothing to copy, and chunks with 0 are rejected
+        return blosc2.empty(shape=new_shape, dtype=arr.dtype, **kwargs)
     if "chunks" not in kwargs or kwargs["chunks"] is None:
         kwargs["chunks"] = tuple(arr.chunks[axis] for axis in axes)
 
@@ -697,6 +700,77 @@ def matrix_transpose(arr: blosc2.Array, **kwargs: Any) -> blosc2.NDArray:
         axes = list(range(arr.ndim))
         axes[-2], axes[-1] = axes[-1], axes[-2]
     return permute_dims(arr, axes, **kwargs)
+
+
+def _normalize_moveaxis_axes(axes: int | Sequence[int], ndim: int, argname: str) -> tuple[int, ...]:
+    axes = (axes,) if isinstance(axes, (int, np.integer)) else tuple(axes)
+    for ax in axes:
+        if not -ndim <= ax < ndim:
+            raise np.exceptions.AxisError(ax, ndim, argname)
+    axes = tuple(ax % ndim for ax in axes)
+    if len(set(axes)) != len(axes):
+        raise ValueError(f"repeated axis in `{argname}` argument")
+    return axes
+
+
+def moveaxis(
+    x: blosc2.Array,
+    source: int | Sequence[int],
+    destination: int | Sequence[int],
+    **kwargs: Any,
+) -> blosc2.NDArray:
+    """
+    Moves array axes (dimensions) to new positions, while leaving other axes in their original positions.
+
+    Parameters
+    ----------
+    x: :ref:`NDArray` | np.ndarray
+        The input array.
+    source: int | tuple[int]
+        Axes to move. Provided axes must be unique. Negative indices are supported.
+    destination: int | tuple[int]
+        Indices defining the desired positions for each respective ``source`` axis index.
+        Provided indices must be unique and have the same length as ``source``.
+    kwargs: Any, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    out: :ref:`NDArray`
+        An array containing reordered axes. The returned array has the same data type as ``x``.
+
+    Raises
+    ------
+    ValueError
+        If an axis is out of bounds (``numpy.exceptions.AxisError``), repeated, or if
+        ``source`` and ``destination`` have different lengths.
+
+    References
+    ----------
+    `numpy.moveaxis <https://numpy.org/doc/stable/reference/generated/numpy.moveaxis.html>`_
+
+    `moveaxis <https://data-apis.org/array-api/latest/API_specification/generated/array_api.moveaxis.html>`_
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> a = blosc2.zeros((3, 4, 5))
+    >>> blosc2.moveaxis(a, 0, -1).shape
+    (4, 5, 3)
+    >>> blosc2.moveaxis(a, -1, 0).shape
+    (5, 3, 4)
+    >>> blosc2.moveaxis(a, (0, 1), (-1, -2)).shape
+    (5, 4, 3)
+    """
+    ndim = np.ndim(x)
+    source = _normalize_moveaxis_axes(source, ndim, "source")
+    destination = _normalize_moveaxis_axes(destination, ndim, "destination")
+    if len(source) != len(destination):
+        raise ValueError("`source` and `destination` arguments must have the same number of elements")
+    order = [n for n in range(ndim) if n not in source]
+    for dest, src in sorted(zip(destination, source, strict=True)):
+        order.insert(dest, src)
+    return permute_dims(x, order, **kwargs)
 
 
 def diagonal(x: blosc2.blosc2.NDArray, offset: int = 0) -> blosc2.blosc2.NDArray:
