@@ -18,7 +18,7 @@ project(python-blosc2)
 set(BLOSC2_MIN_VERSION 3.7.0)
 # set(BLOSC2_BUNDLED_VERSION v3.7.0)
 # If you prefer some C-Blosc2 3.7 development snapshot
-set(BLOSC2_BUNDLED_VERSION 3a59e8b33a120ec535f579967cd561de4f75ee27)
+set(BLOSC2_BUNDLED_VERSION 039053e4a89c3a0c0d115fded201fc44c56c5367)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
