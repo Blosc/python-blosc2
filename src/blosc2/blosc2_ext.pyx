@@ -1319,6 +1319,10 @@ cdef extern from "pairwise_sum_bridge.h":
         B2_PAIRWISE_LEAF_ITEMS
     ctypedef struct b2_pairwise_state:
         pass
+    ctypedef struct b2_fp_env:
+        pass
+    int b2_fp_hold(b2_fp_env *) noexcept nogil
+    int b2_fp_restore(const b2_fp_env *) noexcept nogil
     int b2_pairwise_available() noexcept nogil
     int b2_pairwise_init(b2_pairwise_state *, me_dtype) noexcept nogil
     int b2_pairwise_update(b2_pairwise_state *, const void *, size_t) noexcept nogil
@@ -1451,7 +1455,7 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
     cdef int64_t block_extent = count
     cdef size_t written_bytes = max(count, 0) * params.output_typesize
     cdef void *destination = params.output
-    cdef fenv_t environment
+    cdef b2_fp_env environment
     cdef int d
     cdef int64_t chunk_index, block_index, lane, offset, physical, stride, relative
     cdef int64_t origins[16]
@@ -1525,12 +1529,12 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
             descriptor.logical_shape = state.shape
             descriptor.block_origin = origins
             descriptor.block_extent = extents
-        if feholdexcept(&environment):
+        if b2_fp_hold(&environment):
             worker.status = -5
             strcpy(worker.error.message, "Cannot isolate Menudet prefilter floating environment")
             return -1
         rc = b2_artifact_eval_status(state.artifact, NULL, 0, destination, &descriptor, 0, &fp, &error)
-        if fesetenv(&environment):
+        if b2_fp_restore(&environment):
             rc = -5
             strcpy(error.message, "Cannot restore Menudet prefilter floating environment")
         if rc:
@@ -1580,7 +1584,7 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
         memset(params.output, 0, written_bytes)
         worker.output_zero_fill_bytes += written_bytes
         return 0
-    if feholdexcept(&environment):
+    if b2_fp_hold(&environment):
         if params.output_size:
             memset(params.output, 0, params.output_size)
         if worker.status == 0 or block_id < worker.error_block:
@@ -1658,7 +1662,7 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
                 strcpy(error.message, "Menudet prefilter block reduction failed")
     if state.pairwise_sum or state.reduction_output != NULL:
         fp.flags |= b2_pairwise_flags()
-    if fesetenv(&environment):
+    if b2_fp_restore(&environment):
         rc = -5
         strcpy(error.message, "Cannot restore Menudet prefilter floating environment")
     if rc and (worker.status == 0 or block_id < worker.error_block):
@@ -8132,7 +8136,7 @@ cdef class NDArray:
         cdef b2_pairwise_state sum_state
         cdef np.ndarray sum_leaves, sum_fragments
         cdef int64_t sum_origin, sum_count, sum_prefix, sum_full, sum_suffix, sum_block
-        cdef fenv_t sum_environment
+        cdef b2_fp_env sum_environment
         if chunk_range is not None:
             begin, end = chunk_range
         memset(&state, 0, sizeof(state))
@@ -8310,7 +8314,7 @@ cdef class NDArray:
                             menudet_prefilter_merge(&state)
                             raise_artifact_error(state.status, &state.error)
                     if pairwise_sum:
-                        if feholdexcept(&sum_environment):
+                        if b2_fp_hold(&sum_environment):
                             raise RuntimeError("Cannot isolate pairwise merge floating environment")
                         rc = 0
                         with nogil:
@@ -8360,7 +8364,7 @@ cdef class NDArray:
                                     if rc:
                                         break
                         state.workers[0].fp_flags |= b2_pairwise_flags()
-                        if fesetenv(&sum_environment):
+                        if b2_fp_restore(&sum_environment):
                             raise RuntimeError("Cannot restore pairwise merge floating environment")
                         if rc:
                             raise RuntimeError("Native pairwise merge failed")
@@ -8373,11 +8377,11 @@ cdef class NDArray:
             if state.status:
                 raise_artifact_error(state.status, &state.error)
             if pairwise_sum:
-                if feholdexcept(&sum_environment):
+                if b2_fp_hold(&sum_environment):
                     raise RuntimeError("Cannot isolate pairwise finalization floating environment")
                 rc = b2_pairwise_finish(&sum_state, state.reduction_output)
                 state.fp_flags |= b2_pairwise_flags()
-                if fesetenv(&sum_environment):
+                if b2_fp_restore(&sum_environment):
                     raise RuntimeError("Cannot restore pairwise finalization floating environment")
                 if rc:
                     raise RuntimeError("Native pairwise finalization failed")
