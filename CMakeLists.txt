@@ -18,7 +18,7 @@ project(python-blosc2)
 set(BLOSC2_MIN_VERSION 3.7.0)
 # set(BLOSC2_BUNDLED_VERSION v3.7.0)
 # If you prefer some C-Blosc2 3.7 development snapshot
-set(BLOSC2_BUNDLED_VERSION edea68d524bbe8f0c2e5e296b77d20b9d93fc91a)
+set(BLOSC2_BUNDLED_VERSION abb928820e812e6ac1296c84f284dee8e3e72f7e)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
@@ -147,8 +147,8 @@ endif()
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    # Optimize pairwise sum leaf accumulation and aligned tree append.
-    GIT_TAG a27fa5949b5ef9e7235bd75ab69c708e04e6f0c7
+    # Optimize x86-64 SSE2/AVX2 pairwise sum leaves and MXCSR FP guard.
+    GIT_TAG 779265ddd07263aec3faafe2e747ac78dd4f426e
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
