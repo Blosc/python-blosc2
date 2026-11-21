@@ -8312,35 +8312,53 @@ cdef class NDArray:
                     if pairwise_sum:
                         if feholdexcept(&sum_environment):
                             raise RuntimeError("Cannot isolate pairwise merge floating environment")
+                        rc = 0
                         with nogil:
-                            for sum_block in range(state.chunk_items // state.block_items):
-                                sum_origin = chunk * state.chunk_items + sum_block * state.block_items
-                                sum_count = min(state.block_items, state.size - sum_origin)
-                                if sum_count <= 0:
-                                    break
-                                sum_prefix = min(sum_count, (
-                                    B2_PAIRWISE_LEAF_ITEMS - sum_origin % B2_PAIRWISE_LEAF_ITEMS
-                                ) % B2_PAIRWISE_LEAF_ITEMS)
-                                sum_full = (sum_count - sum_prefix) // B2_PAIRWISE_LEAF_ITEMS
-                                sum_suffix = sum_count - sum_prefix - sum_full * B2_PAIRWISE_LEAF_ITEMS
-                                if sum_prefix:
-                                    rc = b2_pairwise_update(&sum_state,
-                                        state.sum_fragments + (
-                                            sum_block * 2 * state.sum_fragment_items *
-                                            state.reduction_acc_itemsize),
-                                        sum_prefix)
-                                if not rc and sum_full:
-                                    rc = b2_pairwise_append(&sum_state, state.sum_leaves + (
-                                        (sum_origin + sum_prefix) // B2_PAIRWISE_LEAF_ITEMS - state.sum_leaf_origin
-                                    ) * state.reduction_acc_itemsize, sum_full)
-                                if not rc and sum_suffix:
-                                    rc = b2_pairwise_update(&sum_state,
-                                        state.sum_fragments + (
-                                            (sum_block * 2 + 1) * state.sum_fragment_items *
-                                            state.reduction_acc_itemsize),
-                                        sum_suffix)
-                                if rc:
-                                    break
+                            sum_origin = chunk * state.chunk_items
+                            sum_count = min(state.chunk_items, state.size - sum_origin)
+                            if (state.block_items % B2_PAIRWISE_LEAF_ITEMS == 0
+                                    and sum_origin % B2_PAIRWISE_LEAF_ITEMS == 0):
+                                if sum_count > 0:
+                                    sum_full = sum_count // B2_PAIRWISE_LEAF_ITEMS
+                                    sum_suffix = sum_count - sum_full * B2_PAIRWISE_LEAF_ITEMS
+                                    if sum_full:
+                                        rc = b2_pairwise_append(&sum_state, state.sum_leaves, sum_full)
+                                    if not rc and sum_suffix:
+                                        sum_block = (sum_count - 1) // state.block_items
+                                        rc = b2_pairwise_update(&sum_state,
+                                            state.sum_fragments + (
+                                                (sum_block * 2 + 1) * state.sum_fragment_items *
+                                                state.reduction_acc_itemsize),
+                                            sum_suffix)
+                            else:
+                                for sum_block in range(state.chunk_items // state.block_items):
+                                    sum_origin = chunk * state.chunk_items + sum_block * state.block_items
+                                    sum_count = min(state.block_items, state.size - sum_origin)
+                                    if sum_count <= 0:
+                                        break
+                                    sum_prefix = min(sum_count, (
+                                        B2_PAIRWISE_LEAF_ITEMS - sum_origin % B2_PAIRWISE_LEAF_ITEMS
+                                    ) % B2_PAIRWISE_LEAF_ITEMS)
+                                    sum_full = (sum_count - sum_prefix) // B2_PAIRWISE_LEAF_ITEMS
+                                    sum_suffix = sum_count - sum_prefix - sum_full * B2_PAIRWISE_LEAF_ITEMS
+                                    if sum_prefix:
+                                        rc = b2_pairwise_update(&sum_state,
+                                            state.sum_fragments + (
+                                                sum_block * 2 * state.sum_fragment_items *
+                                                state.reduction_acc_itemsize),
+                                            sum_prefix)
+                                    if not rc and sum_full:
+                                        rc = b2_pairwise_append(&sum_state, state.sum_leaves + (
+                                            (sum_origin + sum_prefix) // B2_PAIRWISE_LEAF_ITEMS - state.sum_leaf_origin
+                                        ) * state.reduction_acc_itemsize, sum_full)
+                                    if not rc and sum_suffix:
+                                        rc = b2_pairwise_update(&sum_state,
+                                            state.sum_fragments + (
+                                                (sum_block * 2 + 1) * state.sum_fragment_items *
+                                                state.reduction_acc_itemsize),
+                                            sum_suffix)
+                                    if rc:
+                                        break
                         state.workers[0].fp_flags |= b2_pairwise_flags()
                         if fesetenv(&sum_environment):
                             raise RuntimeError("Cannot restore pairwise merge floating environment")
