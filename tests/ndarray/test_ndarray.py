@@ -340,6 +340,23 @@ def test_ramp_jit_resolves_before_dispatch(monkeypatch, constructor, c_order):
     monkeypatch.setattr(ndarray, "_compute_menudet_ramp", capture_menudet)
     # Real ramps retain logical C-order values for either traversal flag.
     with blosc2.compute_options(jit=None):
+        # AOT-covered dtypes (float32/float64, integer-input integers) use
+        # miniexpr's direct AOT SIMD interpreter ramps without invoking JIT.
+        for dtype in (None, np.int32, np.uint8, np.float32, np.float64):
+            if constructor == "linspace" and dtype in (np.int32, np.uint8):
+                continue
+            for size, override, expected in (
+                (3_999_999, None, False),
+                (4_000_000, None, False),
+                (4_000_000, False, False),
+                (10, True, True),
+            ):
+                args = (size,) if constructor == "arange" else (0, 1, size)
+                getattr(blosc2, constructor)(*args, dtype=dtype, c_order=c_order, jit=override)
+                assert calls == [(expected, expected)]
+                calls.clear()
+
+        # Non-AOT ramps (e.g. bool or float-input integer ramps) still use the 4M JIT threshold.
         for size, override, expected in (
             (3_999_999, None, False),
             (4_000_000, None, True),
@@ -347,9 +364,29 @@ def test_ramp_jit_resolves_before_dispatch(monkeypatch, constructor, c_order):
             (10, True, True),
         ):
             args = (size,) if constructor == "arange" else (0, 1, size)
-            getattr(blosc2, constructor)(*args, c_order=c_order, jit=override)
+            getattr(blosc2, constructor)(*args, dtype=np.bool_, c_order=c_order, jit=override)
             assert calls == [(expected, expected)]
             calls.clear()
+
+
+@pytest.mark.parametrize(
+    ("dtype", "backend", "integer_inputs", "expected"),
+    [
+        (np.float32, None, False, False),
+        (np.float16, None, False, True),
+        (np.float64, "js", False, True),
+        (np.int32, None, True, False),
+        (np.int32, None, False, True),
+    ],
+)
+def test_ramp_auto_jit_requires_direct_aot(dtype, backend, integer_inputs, expected):
+    from importlib import import_module
+
+    ndarray = import_module("blosc2.ndarray")
+    execution = blosc2.jit_config.execution_options()
+    execution.update(jit=None, jit_backend=backend)
+    ndarray._resolve_ramp_jit(execution, 4_000_000, np.dtype(dtype), integer_inputs=integer_inputs)
+    assert execution["jit"] is expected
 
 
 @pytest.mark.parametrize(("constructor", "dtype"), [("arange", "int32"), ("linspace", "float64")])

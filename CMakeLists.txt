@@ -147,8 +147,8 @@ endif()
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    # Optimize x86-64 SSE2/AVX2 pairwise sum leaves and MXCSR FP guard.
-    GIT_TAG 8139992dde0ef78fb5faad4a9a24999cf6b0cc08
+    # Direct interpreter AOT SIMD ramp kernels for float and integer dtypes.
+    GIT_TAG 450cb152ab7ecf3f1e71804716d2f7c18b6615f3
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)

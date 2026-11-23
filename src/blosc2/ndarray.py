@@ -6749,9 +6749,19 @@ def ones(
 _RAMP_JIT_MIN_ITEMS = 4_000_000
 
 
-def _resolve_ramp_jit(execution, size):
+def _has_direct_aot_ramp(dtype, execution, *, integer_inputs=False):
+    """Whether miniexpr's interpreter dispatches this ramp directly to an AOT SIMD kernel."""
+    return _menudet_ramp_supported(dtype, execution, eager=True) and (
+        (dtype.kind == "f" and dtype.itemsize in (4, 8)) or (dtype.kind in "iu" and integer_inputs)
+    )
+
+
+def _resolve_ramp_jit(execution, size, dtype=None, *, integer_inputs=False):
     if execution["jit"] is None:
-        execution["jit"] = bool(size >= _RAMP_JIT_MIN_ITEMS)
+        if dtype is not None and _has_direct_aot_ramp(dtype, execution, integer_inputs=integer_inputs):
+            execution["jit"] = False
+        else:
+            execution["jit"] = bool(size >= _RAMP_JIT_MIN_ITEMS)
 
 
 def _menudet_ramp(
@@ -6948,10 +6958,12 @@ def arange(  # noqa: C901
     ----------------
     jit: bool or None, optional
         Execution policy for the ramp: None (default) inherits the
-        configured JIT policy; unset uses interpretation below 4 million elements
-        and tries JIT for larger Menudet ramps. True tries JIT,
-        and False disables it. Native compilation or allocation failure falls
-        back quietly to the interpreter. See :ref:`JITOptions`.
+        configured JIT policy; unset uses direct AOT SIMD interpretation without
+        runtime compilation for float32/float64 and integer-input integer ramps,
+        and otherwise interprets below 4 million elements and tries JIT for
+        larger Menudet ramps. True tries JIT, and False disables it. Native
+        compilation or allocation failure falls back quietly to the interpreter.
+        See :ref:`JITOptions`.
     jit_backend: {"tcc", "cc", "js"} or None, optional
         Select the runtime compiler. Native defaults use bundled TCC without
         disk caching. CC needs an installed compiler and uses persistent caching;
@@ -7015,9 +7027,14 @@ def arange(  # noqa: C901
     if type(lazy) is not bool:
         raise TypeError("lazy must be a bool")
 
+    int_bounds = np.iinfo(np.int64)
+    integer_inputs = dtype.kind in "biu" and builtins.all(
+        isinstance(value, (int, np.integer)) and int_bounds.min <= value <= int_bounds.max
+        for value in (start, step)
+    )
     execution = blosc2.jit_config.execution_options()
     execution.update(blosc2.jit_config.pop_execution_options(kwargs))
-    _resolve_ramp_jit(execution, NUM)
+    _resolve_ramp_jit(execution, NUM, dtype, integer_inputs=integer_inputs)
     storage_kwargs = kwargs.copy()
     if lazy:
         if storage_kwargs:
@@ -7044,11 +7061,7 @@ def arange(  # noqa: C901
     # with c_order=False. Complex fallbacks have separate reshape semantics.
     if (c_order or dtype.kind != "c") and _menudet_ramp_supported(dtype, execution, eager=True):
         if dtype.kind in "biu":
-            int_bounds = np.iinfo(np.int64)
-            if builtins.all(
-                isinstance(value, (int, np.integer)) and int_bounds.min <= value <= int_bounds.max
-                for value in (start, step)
-            ):
+            if integer_inputs:
                 return _compute_menudet_ramp(
                     start, step, dtype, tuple(shape), execution, kwargs, integer_inputs=True
                 )
@@ -7134,10 +7147,12 @@ def linspace(  # noqa: C901
     ----------------
     jit: bool or None, optional
         Execution policy for the ramp: None (default) inherits the
-        configured JIT policy; unset uses interpretation below 4 million elements
-        and tries JIT for larger Menudet ramps. True tries JIT,
-        and False disables it. Native compilation or allocation failure falls
-        back quietly to the interpreter. See :ref:`JITOptions`.
+        configured JIT policy; unset uses direct AOT SIMD interpretation without
+        runtime compilation for float32/float64 and integer-input integer ramps,
+        and otherwise interprets below 4 million elements and tries JIT for
+        larger Menudet ramps. True tries JIT, and False disables it. Native
+        compilation or allocation failure falls back quietly to the interpreter.
+        See :ref:`JITOptions`.
     jit_backend: {"tcc", "cc", "js"} or None, optional
         Select the runtime compiler. Native defaults use bundled TCC without
         disk caching. CC needs an installed compiler and uses persistent caching;
@@ -7201,7 +7216,7 @@ def linspace(  # noqa: C901
 
     execution = blosc2.jit_config.execution_options()
     execution.update(blosc2.jit_config.pop_execution_options(kwargs))
-    _resolve_ramp_jit(execution, num)
+    _resolve_ramp_jit(execution, num, dtype)
     storage_kwargs = kwargs.copy()
     if lazy:
         if storage_kwargs:
