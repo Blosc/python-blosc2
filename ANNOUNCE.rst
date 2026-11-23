@@ -1,30 +1,41 @@
-Announcing Python-Blosc2 4.16.0
+Announcing Python-Blosc2 4.16.1
 ===============================
 
-In this release, we are speeding up reductions on compressed arrays and array
-construction, adding more control over compute settings, and bundling
-C-Blosc2 3.7.0.  This is further consolidating the Menudet DSL as a stable and
-portable computational kernel for future inclusion in C-Blosc2 core library.
+This maintenance and *performance* release bundles **C-Blosc2 3.8.0** and
+updates **miniexpr**, delivering major speedups for array generation,
+compression/decompression, expression evaluation, and reductions.
 
-- **Faster reductions on compressed arrays.** Eligible sums, extrema, index
-  reductions, variance, and standard deviation use new native paths. Full
-  reductions now consistently return zero-dimensional arrays; use ``.item()``
-  for a scalar.
+- **C-Blosc2 3.8.0: BloscLZ 2.7.0 and faster fused SHUFFLE+BYTEDELTA.**
+  BloscLZ 2.7.0 brings substantial compression and decompression speedups on
+  both x86-64 and ARM64, alongside faster fused SHUFFLE+BYTEDELTA paths
+  (including new AVX2 support and NEON backward decoding), lower threading
+  overhead, and ZFP/portability fixes.
 
-- **Faster array construction and compression.** ``arange()`` and
-  ``linspace()`` make greater use of native Menudet kernels, and ``eye()``
-  avoids computing all-zero chunks. C-Blosc2 3.7.0 brings faster BloscLZ and
-  SIMD filter improvements. The default compression level is now 1 instead
-  of 5; set ``clevel=5`` to retain the previous level.
+- **Much faster arange() and linspace(), plus cparams inheritance.** Eager
+  ``arange()`` and ``linspace()`` now default to ``BLOSCLZ`` with
+  ``SHUFFLE`` + ``BYTEDELTA`` and direct AOT SIMD interpreter ramp kernels.
+  ``compute()`` on lazy expressions also inherits a uniform lossless
+  ``(codec, clevel, filters)`` setting from numeric ``NDArray`` operands when
+  ``cparams`` is omitted.
 
-- **More control over compute settings.** Use ``blosc2.compute_options()``
-  to scope JIT and floating-point settings. ``evaluate()`` also accepts
-  settings per call, and ``MenudetKernel.execution_info`` shows the policy
-  a kernel actually uses and where it came from.
+- **Faster reductions and Menudet improvements.** Compressed pairwise-sum
+  reductions batch contiguous leaves per chunk with lightweight FP guards and
+  SIMD loops, while bundled miniexpr adds in-process ``libtcc`` JIT kernel
+  caching. Safe lazy expressions and shape inference also support constant
+  ``int()`` calls and bounded ``**``.
 
-- **New ListArray tutorial.** Learn how to work with compressed,
-  variable-length lists in the documentation.  Thanks to Tyler Riccardi
-  (@tylrcc).
+Look at this performance snapshot using a Apple M4 Pro, 12 threads::
+
+  Operation                                            4.16.0                   4.16.1
+  -----------------------------------------------------------------------------------------
+  a = blosc2.linspace(0, 1, int(1e8))                  111 ms (cratio 41.0)     11.1 ms (cratio 45.1)
+  a = blosc2.linspace(0, 1, int(1e9))                  1.08 s (cratio 45.3)     79.1 ms (cratio 87.1)
+  blosc2.sin(a).compute()                              1.19 s (cratio 5.50)     549 ms  (cratio 11.3)
+  blosc2.lazyexpr('sin(a)**2 + cos(a)**2').std()       1.97 s                   1.17 s
+
+Essentially what is happening here is the new ramp constructors (arange() and linspace())
+are using more effective generation and compression, and ``.compute()`` inherits this too,
+providing much improved performance.  As you can see, reductions have been optimized too.
 
 Install it with::
 

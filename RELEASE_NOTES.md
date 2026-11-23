@@ -1,5 +1,52 @@
 # Release notes
 
+## Changes from 4.16.0 to 4.16.1
+
+### Compression, constructors, and reductions
+
+- Bundle and require **C-Blosc2 3.8.0**, bringing **BloscLZ 2.7.0** (major
+  compression and decompression speedups on x86-64 and ARM64), faster fused
+  **SHUFFLE+BYTEDELTA** (new AVX2 path, faster x86-64 SSE2/SSSE3/AVX2 and ARM64
+  NEON backward decoding, zero-high-planes fast path, and non-Apple ARM64 symbol
+  fix), lower threading and hot-path overhead, and ZFP buffer bounds and
+  portability fixes.
+- Default eager `arange()` and `linspace()` ramps to **BLOSCLZ** (with
+  `SHUFFLE` followed by `BYTEDELTA`) instead of Zstd, and execute them via
+  direct AOT SIMD interpreter ramp kernels by default for float and integer
+  dtypes unless overridden by storage or compute settings.
+- `compute()` on `LazyExpr` and `MenudetLazyArray` now inherits a uniform
+  lossless `(codec, clevel, filters)` triple from numeric `NDArray` operands
+  of the same `dtype.kind` when `cparams` is omitted (and global defaults are
+  unchanged), preserving fast settings such as BLOSCLZ + SHUFFLE + BYTEDELTA
+  across derived arrays.
+- Accelerate compressed pairwise-sum reductions by batching contiguous leaves
+  per chunk in the Menudet prefilter, adding lightweight ARM64 FPCR/FPSR and
+  x86-64 MXCSR floating-point guards, and optimizing SIMD pairwise-sum loops.
+- Bundle **miniexpr 0.3.2.dev** at `450cb15`, adding direct interpreter AOT SIMD
+  ramp kernels, SSE2/AVX2 and ARM64 NEON vectorized ramp and pairwise-sum
+  loops, in-process caching of compiled `libtcc` JIT kernels, and an ARM64 FPCR
+  fast path.
+
+### Expressions and safe mode
+
+- Support constant `int(...)` calls and bounded constant exponentiation (`**`)
+  in AST shape inference and safe lazy-expression parsing.
+
+### Performance highlights (4.16.0 vs 4.16.1)
+
+Thanks to **BloscLZ 2.7.0**, faster fused **SHUFFLE+BYTEDELTA**, direct SIMD
+ramp generation, `compute()` `cparams` inheritance, and faster pairwise
+reductions, array construction and out-of-core expressions see substantial
+speedups (and higher compression ratios on smooth arrays). Measured on Apple
+M4 Pro (12 threads, median of 3 runs):
+
+| Operation | 4.16.0 | 4.16.1 | Speedup |
+| --- | --- | --- | --- |
+| `a = blosc2.linspace(0, 1, int(1e8))` | 111 ms (`cratio` 41.0) | 11.1 ms (`cratio` 45.1) | **10.0x** |
+| `a = blosc2.linspace(0, 1, int(1e9))` | 1.08 s (`cratio` 45.3) | 79.1 ms (`cratio` 87.1) | **13.6x** |
+| `blosc2.sin(a).compute()` | 1.19 s (`cratio` 5.50) | 549 ms (`cratio` 11.3) | **2.2x** |
+| `blosc2.lazyexpr('sin(a)**2 + cos(a)**2').std()` | 1.97 s | 1.17 s | **1.7x** |
+
 ## Changes from 4.15.0 to 4.16.0
 
 ### Compute options and Menudet
