@@ -6885,14 +6885,15 @@ def _compute_menudet_ramp(
     return output
 
 
-# Remember both identity and values: replacing the list (even with the same
-# values) or editing it in place is an explicit global filter configuration.
+# Remember initial global defaults: replacing the codec or the filter list (even
+# with the same values) or editing filters in place is an explicit global configuration.
+_INITIAL_DEFAULT_CODEC = blosc2.cparams_dflts["codec"]
 _INITIAL_DEFAULT_FILTERS = blosc2.cparams_dflts["filters"]
 _INITIAL_DEFAULT_FILTER_VALUES = tuple(_INITIAL_DEFAULT_FILTERS)
 
 
 def _ramp_storage_defaults(kwargs):
-    """Supply ramp filters without mutating or replacing explicit user settings."""
+    """Supply ramp codec and filters without mutating or replacing explicit user settings."""
     cparams = kwargs.get("cparams")
     if cparams is None:
         cparams = {}
@@ -6901,6 +6902,8 @@ def _ramp_storage_defaults(kwargs):
         return
     else:
         cparams = cparams.copy()
+    if "codec" not in cparams and blosc2.cparams_dflts["codec"] == _INITIAL_DEFAULT_CODEC:
+        cparams["codec"] = blosc2.Codec.BLOSCLZ
     global_filters = blosc2.cparams_dflts["filters"]
     if (
         "filters" not in cparams
@@ -6970,10 +6973,10 @@ def arange(  # noqa: C901
         JS is WebAssembly/Pyodide-only. See :ref:`JITOptions` for limitations.
     kwargs: dict, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
-        Eager arrays default to ZSTD with SHUFFLE followed by BYTEDELTA.
-        Customized ``blosc2.cparams_dflts['filters']``, explicit filters, or a complete
-        :class:`CParams` configuration override these constructor-specific filters;
-        other compression settings are preserved.
+        Eager arrays default to BLOSCLZ with SHUFFLE followed by BYTEDELTA.
+        Customized ``blosc2.cparams_dflts['codec']`` / ``blosc2.cparams_dflts['filters']``,
+        explicit codec/filters, or a complete :class:`CParams` configuration override
+        these constructor-specific defaults; other compression settings are preserved.
 
     Returns
     -------
@@ -7138,10 +7141,10 @@ def linspace(  # noqa: C901
         Complex ramps are interpreter-only, even when JIT is requested.
     **kwargs: Any
         Storage arguments accepted by :func:`empty`, plus the execution options below.
-        Eager arrays default to ZSTD with SHUFFLE followed by BYTEDELTA.
-        Customized ``blosc2.cparams_dflts['filters']``, explicit filters, or a complete
-        :class:`CParams` configuration override these constructor-specific filters;
-        other compression settings are preserved.
+        Eager arrays default to BLOSCLZ with SHUFFLE followed by BYTEDELTA.
+        Customized ``blosc2.cparams_dflts['codec']`` / ``blosc2.cparams_dflts['filters']``,
+        explicit codec/filters, or a complete :class:`CParams` configuration override
+        these constructor-specific defaults; other compression settings are preserved.
 
     Other Parameters
     ----------------

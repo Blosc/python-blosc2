@@ -25,7 +25,7 @@ def make_ramp(constructor, size=24, **kwargs):
 )
 def test_ramp_default_filters(constructor, size, dtype, c_order):
     array = make_ramp(constructor, size, dtype=dtype, c_order=c_order)
-    assert array.cparams.codec == blosc2.Codec.ZSTD
+    assert array.cparams.codec == blosc2.Codec.BLOSCLZ
     assert array.cparams.filters[:2] == [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA]
     np.testing.assert_array_equal(array[:], np.arange(size, dtype=dtype))
 
@@ -110,9 +110,27 @@ def test_ramp_explicit_filters_override_global(constructor, complete, monkeypatc
 
 
 @pytest.mark.parametrize("constructor", ["arange", "linspace"])
+def test_ramp_explicit_and_global_codec(constructor, monkeypatch):
+    explicit = {"codec": blosc2.Codec.ZSTD}
+    array = make_ramp(constructor, cparams=explicit)
+    assert array.cparams.codec == blosc2.Codec.ZSTD
+    assert array.cparams.filters[:2] == [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA]
+    assert explicit == {"codec": blosc2.Codec.ZSTD}
+
+    complete = blosc2.CParams()
+    array = make_ramp(constructor, cparams=complete)
+    assert array.cparams.codec == blosc2.Codec.ZSTD
+
+    monkeypatch.setitem(blosc2.cparams_dflts, "codec", blosc2.Codec.LZ4)
+    array = make_ramp(constructor)
+    assert array.cparams.codec == blosc2.Codec.LZ4
+    assert array.cparams.filters[:2] == [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA]
+
+
+@pytest.mark.parametrize("constructor", ["arange", "linspace"])
 def test_ramp_complex_reshape_defaults(constructor):
     array = make_ramp(constructor, dtype=np.complex128, shape=(4, 6))
-    assert array.cparams.codec == blosc2.Codec.ZSTD
+    assert array.cparams.codec == blosc2.Codec.BLOSCLZ
     assert array.cparams.filters[:2] == [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA]
     np.testing.assert_array_equal(array[:], np.arange(24).reshape(4, 6))
 
@@ -135,5 +153,6 @@ def test_ramp_lazy_storage_remains_deferred(constructor):
 
 def test_other_constructor_filters_unchanged():
     for array in (blosc2.zeros(24), blosc2.ones(24), blosc2.eye(4)):
+        assert array.cparams.codec == blosc2.Codec.ZSTD
         assert array.cparams.filters[-1] == blosc2.Filter.SHUFFLE
         assert blosc2.Filter.BYTEDELTA not in array.cparams.filters
