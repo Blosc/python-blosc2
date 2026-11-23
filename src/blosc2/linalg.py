@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import builtins
 import math
+import operator
 import sys
 import warnings
 from contextlib import nullcontext
@@ -703,7 +704,8 @@ def matrix_transpose(arr: blosc2.Array, **kwargs: Any) -> blosc2.NDArray:
 
 
 def _normalize_moveaxis_axes(axes: int | Sequence[int], ndim: int, argname: str) -> tuple[int, ...]:
-    axes = (axes,) if isinstance(axes, (int, np.integer)) else tuple(axes)
+    axes = (axes,) if isinstance(axes, int | np.integer) else axes
+    axes = tuple(operator.index(ax) for ax in axes)
     for ax in axes:
         if not -ndim <= ax < ndim:
             raise np.exceptions.AxisError(ax, ndim, argname)

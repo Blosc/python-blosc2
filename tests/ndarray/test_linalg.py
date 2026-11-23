@@ -1340,6 +1340,12 @@ def test_moveaxis(shape, source, destination):
     np.testing.assert_array_equal(result[:], expected)
 
 
+@pytest.mark.parametrize(("shape", "source"), [((3, 4, 5), (0.5,)), ((5,), (0.0,))])
+def test_moveaxis_non_integer_raises(shape, source):
+    with pytest.raises(TypeError):
+        blosc2.moveaxis(blosc2.zeros(shape), source, (0,))
+
+
 @pytest.mark.parametrize(
     ("source", "destination", "match"),
     [
