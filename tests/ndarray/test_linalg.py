@@ -1330,6 +1330,8 @@ def test_permute_dims_zero_size():
         ((3, 4, 5), 0, -1),
         ((3, 4, 5), (0, 1), (-1, -2)),
         ((2, 3, 4, 5), [0, 2], [3, 0]),
+        ((2, 0, 3), 0, -1),
+        ((), (), ()),
     ],
 )
 def test_moveaxis(shape, source, destination):
@@ -1337,7 +1339,14 @@ def test_moveaxis(shape, source, destination):
     result = blosc2.moveaxis(blosc2.asarray(na), source, destination)
     expected = np.moveaxis(na, source, destination)
     assert result.dtype == expected.dtype
-    np.testing.assert_array_equal(result[:], expected)
+    np.testing.assert_array_equal(result[()], expected)
+
+
+def test_moveaxis_kwargs():
+    na = np.arange(60, dtype=np.int32).reshape(3, 4, 5)
+    result = blosc2.moveaxis(blosc2.asarray(na), 0, -1, chunks=(2, 2, 2))
+    assert result.chunks == (2, 2, 2)
+    np.testing.assert_array_equal(result[()], np.moveaxis(na, 0, -1))
 
 
 @pytest.mark.parametrize(("shape", "source"), [((3, 4, 5), (0.5,)), ((5,), (0.0,))])
