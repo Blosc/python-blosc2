@@ -342,6 +342,12 @@ class MenudetLazyArray(LazyArray):
         use native workers only when physical blocks exactly match original
         logical partitions. Other string layouts retain general group execution.
         """
+        if kwargs.get("cparams") is None and kwargs.get("out") is None:
+            from .lazyexpr import inherited_operand_cparams
+
+            inherited = inherited_operand_cparams(self.inputs.values(), self.dtype)
+            if inherited is not None:
+                kwargs["cparams"] = inherited
         if item is not None:
             return blosc2.asarray(self._values(item), **kwargs)
         from .storage_readers import compute_storage_if_eligible

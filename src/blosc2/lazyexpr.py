@@ -425,6 +425,121 @@ def _restore_code_unit_shuffle(cparams: blosc2.CParams, dtype) -> None:
             cparams.filters_meta[i] = 4
 
 
+_INITIAL_COMPUTE_CODEC = blosc2.cparams_dflts["codec"]
+_INITIAL_COMPUTE_CLEVEL = blosc2.cparams_dflts["clevel"]
+_INITIAL_COMPUTE_FILTERS = blosc2.cparams_dflts["filters"]
+_INITIAL_COMPUTE_FILTER_VALUES = tuple(_INITIAL_COMPUTE_FILTERS)
+_INITIAL_COMPUTE_ACTIVE_FILTERS = tuple(
+    f for f in _INITIAL_COMPUTE_FILTER_VALUES if f != blosc2.Filter.NOFILTER
+)
+_INHERITABLE_COMPUTE_CODECS = frozenset(
+    {
+        blosc2.Codec.BLOSCLZ,
+        blosc2.Codec.LZ4,
+        blosc2.Codec.LZ4HC,
+        blosc2.Codec.ZLIB,
+        blosc2.Codec.ZSTD,
+    }
+)
+_INHERITABLE_COMPUTE_FILTERS = frozenset(
+    {
+        blosc2.Filter.SHUFFLE,
+        blosc2.Filter.BITSHUFFLE,
+        blosc2.Filter.DELTA,
+        blosc2.Filter.BYTEDELTA,
+    }
+)
+
+
+def _collect_compute_ndarrays(values, ndarrays, seen):
+    """Collect underlying NDArray operands; return False if any non-NDArray array is present."""
+    for value in values:
+        if value is None or isinstance(value, (bool, int, float, complex, str, bytes, np.generic)):
+            continue
+        obj_id = id(value)
+        if obj_id in seen:
+            continue
+        seen.add(obj_id)
+        if isinstance(value, blosc2.NDArray):
+            ndarrays.append(value)
+        elif isinstance(value, LazyExpr):
+            if not _collect_compute_ndarrays(value.operands.values(), ndarrays, seen):
+                return False
+        elif isinstance(value, LazyUDF):
+            if not _collect_compute_ndarrays(value.inputs, ndarrays, seen):
+                return False
+        elif isinstance(value, LazyArray) and hasattr(value, "inputs") and isinstance(value.inputs, dict):
+            if not _collect_compute_ndarrays(value.inputs.values(), ndarrays, seen):
+                return False
+        else:
+            return False
+    return True
+
+
+def inherited_operand_cparams(operands, output_dtype):
+    """Return safe ``(codec, clevel, filters)`` inherited from uniform NDArray operands.
+
+    Returns ``None`` when defaults should apply: global ``blosc2.cparams_dflts``
+    were customized, the output dtype is non-numeric or differs in kind from an
+    operand, operands are non-uniform or include non-NDArray arrays, or any
+    operand uses ``clevel == 0``, dictionaries, or a lossy/non-standard codec
+    or filter.
+    """
+    if output_dtype is None:
+        return None
+    output_dtype = np.dtype(output_dtype)
+    if output_dtype.kind not in "iufc":
+        return None
+    global_filters = blosc2.cparams_dflts["filters"]
+    if (
+        blosc2.cparams_dflts["codec"] != _INITIAL_COMPUTE_CODEC
+        or blosc2.cparams_dflts["clevel"] != _INITIAL_COMPUTE_CLEVEL
+        or global_filters is not _INITIAL_COMPUTE_FILTERS
+        or tuple(global_filters) != _INITIAL_COMPUTE_FILTER_VALUES
+    ):
+        return None
+    ndarrays = []
+    if not _collect_compute_ndarrays(operands, ndarrays, set()) or not ndarrays:
+        return None
+    common = None
+    for arr in ndarrays:
+        if arr.dtype.kind != output_dtype.kind:
+            return None
+        cp = arr.cparams
+        if cp.clevel <= 0 or cp.use_dict or cp.codec not in _INHERITABLE_COMPUTE_CODECS:
+            return None
+        active_filters = tuple(f for f in cp.filters if f != blosc2.Filter.NOFILTER)
+        if not all(f in _INHERITABLE_COMPUTE_FILTERS for f in active_filters):
+            return None
+        candidate = (cp.codec, cp.clevel, active_filters)
+        if common is None:
+            common = candidate
+        elif candidate != common:
+            return None
+    if common == (_INITIAL_COMPUTE_CODEC, _INITIAL_COMPUTE_CLEVEL, _INITIAL_COMPUTE_ACTIVE_FILTERS):
+        return None
+    codec, clevel, active_filters = common
+    return {"codec": codec, "clevel": clevel, "filters": list(active_filters)}
+
+
+def _resolve_lazyudf_cparams(self_kwargs, call_kwargs, inputs, dtype):
+    has_explicit = self_kwargs.get("cparams") is not None or call_kwargs.get("cparams") is not None
+    merged = self_kwargs.get("cparams") or {}
+    merged = asdict(merged) if isinstance(merged, blosc2.CParams) else dict(merged)
+    override = call_kwargs.get("cparams") or {}
+    override = asdict(override) if isinstance(override, blosc2.CParams) else override
+    merged.update(override)
+    if merged:
+        # Only when something was actually asked for: passing an empty dict
+        # still materializes CParams' defaults, whose all-zero filters_meta
+        # overrides the dtype-aware shuffle width (4 for <U, the UCS4 code
+        # unit) that the container would otherwise pick for itself.
+        return merged
+    if not has_explicit and self_kwargs.get("out") is None and call_kwargs.get("out") is None:
+        return inherited_operand_cparams(inputs, dtype)
+    return None
+
+
 def _has_constructor_call(expression: str, constructor: str) -> bool:
     return _constructor_call_patterns[constructor].search(expression) is not None
 
@@ -697,6 +812,14 @@ class LazyArray(ABC, blosc2.Operand):
         kwargs: Any, optional
             Keyword arguments that are supported by the :func:`empty` constructor.
             These arguments will be set in the resulting :ref:`NDArray`.
+            When ``cparams`` is omitted (and global ``blosc2.cparams_dflts``
+            codec/clevel/filters are unchanged), numeric outputs whose
+            ``NDArray`` operands all share the same ``dtype.kind`` and a
+            uniform lossless ``(codec, clevel, filters)`` setting (with
+            ``clevel > 0`` and ``use_dict=False``) inherit that
+            ``(codec, clevel, filters)`` triple; other parameters such as
+            ``typesize``, ``blocksize``, ``filters_meta``, and ``nthreads``
+            are chosen for the output array.
             Additionally, the following special kwargs are supported:
 
             - ``eval_kwargs`` (dict): for :ref:`LazyExpr`, override the expression
@@ -5271,6 +5394,15 @@ class LazyExpr(LazyArray):
         **kwargs,
     ) -> blosc2.NDArray:
         self.__dict__.pop("_native_execution_report", None)
+        if (
+            kwargs.get("cparams") is None
+            and kwargs.get("out") is None
+            and not kwargs.get("_reduce_args")
+            and not kwargs.get("_getitem")
+        ):
+            inherited = inherited_operand_cparams(self.operands.values(), self.dtype)
+            if inherited is not None:
+                kwargs["cparams"] = inherited
         if "ne_args" in kwargs:
             if "eval_kwargs" in kwargs:
                 raise TypeError("Pass only one of 'eval_kwargs' and the legacy 'ne_args' alias")
@@ -6046,21 +6178,9 @@ class LazyUDF(LazyArray):
         aux_kwargs = copy.deepcopy(self.kwargs)
 
         # Update is not recursive
-        aux_cparams = aux_kwargs.get("cparams", {})
-        if isinstance(aux_cparams, blosc2.CParams):
-            # Convert to dictionary
-            aux_cparams = asdict(aux_cparams)
-        cparams = kwargs.get("cparams", {})
-        if isinstance(cparams, blosc2.CParams):
-            # Convert to dictionary
-            cparams = asdict(cparams)
-        aux_cparams.update(cparams)
-        if aux_cparams:
-            # Only when something was actually asked for: passing an empty dict
-            # still materializes CParams' defaults, whose all-zero filters_meta
-            # overrides the dtype-aware shuffle width (4 for <U, the UCS4 code
-            # unit) that the container would otherwise pick for itself.
-            aux_kwargs["cparams"] = aux_cparams
+        resolved_cparams = _resolve_lazyudf_cparams(aux_kwargs, kwargs, self.inputs, self.dtype)
+        if resolved_cparams is not None:
+            aux_kwargs["cparams"] = resolved_cparams
 
         aux_dparams = aux_kwargs.get("dparams", {})
         if isinstance(aux_dparams, blosc2.DParams):

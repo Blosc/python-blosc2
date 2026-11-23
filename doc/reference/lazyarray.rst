@@ -60,7 +60,13 @@ Blosc2 operands, execution follows the requested output storage:
 * ``expr.compute()`` writes directly to Blosc2 chunks through the native
   prefilter. Matching explicit ``chunks``/``blocks`` and a matching Blosc2
   ``out`` buffer remain eligible. Compression and storage options are honored;
-  use ``cparams=blosc2.CParams(clevel=0)`` for uncompressed output.
+  use ``cparams=blosc2.CParams(clevel=0)`` for uncompressed output. When
+  ``cparams`` is omitted (and global ``blosc2.cparams_dflts`` codec/clevel/filters
+  are unchanged), numeric outputs whose ``NDArray`` operands all share the same
+  ``dtype.kind`` and a uniform lossless ``(codec, clevel, filters)`` setting
+  (with ``clevel > 0`` and ``use_dict=False``) inherit that ``(codec, clevel,
+  filters)`` triple; layout and runtime fields (``typesize``, ``blocksize``,
+  ``filters_meta``, ``nthreads``) are still chosen for the output array.
 * ``expr[:]`` returns NumPy values. Above the automatic parallel-map crossover,
   workers decompress and evaluate bounded tiles directly into the final NumPy
   allocation. Matching writable, contiguous NumPy ``out`` buffers can use this
