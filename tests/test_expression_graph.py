@@ -1444,3 +1444,74 @@ def test_simple_proxy_hostile_cached_metadata_rejects_before_hooks(attribute):
     setattr(proxy, attribute, Hostile())
     with pytest.raises(blosc2.UnsafeDeserializationError):
         expr.compute()
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_value"),
+    [
+        ("int(1e9)", 1_000_000_000),
+        ("int(-1e9)", -1_000_000_000),
+        ("int(+2.5)", 2),
+        ("int(10)", 10),
+    ],
+)
+def test_safe_graph_admits_constant_numeric_int_literal(text, expected_value):
+    graph = parse_expression(text)
+    assert graph.root == ("literal", int, expected_value)
+    assert graph.names == frozenset()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "int('10')",
+        "int(x)",
+        "int(True)",
+        "int(1j)",
+        "int(inf)",
+        "int(nan)",
+        "int(1e309)",
+        "int()",
+        "int(10, 2)",
+        "int(x=10)",
+        "np.int(10)",
+        "blosc2.int(10)",
+        "x.int(10)",
+        "int(1 + 2)",
+        "int(sin(1))",
+    ],
+)
+def test_safe_graph_rejects_non_constant_or_non_bare_int(text):
+    with pytest.raises(blosc2.UnsafeDeserializationError):
+        parse_expression(text)
+    with pytest.raises(blosc2.UnsafeDeserializationError):
+        blosc2.lazyexpr(text, {"x": np.arange(3)})
+
+
+def test_safe_linspace_with_int_and_pow(tmp_path):
+    expr10 = blosc2.lazyexpr("sin(linspace(0, 1, int(10)))")
+    assert expr10.shape == (10,)
+    assert expr10.dtype == np.float64
+    np.testing.assert_allclose(expr10.compute()[:], np.sin(np.linspace(0, 1, 10)))
+
+    x = blosc2.ones(10, urlpath=tmp_path / "x.b2nd", mode="w")
+    saved_expr = blosc2.lazyexpr("x + sin(linspace(0, 1, int(10)))", {"x": x})
+    path = tmp_path / "linspace_int.b2nd"
+    saved_expr.save(path)
+    loaded = blosc2.open(path, deserialize="safe")
+    np.testing.assert_allclose(loaded.compute()[:], 1 + np.sin(np.linspace(0, 1, 10)))
+
+    expr_pow = blosc2.lazyexpr("sin(linspace(0, 1, 10**2))")
+    assert expr_pow.shape == (100,)
+    np.testing.assert_allclose(expr_pow.compute()[:], np.sin(np.linspace(0, 1, 100)))
+
+    expr_big = blosc2.lazyexpr("sin(linspace(0, 1, int(1e9)))")
+    assert expr_big.shape == (1_000_000_000,)
+    assert expr_big.dtype == np.float64
+    expected_head = np.sin(np.arange(5, dtype=np.float64) / (1_000_000_000 - 1))
+    np.testing.assert_allclose(expr_big[:5], expected_head)
+
+    expr_big_pow = blosc2.lazyexpr("sin(linspace(0, 1, 10**9))")
+    assert expr_big_pow.shape == (1_000_000_000,)
+    assert expr_big_pow.dtype == np.float64
+    np.testing.assert_allclose(expr_big_pow[:5], expected_head)

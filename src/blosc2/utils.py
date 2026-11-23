@@ -580,6 +580,32 @@ REDUCTIONS = {  # ignore out arg
 
 
 # --- AST Shape Inferencer ---
+def _safe_pow(left, right):
+    """Evaluate bounded constant exponentiation for static shape inference."""
+    if (
+        isinstance(left, bool | np.bool_)
+        or isinstance(right, bool | np.bool_)
+        or not isinstance(left, int | float | np.integer | np.floating)
+        or not isinstance(right, int | float | np.integer | np.floating)
+    ):
+        return None
+    left_val = int(left) if isinstance(left, int | np.integer) else float(left)
+    right_val = int(right) if isinstance(right, int | np.integer) else float(right)
+    if not (math.isfinite(left_val) and math.isfinite(right_val)):
+        return None
+    if abs(right_val) > 1024:
+        return None
+    if right_val > 0 and abs(left_val) > 1 and right_val * math.log2(abs(left_val)) > 63:
+        return None
+    try:
+        res = left_val**right_val
+    except Exception:
+        return None
+    if isinstance(res, int | float) and not isinstance(res, bool) and math.isfinite(res):
+        return res
+    return None
+
+
 class ShapeInferencer(ast.NodeVisitor):
     def __init__(self, shapes):
         self.shapes = shapes
@@ -679,6 +705,8 @@ class ShapeInferencer(ast.NodeVisitor):
 
         # --- Handle builtins that return scalars or slices ---
         if base_name in ("slice", "len"):
+            return ()
+        if isinstance(node.func, ast.Name) and node.func.id == "int":
             return ()
 
         # ------- handle linear algebra ---------------
@@ -864,8 +892,26 @@ class ShapeInferencer(ast.NodeVisitor):
                     return left / right
                 if isinstance(node.op, ast.Mod):
                     return left % right
+                if isinstance(node.op, ast.Pow):
+                    return _safe_pow(left, right)
             except Exception:
                 return None
+            return None
+
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "int"
+            and len(node.args) == 1
+            and not node.keywords
+        ):
+            val = self._lookup_value(node.args[0])
+            if (
+                isinstance(val, int | float | np.integer | np.floating)
+                and not isinstance(val, bool | np.bool_)
+                and math.isfinite(val)
+            ):
+                return int(val)
             return None
 
         # fallback

@@ -2884,3 +2884,29 @@ def test_frame_backed_inmemory_operands(source):
     b = blosc2.asarray(na * 2, chunks=(3, 4), blocks=(1, 2))
     np.testing.assert_array_equal((a + 1)[:], na + 1)
     np.testing.assert_array_equal((a + b).compute()[:], na * 3)
+
+
+def test_str_linspace_int_and_pow():
+    from blosc2.utils import infer_shape
+
+    expr10 = blosc2.lazyexpr("sin(linspace(0, 1, int(10)))")
+    assert expr10.shape == (10,)
+    assert expr10.dtype == np.float64
+    np.testing.assert_allclose(expr10.compute()[:], np.sin(np.linspace(0, 1, 10)))
+
+    expr_pow = blosc2.lazyexpr("sin(linspace(0, 1, 10**2))")
+    assert expr_pow.shape == (100,)
+    np.testing.assert_allclose(expr_pow.compute()[:], np.sin(np.linspace(0, 1, 100)))
+
+    expr_big = blosc2.lazyexpr("sin(linspace(0, 1, int(1e9)))")
+    assert expr_big.shape == (1_000_000_000,)
+    assert expr_big.dtype == np.float64
+    expected_head = np.sin(np.arange(5, dtype=np.float64) / (1_000_000_000 - 1))
+    np.testing.assert_allclose(expr_big[:5], expected_head)
+
+    assert infer_shape("zeros(int(1e3))", {}) == (1000,)
+    assert infer_shape("arange(int(1e2))", {}) == (100,)
+    assert infer_shape("zeros((2**3, 10**2))", {}) == (8, 100)
+    assert infer_shape("a[:int(1e2)]", {"a": (1000,)}) == (100,)
+    with pytest.raises(ValueError, match="linspace requires either shape or num argument"):
+        infer_shape("linspace(0, 1, 10**1000000)", {})

@@ -1356,6 +1356,24 @@ def arithmetic_names(text):  # noqa: C901 -- explicit arithmetic node admission
     return tuple(sorted(names))
 
 
+def _constant_int_argument(node):
+    """Return an integer for a bare numeric literal (optionally signed), else None."""
+    if isinstance(node, ast.Constant):
+        if type(node.value) in (int, float) and math.isfinite(node.value):
+            return int(node.value)
+        return None
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        operand = node.operand
+        if (
+            isinstance(operand, ast.Constant)
+            and type(operand.value) in (int, float)
+            and math.isfinite(operand.value)
+        ):
+            value = -operand.value if isinstance(node.op, ast.USub) else operand.value
+            return int(value)
+    return None
+
+
 @functools.lru_cache(maxsize=512)
 def parse_expression(text):  # noqa: C901
     """Compile a bounded expression to an immutable, explicitly registered graph."""
@@ -1426,6 +1444,15 @@ def parse_expression(text):  # noqa: C901
             if node.attr in _ATTRIBUTES:
                 return ("attribute", node.attr, child(node.value))
         if isinstance(node, ast.Call):
+            if (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "int"
+                and len(node.args) == 1
+                and not node.keywords
+            ):
+                constant = _constant_int_argument(node.args[0])
+                if constant is not None:
+                    return ("literal", int, constant)
             method = False
             namespace_name = None
             positional = tuple(child(x) for x in node.args)
