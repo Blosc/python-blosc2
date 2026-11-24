@@ -61,6 +61,19 @@ static inline int b2_moments_combine(const double *partials, int64_t count,
 #endif
 }
 
+static inline int b2_moments_merge_chunk(double *acc, const double *partials,
+                                         int64_t count) {
+#if B2_HAVE_MOMENTS
+  for (int64_t i = 0; i < count; i++) {
+    if (!me_moments_merge(acc, partials + 4 * i)) return -1;
+  }
+  return 0;
+#else
+  (void)acc; (void)partials; (void)count;
+  return -1;
+#endif
+}
+
 enum {
   B2_REDUCE_NONE = 0,
   B2_REDUCE_SUM,

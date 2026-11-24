@@ -52,7 +52,7 @@ def test_moments_dispatch(op, dtype, mapped, monkeypatch):
         assert report["route"] == "parallel-prefilter-moments"
         assert report["identity_map_skipped"] == (not mapped)
         assert report["input_materialization_bytes"] == 0
-        assert report["reduction_buffer_bytes"] == 101 * 32
+        assert report["reduction_buffer_bytes"] == 10 * 32
 
 
 def test_moments_keepdims_out_and_axis():
@@ -74,7 +74,7 @@ def test_moments_fallback_and_no_replay(monkeypatch):
 
     def fail(self, *args, **kwargs):
         # A moments slot is four doubles, not one scalar per block.
-        if kwargs.get("reduction_out") is not None and kwargs["reduction_out"].size == 400:
+        if kwargs.get("reduction_out") is not None and kwargs["reduction_out"].size == 4:
             raise RuntimeError("moments execution probe")
         return original(self, *args, **kwargs)
 
@@ -110,9 +110,11 @@ def test_moments_output_validation():
     plan, inputs, _ = lower_native_graph(blosc2.lazyexpr("a + b", {"a": array, "b": source}))
     artifact = plan._handle.reduction_artifact()
     with pytest.raises(ValueError, match="overlap"):
-        artifact.evaluate_prefilter(inputs, _reduction_op="moments", _reduction_out=source)
+        artifact.evaluate_prefilter(inputs, _reduction_op="moments", _reduction_out=source[:4])
     with pytest.raises(ValueError, match="output"):
         artifact.evaluate_prefilter(inputs, _reduction_op="moments", _reduction_out=np.empty(2))
+    with pytest.raises(ValueError, match="output"):
+        artifact.evaluate_prefilter(inputs, _reduction_op="moments", _reduction_out=np.empty(8))
 
 
 def test_mean_uses_accelerated_sum(monkeypatch):
@@ -137,7 +139,12 @@ def test_mean_uses_accelerated_sum(monkeypatch):
 def test_moments_metadata_fallback(gate):
     from blosc2.native_graph import compute_prefilter_moments_if_eligible
 
-    array = blosc2.arange(33001 if gate == "scratch" else 1003, dtype=np.float64, chunks=(100,), blocks=(1,))
+    array = blosc2.arange(
+        33001 if gate == "scratch" else 1003,
+        dtype=np.float64,
+        chunks=(33001 if gate == "scratch" else 100,),
+        blocks=(1,),
+    )
     expr = blosc2.lazyexpr("a", {"a": array})
     assert (
         compute_prefilter_moments_if_eligible(
@@ -152,3 +159,16 @@ def test_moments_metadata_fallback(gate):
         )
         is None
     )
+
+
+def test_moments_streams_across_many_chunks():
+    values = (np.arange(33001) % 113).astype(np.float64)
+    array = blosc2.asarray(values, chunks=(100,), blocks=(1,))
+    for op in ("var", "std"):
+        expr = blosc2.lazyexpr("a", {"a": array})
+        result = getattr(expr, op)(ddof=1)
+        expected = getattr(np, op)(values, ddof=1)
+        np.testing.assert_allclose(result, expected, rtol=1e-12)
+        report = expr._native_execution_report
+        assert report["route"] == "parallel-prefilter-moments"
+        assert report["reduction_buffer_bytes"] == 100 * 32

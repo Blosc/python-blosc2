@@ -1308,8 +1308,8 @@ def compute_prefilter_moments_if_eligible(
         or (dtype is not None and np.dtype(dtype) != expr.dtype)
     ):
         return None
-    count = (first.size + first.blocks[0] - 1) // first.blocks[0]
-    if count * 32 > 1024 * 1024:
+    blocks_per_chunk = first.chunks[0] // first.blocks[0]
+    if blocks_per_chunk * 32 > 1024 * 1024:
         return None
     if any(
         type(value) not in (blosc2.NDArray, np.ndarray)
@@ -1350,14 +1350,13 @@ def compute_prefilter_moments_if_eligible(
     partials, report = artifact.evaluate_prefilter(
         inputs,
         _reduction_op="moments",
-        _reduction_out=np.empty(count * 4, dtype=np.float64),
+        _reduction_out=np.empty(4, dtype=np.float64),
         _nthreads=min(blosc2.nthreads, max(1, first.chunks[0] // 65536)),
     )
     result, flags = blosc2.blosc2_ext.menudet_combine_moments(partials, ddof, stddev, expr.dtype)
     report["fp_flags"] |= flags
     report.update(
         route="parallel-prefilter-moments",
-        reduction_buffer_bytes=partials.nbytes,
         input_materialization_bytes=0,
     )
     expr._native_execution_report = report

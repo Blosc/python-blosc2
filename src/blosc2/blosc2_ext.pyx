@@ -1246,6 +1246,7 @@ cdef extern from "block_reductions.h":
     int b2_shared_reduction_rules_available() noexcept nogil
     int b2_moments_available() noexcept nogil
     int b2_moments_combine(const double *, int64_t, double, int, double *) noexcept nogil
+    int b2_moments_merge_chunk(double *, const double *, int64_t) noexcept nogil
     int b2_argextrema(int, const void *, int64_t, int64_t, int, void *, int64_t *) noexcept nogil
     int b2_argextrema_combine(int, const void *, const int64_t *, int64_t, int, int64_t *) noexcept nogil
 
@@ -1657,7 +1658,9 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
                     strcpy(error.message, "Menudet prefilter index reduction failed")
             elif b2_block_reduce(state.reduction_op, state.reduction_src_type, state.reduction_acc_type,
                                 destination, count,
-                                state.reduction_output + block_id * state.reduction_acc_itemsize):
+                                state.reduction_output + (
+                                    params.nblock if state.reduction_op == B2_REDUCE_MOMENTS else block_id
+                                ) * state.reduction_acc_itemsize):
                 rc = -4
                 strcpy(error.message, "Menudet prefilter block reduction failed")
     if state.pairwise_sum or state.reduction_output != NULL:
@@ -2818,8 +2821,8 @@ cdef class MenudetArtifactHandle:
             if (type(_reduction_out) is not np.ndarray
                     or (_reduction_out.shape != () if _pairwise_sum else (
                         _reduction_out.ndim != 1
-                        or _reduction_out.size != ((first.size + block_items - 1) // block_items)
-                        * (4 if reduction_op == B2_REDUCE_MOMENTS else 1)))
+                        or _reduction_out.size != (4 if reduction_op == B2_REDUCE_MOMENTS
+                                                   else (first.size + block_items - 1) // block_items)))
                     or not _reduction_out.flags.c_contiguous or not _reduction_out.flags.aligned
                     or not _reduction_out.flags.writeable):
                 raise ValueError("Prefilter reduction output must be a 1-D writable aligned C-contiguous array")
@@ -8137,6 +8140,9 @@ cdef class NDArray:
         cdef np.ndarray sum_leaves, sum_fragments
         cdef int64_t sum_origin, sum_count, sum_prefix, sum_full, sum_suffix, sum_block
         cdef b2_fp_env sum_environment
+        cdef np.ndarray moments_partials = None
+        cdef double moments_state[4]
+        cdef int64_t moments_origin, moments_remaining, moments_chunk_blocks
         if chunk_range is not None:
             begin, end = chunk_range
         memset(&state, 0, sizeof(state))
@@ -8177,13 +8183,17 @@ cdef class NDArray:
         if numpy_out is not None:
             state.numpy_output = <uint8_t *>numpy_out.data
         if reduction_out is not None:
-            state.reduction_output = <uint8_t *>reduction_out.data
             state.reduction_op = reduction_op
             state.reduction_src_type = reduction_src_type
             state.reduction_acc_type = reduction_acc_type
             state.reduction_acc_itemsize = reduction_out.dtype.itemsize
             if reduction_op == B2_REDUCE_MOMENTS:
                 state.reduction_acc_itemsize *= 4
+                memset(moments_state, 0, sizeof(moments_state))
+                moments_partials = np.empty((state.chunk_items // state.block_items) * 4, dtype=np.float64)
+                state.reduction_output = <uint8_t *>moments_partials.data
+            else:
+                state.reduction_output = <uint8_t *>reduction_out.data
         state.pairwise_sum = pairwise_sum
         state.identity_map = identity_map
         state.arg_indices = <int64_t *>arg_indices.data if arg_indices is not None else NULL
@@ -8368,6 +8378,25 @@ cdef class NDArray:
                             raise RuntimeError("Cannot restore pairwise merge floating environment")
                         if rc:
                             raise RuntimeError("Native pairwise merge failed")
+                    elif reduction_op == B2_REDUCE_MOMENTS:
+                        if b2_fp_hold(&sum_environment):
+                            raise RuntimeError("Cannot isolate moments merge floating environment")
+                        rc = 0
+                        with nogil:
+                            moments_origin = chunk * state.chunk_items
+                            moments_remaining = min(state.chunk_items, state.size - moments_origin)
+                            if moments_remaining > 0:
+                                moments_chunk_blocks = (moments_remaining + state.block_items - 1) // state.block_items
+                                rc = b2_moments_merge_chunk(
+                                    moments_state,
+                                    <const double *>moments_partials.data,
+                                    moments_chunk_blocks,
+                                )
+                        state.workers[0].fp_flags |= b2_pairwise_flags()
+                        if b2_fp_restore(&sum_environment):
+                            raise RuntimeError("Cannot restore moments merge floating environment")
+                        if rc:
+                            raise RuntimeError("Native moments merge failed")
             except Exception:
                 menudet_prefilter_merge(&state)
                 if state.status:
@@ -8385,6 +8414,8 @@ cdef class NDArray:
                     raise RuntimeError("Cannot restore pairwise finalization floating environment")
                 if rc:
                     raise RuntimeError("Native pairwise finalization failed")
+            elif reduction_op == B2_REDUCE_MOMENTS:
+                memcpy(reduction_out.data, moments_state, sizeof(moments_state))
         finally:
             if self.array.sc.cctx != NULL:
                 blosc2_free_ctx(self.array.sc.cctx)
@@ -8412,8 +8443,11 @@ cdef class NDArray:
                           "identity_map_skipped": bool(identity_map),
                           "summation": "fixed-pairwise" if pairwise_sum else None,
                           "logical_leaf_items": B2_PAIRWISE_LEAF_ITEMS if pairwise_sum else None,
-                          "reduction_buffer_bytes": (sum_leaves.nbytes + sum_fragments.nbytes
-                                                     + sizeof(b2_pairwise_state) if pairwise_sum else 0),
+                          "reduction_buffer_bytes": (
+                              sum_leaves.nbytes + sum_fragments.nbytes + sizeof(b2_pairwise_state)
+                              if pairwise_sum
+                              else (moments_partials.nbytes if reduction_op == B2_REDUCE_MOMENTS else 0)
+                          ),
                           "processed_chunks": processed_chunks,
                          "output_destination": ("reduction" if reduction_out is not None
                                                 else ("numpy" if numpy_out is not None else "blosc2")),
