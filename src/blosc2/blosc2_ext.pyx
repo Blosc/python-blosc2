@@ -2603,13 +2603,12 @@ cdef class MenudetArtifactHandle:
             raise NotImplementedError("Build with direct miniexpr preparation support")
         if b'\x00' in source or b'\x00' in version or len(source) > 1024 * 1024:
             raise ValueError("Invalid Menudet source length or embedded NUL")
-        import ast
         import msgpack
-        from .menudet_recipe import validate_menudet_recipe
+        from .menudet_recipe import strip_header_pragmas, validate_menudet_recipe
 
         if recipe is not None:
             recipe = validate_menudet_recipe(recipe)
-            if ast.dump(ast.parse(source)) != ast.dump(ast.parse(recipe["source"])):
+            if strip_header_pragmas(source) != strip_header_pragmas(recipe["source"]):
                 raise ValueError("Authored recipe does not match the prepared source")
         cdef size_t n = len(inputs), nc = len(captures), i
         if n + nc > 128:

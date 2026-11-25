@@ -125,6 +125,20 @@ def passive_recipe_value(value, depth=0, budget=None):
     return False
 
 
+def strip_header_pragmas(source):
+    """Strip leading comment/pragma and blank lines so pragma injection stays transparent."""
+    if isinstance(source, bytes):
+        source = source.decode("utf-8")
+    lines = source.splitlines(keepends=True)
+    index = 0
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if stripped and not stripped.startswith("#"):
+            break
+        index += 1
+    return "".join(lines[index:])
+
+
 def _parse_recipe_header(source):
     """Parse only the portable def header so native DSL bodies like `!x` stay intact."""
     from .menudet_kernel import MenudetError
