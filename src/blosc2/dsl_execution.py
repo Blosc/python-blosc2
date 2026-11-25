@@ -146,7 +146,13 @@ def evaluate_dsl_udf(udf, item, *, getitem, options):  # noqa: C901 -- explicit 
         try:
             kernel = prepare_menudet_kernel(source, input_dtypes, udf.dtype, **prepare_options)
         except MenudetError as error:
-            if "return cardinality" not in str(error):
+            if error.status != "binding_error" or not any(
+                text in str(error)
+                for text in (
+                    "return cardinality",
+                    "declared elementwise result disagrees with block scalar source",
+                )
+            ):
                 raise RuntimeError(f"Menudet compilation failed for DSL kernel: {error}") from error
             kernel = prepare_menudet_kernel(
                 source, input_dtypes, udf.dtype, cardinality="block_scalar", **prepare_options

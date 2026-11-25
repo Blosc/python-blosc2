@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import copy
 import json
 import math
 import os
@@ -236,7 +237,8 @@ def capture_analysis(source, names):
     """Analyze fixed author syntax without resolving or validating captures."""
     tree = ast.parse(source)
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef))
-    nodes = tuple(ast.walk(function))
+    # Annotations are authored types, not executable capture expressions.
+    nodes = tuple(node for statement in function.body for node in ast.walk(statement))
     local = set(names) | {
         node.id for node in nodes if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
     }
@@ -282,7 +284,7 @@ def _export_captures(func, source, names, capture_dtypes, version="0.1", *, anal
             candidate = f"_capture_{index}"
         occupied.add(candidate)
         scalar = menudet_scalar_descriptor(name, scope[name], capture_dtypes.get(name))
-        if version == "0.1" and scalar["dtype"] not in {"bytes", "unicode32"}:
+        if version in {"0.1", "0.2"} and scalar["dtype"] not in {"bytes", "unicode32"}:
             scalar["category"] = (
                 "weak"
                 if type(scope[name]) in (bool, int, float) and name not in capture_dtypes
@@ -320,7 +322,7 @@ def _header_pragmas(source):
     return values
 
 
-def _artifact_semantics(source, version, casting):
+def menudet_semantics(source, version, casting):
     """Build validated semantic fields while leaving omissions as inheritance."""
     pragmas = _header_pragmas(source)
     semantics = {**({"numeric": "numpy-2.5", "casting": casting} if version == "0.1" else {})}
@@ -363,13 +365,13 @@ def prepare_menudet_kernel(
     ndim=0,
     jit=False,
 ):
-    """Build and import once, retaining native validation for export and specialization.
+    """Prepare once from a reusable recipe, without serialization.
 
     ``output_dtype=None`` requests metadata-only native result inference under the
-    declared input signatures and casting policy. The returned kernel retains an
-    artifact text with the inferred concrete output dtype.
+    declared input signatures and casting policy. Inferred types belong to the
+    specialization, never to the reusable authored recipe.
     """
-    if version != "0.1":
+    if version not in {"0.1", "0.2"}:
         raise MenudetError("Unsupported artifact version", status="unsupported_version")
     if casting not in {"safe", "same_kind", "unsafe"}:
         raise MenudetError("Unsupported Menudet casting policy", status="unsupported_requirement")
@@ -387,12 +389,11 @@ def prepare_menudet_kernel(
     encoded = [
         menudet_scalar_descriptor(name, value, captures.get(name)) for name, value in constants.items()
     ]
-    if version == "0.1":
-        for scalar, (name, value) in zip(encoded, constants.items(), strict=True):
-            if scalar["dtype"] not in {"bytes", "unicode32"}:
-                scalar["category"] = (
-                    "weak" if type(value) in (bool, int, float) and name not in captures else "typed_scalar"
-                )
+    for scalar, (name, value) in zip(encoded, constants.items(), strict=True):
+        if scalar["dtype"] not in {"bytes", "unicode32"}:
+            scalar["category"] = (
+                "weak" if type(value) in (bool, int, float) and name not in captures else "typed_scalar"
+            )
     used = set(constants) & set(captures)
     if kernel.func is not None:
         source, captured, extra = _export_captures(
@@ -411,86 +412,21 @@ def prepare_menudet_kernel(
         raise MenudetError("Invalid return/context contract", status="binding_error")
     if metadata is not None and not isinstance(metadata, Mapping):
         raise TypeError("metadata must be a mapping")
-    # This finite superset grants no unsupported operations: native typed import
-    # validates the entire normalized source before this export can succeed.
-    semantics, requires = _artifact_semantics(source, version, casting)
-    manifest = {
-        "schema_version": version,
-        "language": {"name": "menudet", "version": version},
-        "requires": requires,
+    recipe = {
+        "version": 1,
+        "language_version": version,
         "source": source,
         "entry_point": kernel.__name__,
-        "inputs": [
-            {"name": name, **menudet_dtype_descriptor(inputs[name])} for name in names if name in inputs
-        ],
+        "inputs": [name for name in names if name in inputs],
         "constants": sorted(encoded, key=lambda item: item["name"]),
-        "output": (
-            {**menudet_dtype_descriptor(output_dtype), "contract": cardinality}
-            if output_dtype is not None
-            else {"dtype": "auto", "contract": cardinality}
-        ),
-        "semantics": semantics,
-        "context": {"ndim": ndim},
+        "output": None if output_dtype is None else menudet_dtype_descriptor(output_dtype),
+        "cardinality": cardinality,
+        "ndim": ndim,
+        "casting": casting,
         "metadata": dict(metadata or {}),
+        "input_constraints": copy.deepcopy(getattr(kernel, "input_constraints", {})),
     }
-    artifact = (
-        json.dumps(manifest, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-        + "\n"
-    )
-    if output_dtype is not None:
-        return MenudetKernel.from_json(artifact, jit=jit)
-    try:
-        return MenudetKernel.from_json(artifact, jit=jit, infer_output=True)
-    except NotImplementedError:
-        return _prepare_inferred_fallback(
-            kernel,
-            input_dtypes,
-            capture_dtypes=capture_dtypes,
-            constants=constants,
-            metadata=metadata,
-            version=version,
-            casting=casting,
-            cardinality=cardinality,
-            ndim=ndim,
-            jit=jit,
-        )
-
-
-def _prepare_inferred_fallback(
-    kernel,
-    input_dtypes,
-    *,
-    capture_dtypes,
-    constants,
-    metadata,
-    version,
-    casting,
-    cardinality,
-    ndim,
-    jit,
-):
-    """Infer through a float64 probe when the native auto-output loader is absent."""
-    probe = prepare_menudet_kernel(
-        kernel,
-        input_dtypes,
-        "float64",
-        capture_dtypes=capture_dtypes,
-        constants=constants,
-        metadata=metadata,
-        version=version,
-        casting=casting,
-        cardinality=cardinality,
-        ndim=ndim,
-        jit=jit,
-    )
-    output = probe.inferred_dtype
-    if output is None:
-        raise MenudetError(
-            "Native output inference is unavailable", status="unsupported_requirement"
-        ) from None
-    if output == probe.output_dtype:
-        return probe
-    return MenudetKernel.from_json(_artifact_with_output(probe.to_json(), output), jit=jit)
+    return MenudetKernel.from_recipe(recipe, inputs, jit=jit)
 
 
 def _artifact_with_output(artifact, output_dtype):
@@ -594,7 +530,11 @@ def _execution_artifact(data, options, environment):  # noqa: C901 -- preserve n
         return result
 
     try:
-        manifest = json.loads(data.decode("utf-8"), object_pairs_hook=unique_object)
+        manifest = (
+            copy.deepcopy(data)
+            if isinstance(data, dict)
+            else json.loads(data.decode("utf-8"), object_pairs_hook=unique_object)
+        )
     except (ValueError, UnicodeError):
         return data, None  # Preserve native artifact validation/error reporting.
     if not isinstance(manifest, dict) or not isinstance(manifest.get("source"), str):
@@ -661,7 +601,11 @@ def _execution_artifact(data, options, environment):  # noqa: C901 -- preserve n
         return data, authored
     manifest["source"] = (f"# me:compiler={backend}\n" if add_compiler else "") + "".join(lines)
     try:
-        return json.dumps(manifest, ensure_ascii=False, allow_nan=False).encode("utf-8"), authored
+        return (
+            manifest
+            if isinstance(data, dict)
+            else json.dumps(manifest, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        ), authored
     except (ValueError, UnicodeError):
         return data, authored  # Invalid numeric/Unicode content is still rejected natively.
 
@@ -689,7 +633,7 @@ def _accuracy_artifact(data, authored, options, environment):
         if preferred == "sleef":
             fields["ulp"] = "u35"
     try:
-        manifest = json.loads(data)
+        manifest = copy.deepcopy(data) if isinstance(data, dict) else json.loads(data)
         semantics, source, requires = manifest["semantics"], manifest["source"], manifest["requires"]
         if not isinstance(semantics, dict) or not isinstance(source, str) or not isinstance(requires, list):
             return data, (), False
@@ -712,7 +656,12 @@ def _accuracy_artifact(data, authored, options, environment):
         semantics.update(fields)
         if "flexible-math" not in requires:
             requires.append("flexible-math")
-        return json.dumps(manifest, ensure_ascii=False, allow_nan=False).encode(), fields, backend != "sleef"
+        document = (
+            manifest
+            if isinstance(data, dict)
+            else json.dumps(manifest, ensure_ascii=False, allow_nan=False).encode()
+        )
+        return document, fields, backend != "sleef"
     except (KeyError, TypeError, ValueError, UnicodeError):
         return data, (), False
 
@@ -725,6 +674,128 @@ class MenudetKernel:
     reopen them with :func:`blosc2.open`. Eager inputs are same-shaped logical
     arrays, bound by name.
     """
+
+    @classmethod
+    def from_recipe(cls, recipe, input_dtypes, *, jit=None):
+        """Specialize a reusable recipe against caller-supplied input types."""
+        from . import blosc2_ext, jit_config
+        from .menudet_recipe import (
+            recipe_capture,
+            recipe_dtype,
+            recipe_manifest,
+            validate_menudet_recipe,
+        )
+
+        recipe = validate_menudet_recipe(recipe)
+        if jit is not None and type(jit) is not bool:
+            raise TypeError("jit must be True, False, or None")
+        inputs = _mapping(input_dtypes, "input_dtypes")
+        if set(inputs) != set(recipe["inputs"]):
+            raise MenudetError("Recipe input names disagree with bindings", status="binding_error")
+        inputs = {name: np.dtype(inputs[name]).newbyteorder("=") for name in recipe["inputs"]}
+        for name, constraint in recipe.get("input_constraints", {}).items():
+            if inputs[name] != recipe_dtype(constraint):
+                raise MenudetError(
+                    f"Input {name!r} violates its saved dtype constraint", status="binding_error"
+                )
+        constants = [recipe_capture(item) for item in recipe["constants"]]
+        options = jit_config.configured_execution_options()
+        environment = menudet_execution_environment()
+        manifest = recipe_manifest(recipe, inputs)
+        authored = _authored_execution(manifest["semantics"], _header_pragmas(recipe["source"]))
+        runtime, _ = _execution_artifact(manifest, options, environment)
+        preferred, accuracy_fields, optional_backend = _accuracy_artifact(
+            runtime, authored, options, environment
+        )
+        policy = options["jit"] if jit is None else jit
+        if policy is None and os.environ.get("BLOSC_ME_JIT", "").lower() in ("1", "true", "on", "tcc", "cc"):
+            policy = True
+        mode = 3 if policy is None else 1 if policy else 2
+        output = None if recipe["output"] is None else recipe_dtype(recipe["output"])
+
+        def load(document):
+            source = document["source"]
+            pragmas = _header_pragmas(source)
+            # Preserve existing scoped/environment policy without serializing
+            # it into the reusable authored recipe.
+            for key in ("fp", "math", "ulp"):
+                value = document["semantics"].get(key, environment.get(key))
+                if key == "math" and value is None:
+                    value = options["math_backend"]
+                if value is not None and value != "scalar" and key not in pragmas:
+                    source = f"# me:{key}={value}\n" + source
+            args = (
+                recipe["language_version"].encode(),
+                source.encode("utf-8"),
+                inputs,
+                constants,
+                output,
+                recipe["cardinality"],
+                recipe["ndim"],
+                recipe["casting"],
+                mode,
+                recipe,
+            )
+            if "math" in environment and options["math_backend"] is not None:
+                with jit_config.compute_options(math_backend=None):
+                    return blosc2_ext.MenudetArtifactHandle.prepare_source(*args)
+            return blosc2_ext.MenudetArtifactHandle.prepare_source(*args)
+
+        try:
+            handle = load(preferred)
+        except MenudetError as error:
+            if not optional_backend or "requested math backend 'sleef' is unavailable" not in str(error):
+                raise
+            handle = load(runtime)
+            accuracy_fields = ()
+        instance = cls.__new__(cls)
+        instance._handle = instance._expression_handle = handle
+        instance._info = {**handle.info(), **handle.descriptor_info()}
+        instance._recipe = recipe
+        instance._artifact = instance._expression_artifact = None
+        instance._execution_policy = authored, options, environment, accuracy_fields
+        instance._execution_info = None
+        if jit_config.trace_enabled():
+            _trace_execution(instance.entry_point, instance.execution_info)
+        return instance
+
+    def to_recipe(self):
+        """Export author constraints, not the dtypes inferred on the first call."""
+        if hasattr(self, "_recipe"):
+            if not self._handle.recipe_matches(self._recipe):
+                raise ValueError("Menudet kernel provenance changed; construct a new kernel")
+            return copy.deepcopy(self._recipe)
+        # A v1 import is a fixed contract. It cannot tell us which types its
+        # author declared versus inferred, so preserve all of them explicitly.
+        manifest = json.loads(self.to_json())
+        source = manifest["source"]
+        pragmas = _header_pragmas(source)
+        for key in ("fp", "math", "ulp"):
+            if key in manifest["semantics"] and key not in pragmas:
+                source = f"# me:{key}={manifest['semantics'][key]}\n" + source
+        output = {key: value for key, value in manifest["output"].items() if key != "contract"}
+        return {
+            "version": 1,
+            "language_version": manifest["language"]["version"],
+            "source": source,
+            "entry_point": manifest["entry_point"],
+            "inputs": [item["name"] for item in manifest["inputs"]],
+            "input_constraints": {
+                item["name"]: {key: value for key, value in item.items() if key != "name"}
+                for item in manifest["inputs"]
+            },
+            "constants": manifest["constants"],
+            "output": output,
+            "cardinality": manifest["output"]["contract"],
+            "ndim": manifest["context"]["ndim"],
+            "casting": manifest["semantics"]["casting"],
+            "metadata": manifest.get("metadata", {}),
+            "semantics": {
+                key: manifest["semantics"][key]
+                for key in ("integer_powers",)
+                if key in manifest["semantics"]
+            },
+        }
 
     @classmethod
     def from_json(cls, artifact, *, jit=None, infer_output=False):
@@ -845,7 +916,13 @@ class MenudetKernel:
         }
 
     @property
+    def language_version(self):
+        """Version of the authored Menudet source, independent of storage format."""
+        return self._recipe["language_version"] if hasattr(self, "_recipe") else "0.1"
+
+    @property
     def schema_version(self):
+        """Legacy descriptor-adapter version; not the enclosing b2o version."""
         return self._info.get("schema_version", "0.1")
 
     @property
@@ -862,8 +939,24 @@ class MenudetKernel:
         return self._info.get("native_partitionable")
 
     def to_json(self):
-        """Return the original validated JSON text, without dropping metadata."""
-        return self._artifact.decode("utf-8")
+        """Explicit fixed-signature v1 export; normal preparation needs no JSON."""
+        if self._artifact is not None:
+            return self._artifact.decode("utf-8")
+        from .menudet_recipe import recipe_manifest, unannotated_menudet_source
+
+        manifest = recipe_manifest(self._recipe, self.input_dtypes, self.output_dtype)
+        # v1 has no annotation syntax; its concrete signature preserves this
+        # specialization's contract instead. An annotated weak capture became
+        # strong during 0.2 typing; preserve that strength when erasing syntax.
+        function = ast.parse(manifest["source"]).body[0]
+        annotated = {arg.arg for arg in function.args.args if arg.annotation is not None}
+        for constant in manifest["constants"]:
+            if constant["name"] in annotated:
+                constant["category"] = "typed_scalar"
+        manifest["source"] = unannotated_menudet_source(manifest["source"])
+        return json.dumps(
+            manifest, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+        )
 
     def evaluate(self, inputs, *, shape=None, return_status=False, fp_errors="ignore"):
         """Evaluate named arrays into a new NumPy array, preserving their common shape.

@@ -178,16 +178,16 @@ def test_constructor_ramp_imports_once_and_keeps_default_partitions(monkeypatch)
     from importlib import import_module
 
     imports = []
-    original = blosc2.MenudetKernel.from_json
+    original = blosc2.MenudetKernel.from_recipe
 
     def reject_source_kernel(*args, **kwargs):
         pytest.fail("The Menudet constructor path must not use SourceKernel")
 
-    def from_json(*args, **kwargs):
+    def from_recipe(*args, **kwargs):
         imports.append(kwargs)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(blosc2.MenudetKernel, "from_json", from_json)
+    monkeypatch.setattr(blosc2.MenudetKernel, "from_recipe", from_recipe)
     monkeypatch.setattr(import_module("blosc2.ndarray"), "SourceKernel", reject_source_kernel)
     shape = (9, 11, 13)
     partitions = blosc2.compute_chunks_blocks(shape, dtype=np.float64)

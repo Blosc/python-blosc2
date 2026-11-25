@@ -803,14 +803,14 @@ def test_lazyudf_jit_policy_forwarding(monkeypatch):
     old_try_miniexpr = lazyexpr_mod.try_miniexpr
     lazyexpr_mod.try_miniexpr = True
 
-    original_from_json = blosc2.MenudetKernel.from_json
+    original_from_recipe = blosc2.MenudetKernel.from_recipe
     seen = []
 
-    def wrapped_from_json(artifact, *, jit=None):
+    def wrapped_from_recipe(recipe, inputs, *, jit=None):
         seen.append(jit)
-        return original_from_json(artifact, jit=jit)
+        return original_from_recipe(recipe, inputs, jit=jit)
 
-    monkeypatch.setattr(blosc2.MenudetKernel, "from_json", wrapped_from_json)
+    monkeypatch.setattr(blosc2.MenudetKernel, "from_recipe", wrapped_from_recipe)
 
     try:
         _, _, a2, b2 = _make_arrays(shape=(32, 32), chunks=(16, 16), blocks=(8, 8))

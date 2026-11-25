@@ -1216,9 +1216,9 @@ def validate_dsl_jit(func, operands, out_dtype, *, shape=(64,), chunks=None, blo
     --------
     validate_dsl : Static DSL-syntax check only (no compilation; no dtypes needed).
     """
-    import numpy as np
+    import re
 
-    import blosc2
+    import numpy as np
 
     kernel = func if isinstance(func, SourceKernel) else SourceKernel(func)
     if kernel.dsl_error is not None:
@@ -1250,21 +1250,36 @@ def validate_dsl_jit(func, operands, out_dtype, *, shape=(64,), chunks=None, blo
         else:
             arrays[name] = np.dtype(spec)
 
-    source = kernel.dsl_source
-    if scalars:
-        source, _ = specialize_miniexpr_inputs(source, scalars)
     if not arrays:
         raise ValueError(
             "validate_dsl_jit needs at least one array operand (pass a dtype spec); "
             "all-scalar probes are not supported"
         )
 
-    out = blosc2.empty(shape, dtype=np.dtype(out_dtype), chunks=chunks, blocks=blocks)
-    probe_inputs = {name: np.empty(1, dtype=dt) for name, dt in arrays.items()}
-    status = out._dsl_jit_status(source, probe_inputs)
-    status["valid"] = True
-    status["error"] = None
-    return status
+    from .menudet_kernel import MenudetError, prepare_menudet_kernel
+
+    # This is a portable-language probe, not an implicit full-DSL compilation.
+    # Scalar bindings remain captures rather than source-text substitutions.
+    ndim = len(shape) if re.search(r"\b(?:_flat_idx|_ndim|_[in]\d+)\b", kernel.dsl_source) else 0
+    try:
+        prepared = prepare_menudet_kernel(
+            kernel, arrays, np.dtype(out_dtype), constants=scalars, ndim=ndim, jit=True
+        )
+    except MenudetError as error:
+        return {
+            "valid": True,
+            "compiled": False,
+            "jit": False,
+            "status": error.status,
+            "error": str(error),
+        }
+    return {
+        "valid": True,
+        "compiled": True,
+        "jit": prepared.has_jit,
+        "status": "ME_COMPILE_SUCCESS",
+        "error": None,
+    }
 
 
 def kernel_from_source(source: str, name: str | None = None):

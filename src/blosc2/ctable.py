@@ -12286,7 +12286,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                         {
                             "name": name,
                             "kind": "menudet",
-                            "artifact": cc["artifact"],
+                            "version": cc.get("version", 1),
+                            **({"recipe": cc["recipe"]} if "recipe" in cc else {"artifact": cc["artifact"]}),
                             "bindings": cc["bindings"],
                             "row_shape": list(cc["row_shape"]),
                             "col_deps": cc["col_deps"],
@@ -12330,7 +12331,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 if "transformer" in meta:
                     entry["transformer"] = meta["transformer"]
                 if meta.get("transformer_kind") == "menudet":
-                    entry.update({key: meta[key] for key in ("artifact", "bindings", "row_shape")})
+                    entry.update({key: meta[key] for key in ("bindings", "row_shape")})
+                    entry["version"] = meta.get("version", 1)
+                    entry.update(
+                        {"recipe": meta["recipe"]} if "recipe" in meta else {"artifact": meta["artifact"]}
+                    )
                 if meta.get("dsl_source") is not None:
                     entry["dsl_source"] = meta["dsl_source"]
                 if meta.get("jit_backend") is not None:
@@ -12572,7 +12577,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 desc = self._validate_menudet_table_metadata(meta)
                 if self._cols[meta["name"]].dtype != desc["dtype"]:
                     raise ValueError("Stored Menudet output dtype disagrees with native signature")
-                loaded.update({key: desc[key] for key in ("artifact", "bindings", "row_shape", "kernel")})
+                loaded.update(
+                    {key: desc[key] for key in ("version", "recipe", "bindings", "row_shape", "kernel")}
+                )
             if meta.get("jit_backend") is not None:
                 loaded["jit_backend"] = meta["jit_backend"]
             self._materialized_cols[meta["name"]] = loaded
@@ -13172,8 +13179,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         output_dtype = dtype if isinstance(dtype, type) else getattr(dtype, "dtype", dtype)
         if dtype is not None and np.dtype(output_dtype) != kernel.output_dtype:
             raise ValueError("Output dtype disagrees with the Menudet kernel signature")
-        if kernel.schema_version != "0.1":
-            raise ValueError("Independent rows require Menudet 0.1")
+        if kernel.language_version not in {"0.1", "0.2"}:
+            raise ValueError("Independent rows require supported Menudet source")
         bindings = dict(bindings)
         if set(bindings) != set(kernel.input_dtypes):
             raise ValueError("Menudet table bindings must match the native signature")
@@ -13191,16 +13198,34 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             raise ValueError("Fixed-shape row transformers currently require scalar native returns")
         return {
             "kind": "menudet",
+            "version": 2,
             "kernel": kernel,
-            "artifact": kernel.to_json(),
+            "recipe": kernel.to_recipe(),
             "bindings": bindings,
             "row_shape": row_shape,
             "col_deps": list(dict.fromkeys(bindings.values())),
             "dtype": kernel.output_dtype,
         }
 
+    def _kernel_from_menudet_metadata(self, meta):
+        version = meta.get("version", 1)
+        if type(version) is not int:
+            raise ValueError("Menudet table recipe version must be an integer")
+        if version == 1:
+            return blosc2.MenudetKernel.from_json(meta["artifact"])
+        if version != 2:
+            raise ValueError(f"Unsupported Menudet table recipe version: {version!r}")
+        if "artifact" in meta:
+            raise blosc2.MenudetError(
+                "Menudet v2 metadata must not contain a v1 artifact", status="invalid_artifact"
+            )
+        return blosc2.MenudetKernel.from_recipe(
+            meta["recipe"],
+            {name: self._cols[dependency].dtype for name, dependency in meta["bindings"].items()},
+        )
+
     def _validate_menudet_table_metadata(self, meta):
-        kernel = blosc2.MenudetKernel.from_json(meta["artifact"])
+        kernel = self._kernel_from_menudet_metadata(meta)
         if meta.get("row_domain", "independent") != "independent":
             raise ValueError("Only independent-row Menudet table groups are implemented")
         desc = self._menudet_table_descriptor(kernel, meta["bindings"])
@@ -13215,7 +13240,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
     def _evaluate_menudet_rows(self, meta, raw_columns, *, count=None):
         kernel = meta.get("kernel")
         if kernel is None:
-            kernel = blosc2.MenudetKernel.from_json(meta["artifact"])
+            kernel = self._kernel_from_menudet_metadata(meta)
         arrays = {
             name: np.asarray(raw_columns[dep], dtype=kernel.input_dtypes[name])
             for name, dep in meta["bindings"].items()

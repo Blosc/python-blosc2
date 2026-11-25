@@ -120,9 +120,12 @@ def test_policy_validation_and_default_profile():
 @pytest.mark.parametrize(
     "name", ["minimum", "maximum", "isfinite", "isinf", "isnan", "signbit", "fabs", "absolute"]
 )
-def test_new_spellings_do_not_change_legacy_routing(name):
+def test_formula_discovery_uses_typed_spellings(name):
     expression = f"{name}(x, x)" if name in {"minimum", "maximum"} else f"{name}(x)"
-    assert blosc2.blosc2_ext.me_output_dtype(expression, {"x": np.dtype("float64")}) is None
+    # Discovery has migrated to the typed formula API. Native compatibility
+    # routing remains tested separately; it no longer defines Python discovery.
+    expected = np.dtype("bool" if name in {"isfinite", "isinf", "isnan", "signbit"} else "float64")
+    assert blosc2.blosc2_ext.me_output_dtype(expression, {"x": np.dtype("float64")}) == expected
     assert kernel(expression, version="0.1").schema_version == "0.1"
 
 

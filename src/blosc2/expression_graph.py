@@ -1702,14 +1702,28 @@ def _validate_dtype_metadata(dtype, depth=0):
         _validate_dtype_metadata(dtype.subdtype[0], depth + 1)
 
 
+def _validate_menudet_column_document(recipe):
+    version = recipe.get("version", 1)
+    if type(version) is not int:
+        _reject("unapproved Menudet recipe version")
+    if version == 2:
+        if "artifact" in recipe:
+            _reject("unapproved mixed Menudet recipe versions")
+        from blosc2.menudet_recipe import validate_menudet_recipe
+
+        validate_menudet_recipe(recipe["recipe"])
+    elif version != 1 or type(recipe["artifact"]) not in (str, bytes):
+        _reject("unapproved Menudet recipe version or artifact")
+    return version
+
+
 def _validate_menudet_column(table, recipe):
     from blosc2.ctable import Column
 
     cached = recipe.get("kernel")
     if cached is not None:
         _validate_menudet_kernel(cached)
-    if type(recipe["artifact"]) not in (str, bytes):
-        _reject("unapproved Menudet recipe artifact")
+    version = _validate_menudet_column_document(recipe)
     bindings = recipe["bindings"]
     if type(bindings) is not dict or any(
         type(k) is not str or type(v) is not str for k, v in bindings.items()
@@ -1733,8 +1747,12 @@ def _validate_menudet_column(table, recipe):
     if cached is None:
         table._validate_menudet_table_metadata(recipe)
         return
-    artifact = recipe["artifact"]
-    if cached._artifact != (artifact.encode("utf-8") if type(artifact) is str else artifact):
+    if version == 2:
+        matches = _same_native_metadata(recipe["recipe"], cached.to_recipe())
+    else:
+        artifact = recipe["artifact"]
+        matches = cached.to_json() == (artifact.decode("utf-8") if type(artifact) is bytes else artifact)
+    if not matches:
         raise ValueError("Menudet-column recipe/cache mismatch; recreate the computed column")
     if recipe.get("row_domain", "independent") != "independent":
         raise ValueError("Only independent-row Menudet table groups are implemented")
@@ -1803,13 +1821,18 @@ def _validate_menudet_kernel(value):
         _reject("unapproved Menudet kernel dependency")
     if type(value._handle) is not blosc2_ext.MenudetArtifactHandle:
         _reject("unapproved Menudet native handle")
-    if (
-        value._handle is not value._expression_handle
-        or type(value._artifact) is not bytes
-        or type(value._expression_artifact) is not bytes
-        or value._artifact != value._expression_artifact
-    ):
+    core_recipe = value._artifact is None and value._expression_artifact is None
+    valid_document = (
+        value._handle.recipe_matches(getattr(value, "_recipe", None))
+        if core_recipe
+        else type(value._artifact) is bytes
+        and type(value._expression_artifact) is bytes
+        and value._artifact == value._expression_artifact
+    )
+    if value._handle is not value._expression_handle or not valid_document:
         raise ValueError("Menudet kernel provenance changed; construct a new kernel")
+    if hasattr(value, "_recipe") and not value._handle.recipe_matches(value._recipe):
+        raise ValueError("Menudet recipe provenance changed; construct a new kernel")
     expected = value._handle.info()
     if getattr(blosc2_ext, "menudet_descriptor_available", lambda: False)():
         expected.update(value._handle.descriptor_info())

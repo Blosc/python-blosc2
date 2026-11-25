@@ -15,10 +15,9 @@ endif()
 project(python-blosc2)
 
 # Update to the latest minimum C-Blosc2 version, and to the actual bundled one
-set(BLOSC2_MIN_VERSION 3.8.0)
-# set(BLOSC2_BUNDLED_VERSION v3.8.0)
-# If you prefer some C-Blosc2 3.8 development snapshot
-set(BLOSC2_BUNDLED_VERSION 365a4030f8b1aa684b5fd922d3b8c1feeef480f2)
+set(BLOSC2_MIN_VERSION 4.0.0)
+# Paired next-major constructor branch; C/Cython consumers rebuild together.
+set(BLOSC2_BUNDLED_VERSION 62ecee658d51cc458e3aaf90de316634954996be)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
@@ -123,7 +122,9 @@ set(MINIEXPR_BUILD_SHARED OFF CACHE BOOL "Build miniexpr shared library" FORCE)
 set(MINIEXPR_BUILD_TESTS OFF CACHE BOOL "Build miniexpr tests" FORCE)
 set(MINIEXPR_BUILD_EXAMPLES OFF CACHE BOOL "Build miniexpr examples" FORCE)
 set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
-option(MINIEXPR_BUILD_ARTIFACT "Build Menudet artifact support" ON)
+# Standard Python builds always retain the v1 reader and native schedulers.
+# Standalone miniexpr remains independently buildable without JSON.
+set(MINIEXPR_BUILD_ARTIFACT ON CACHE BOOL "Build Menudet compatibility and scheduler adapter" FORCE)
 # Keep miniexpr's and C-Blosc2's bundled files inside the blosc2 package.
 # Without this, their install rules use the default CMAKE_INSTALL_LIBDIR
 # ("lib"), which scikit-build places at site-packages/lib.
@@ -146,9 +147,9 @@ elseif(WIN32 AND (CMAKE_VS_PLATFORM_NAME STREQUAL "ARM64"
 endif()
 
 FetchContent_Declare(miniexpr
-    GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    # Direct interpreter AOT SIMD ramp kernels for float and integer dtypes.
-    GIT_TAG 450cb152ab7ecf3f1e71804716d2f7c18b6615f3
+    GIT_REPOSITORY https://codeberg.org/Blosc/miniexpr.git
+    # Qualified 1.0 core boundary, Menudet 0.2, shared grids and recipe fixtures.
+    GIT_TAG 41aad03c9146a273775c3d50cd28fcd9f099f257
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
@@ -160,9 +161,18 @@ file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr.h" B2_MENUDET_VERSION
 if(NOT B2_MENUDET_VERSION)
   message(FATAL_ERROR "Python-Blosc2 requires Menudet 0.1 beta native sources. Update FETCHCONTENT_SOURCE_DIR_MINIEXPR or use the bundled pin.")
 endif()
+file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr_artifact.h" B2_CORE_PREPARE_API
+  REGEX "^#define ME_ARTIFACT_DIRECT_PREPARE_VERSION 1")
+if(NOT B2_CORE_PREPARE_API)
+  message(FATAL_ERROR "Python-Blosc2 5.0 requires the miniexpr 1.0 direct preparation API. Update FETCHCONTENT_SOURCE_DIR_MINIEXPR or use the bundled pin.")
+endif()
+file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr_kernel.h" B2_CORE_API_VERSION
+  REGEX "^#define ME_KERNEL_API_VERSION 1")
+if(NOT B2_CORE_API_VERSION)
+  message(FATAL_ERROR "Python-Blosc2 5.0 requires the qualified miniexpr 1.0 core contract. Update FETCHCONTENT_SOURCE_DIR_MINIEXPR or use the bundled pin.")
+endif()
 
-# Link against miniexpr static library
-target_link_libraries(blosc2_ext PRIVATE miniexpr_static)
+# The adapter links the core transitively; avoid duplicate static archives.
 if(TARGET miniexpr_artifact)
   target_link_libraries(blosc2_ext PRIVATE miniexpr_artifact)
   target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_MENUDET_ARTIFACT=1)
@@ -257,7 +267,7 @@ else()
     set(BLOSC_INSTALL ON)
     include(FetchContent)
     FetchContent_Declare(blosc2
-        GIT_REPOSITORY https://github.com/Blosc/c-blosc2
+        GIT_REPOSITORY https://codeberg.org/Blosc/c-blosc2.git
         GIT_TAG ${BLOSC2_BUNDLED_VERSION}
         # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../c-blosc2
     )
