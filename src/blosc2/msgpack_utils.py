@@ -54,11 +54,10 @@ def _decode_structured_reference(data, *, deserialize="safe"):
         raise TypeError("Structured Blosc2 msgpack payload must decode to a mapping")
 
     version = payload.get("version")
-    if version != _BLOSC2_STRUCTURED_VERSION:
-        raise ValueError(f"Unsupported structured Blosc2 msgpack payload version: {version!r}")
-
     kind = payload.get("kind")
     if kind == "ref":
+        if version != _BLOSC2_STRUCTURED_VERSION:
+            raise ValueError(f"Unsupported structured Blosc2 msgpack reference version: {version!r}")
         ref_payload = payload.get("ref")
         return Ref.from_dict(ref_payload)
     if kind in {"c2array", "lazyexpr", "lazyudf", "menudet"}:

@@ -886,6 +886,7 @@ ctypedef struct me_udata:
     int64_t chunks_in_array[B2ND_MAX_DIM]
     int64_t blocks_in_chunk[B2ND_MAX_DIM]
     me_expr* miniexpr_handle
+    void* formula_grid_handle
     # Optional candidate-block bitmap (1-D arrays only).  When non-NULL, blocks
     # whose byte is 0 are skipped: the prefilter writes a zero (false) output
     # and returns without decompressing inputs or running miniexpr.  Indexed by
@@ -1115,6 +1116,39 @@ def validate_menudet_source(source, input_dtypes, output_dtype, version, int ndi
         free(variables)
 
 
+cdef extern from "miniexpr_kernel.h":
+    ctypedef struct me_input_spec:
+        const char *name
+        me_dtype dtype
+        size_t itemsize
+    ctypedef enum me_capture_category:
+        ME_CAPTURE_TYPED
+        ME_CAPTURE_WEAK
+    ctypedef struct me_capture:
+        me_input_spec spec
+        const void *value
+        me_capture_category category
+    ctypedef enum me_cardinality:
+        ME_CARDINALITY_INFER
+        ME_ELEMENTWISE
+        ME_BLOCK_SCALAR
+    ctypedef enum me_casting:
+        ME_CAST_UNSAFE
+        ME_CAST_SAME_KIND
+        ME_CAST_SAFE
+    ctypedef struct me_signature:
+        size_t struct_size
+        const me_input_spec *inputs
+        size_t ninputs
+        const me_capture *captures
+        size_t ncaptures
+        me_dtype output_dtype
+        size_t output_itemsize
+        me_cardinality cardinality
+        int context_ndim
+        me_casting casting
+        bint integer_powers
+
 cdef extern from "dsl_artifact_bridge.h":
     ctypedef struct b2_artifact_input:
         const char *name
@@ -1127,6 +1161,15 @@ cdef extern from "dsl_artifact_bridge.h":
         int column
         char message[256]
     int b2_artifact_available()
+    int b2_core_prepare_available()
+    int b2_formula_describe(const char *, const me_input_spec *, size_t, me_dtype *, size_t *)
+    int b2_formula_grid_prepare(const char *, const me_variable *, int, me_dtype, size_t,
+                               int, const int64_t *, const int32_t *, const int32_t *, void **)
+    void b2_formula_grid_free(void *) noexcept nogil
+    int b2_formula_grid_valid(const void *, int64_t, int64_t, int64_t *) noexcept nogil
+    int b2_formula_grid_eval(const void *, const void **, size_t, int64_t, int64_t, void *) noexcept nogil
+    int b2_artifact_prepare_source(const char *, const char *, const me_signature *,
+                                  int, const me_jit_options *, void **, b2_artifact_error *) nogil
     int b2_artifact_load(const char *, size_t, int, void **, b2_artifact_error *) nogil
     int b2_artifact_load_options(const char *, size_t, int, const me_jit_options *, void **, b2_artifact_error *) nogil
     int b2_artifact_load_inferred(const char *, size_t, int, const me_jit_options *, void **, b2_artifact_error *) nogil
@@ -2468,6 +2511,10 @@ cdef class NativeGraphSchedule:
                          "input_materialization_bytes": 0}
 
 
+def menudet_core_available():
+    return bool(b2_core_prepare_available())
+
+
 def menudet_artifact_available():
     return bool(b2_artifact_available())
 
@@ -2501,6 +2548,7 @@ cdef class MenudetArtifactHandle:
     cdef object _owner
     cdef bint _borrowed
     cdef bytes _artifact_document
+    cdef bytes _recipe_document
     cdef object _attested_graph
     cdef object _resident_meta
     cdef object _identity_input
@@ -2545,6 +2593,113 @@ cdef class MenudetArtifactHandle:
         # not depend on a Python reference which tp_clear can replace with None.
         if not self._borrowed:
             b2_artifact_free(self._handle)
+
+    @staticmethod
+    def prepare_source(bytes version, bytes source, inputs, captures, output_dtype=None,
+                       cardinality="elementwise", int ndim=0, casting="unsafe", int jit_mode=0,
+                       recipe=None):
+        """Specialize binary captures and typed slots without a JSON round trip."""
+        if not b2_core_prepare_available():
+            raise NotImplementedError("Build with direct miniexpr preparation support")
+        if b'\x00' in source or b'\x00' in version or len(source) > 1024 * 1024:
+            raise ValueError("Invalid Menudet source length or embedded NUL")
+        import ast
+        import msgpack
+        from .menudet_recipe import validate_menudet_recipe
+
+        if recipe is not None:
+            recipe = validate_menudet_recipe(recipe)
+            if ast.dump(ast.parse(source)) != ast.dump(ast.parse(recipe["source"])):
+                raise ValueError("Authored recipe does not match the prepared source")
+        cdef size_t n = len(inputs), nc = len(captures), i
+        if n + nc > 128:
+            raise ValueError("Too many Menudet parameters")
+        cdef me_input_spec slots[128]
+        cdef me_capture constants[128]
+        cdef me_signature signature
+        cdef me_jit_options native_options
+        cdef b2_artifact_error error
+        cdef int rc
+        cdef np.ndarray array
+        cdef bytes name
+        cdef list names = [key.encode("utf-8") for key in inputs]
+        cdef list constant_names = [item[0].encode("utf-8") for item in captures]
+        cdef list owned = [item[1] for item in captures]
+        cdef bytes compiler, flags, cache, math_backend
+        cdef MenudetArtifactHandle handle = MenudetArtifactHandle()
+        for i in range(n):
+            name = names[i]
+            if b'\x00' in name:
+                raise ValueError("Input names must not contain NUL")
+            dtype = np.dtype(list(inputs.values())[i])
+            slots[i].name = name
+            slots[i].dtype = _me_dtype_from_numpy_dtype(dtype)
+            slots[i].itemsize = dtype.itemsize
+        for i in range(nc):
+            name = constant_names[i]
+            if b'\x00' in name:
+                raise ValueError("Capture names must not contain NUL")
+            array = owned[i]
+            if (array.ndim != 0 or not array.flags.c_contiguous or not array.flags.aligned
+                    or not array.dtype.isnative):
+                raise ValueError("Capture must be one aligned native scalar")
+            constants[i].spec.name = name
+            constants[i].spec.dtype = _me_dtype_from_numpy_dtype(array.dtype)
+            constants[i].spec.itemsize = array.dtype.itemsize
+            constants[i].value = np.PyArray_DATA(array)
+            constants[i].category = ME_CAPTURE_WEAK if captures[i][2] else ME_CAPTURE_TYPED
+        memset(&signature, 0, sizeof(signature))
+        signature.struct_size = sizeof(signature)
+        signature.inputs = slots
+        signature.ninputs = n
+        signature.captures = constants
+        signature.ncaptures = nc
+        signature.output_dtype = ME_AUTO if output_dtype is None else _me_dtype_from_numpy_dtype(np.dtype(output_dtype))
+        signature.output_itemsize = 0 if output_dtype is None else np.dtype(output_dtype).itemsize
+        signature.cardinality = {"elementwise": ME_ELEMENTWISE, "block_scalar": ME_BLOCK_SCALAR}[cardinality]
+        signature.context_ndim = ndim
+        signature.casting = {"unsafe": ME_CAST_UNSAFE, "safe": ME_CAST_SAFE, "same_kind": ME_CAST_SAME_KIND}[casting]
+        signature.integer_powers = recipe is not None and recipe.get("semantics", {}).get("integer_powers") == "multiply"
+        options = blosc2.jit_config.execution_options()
+        compiler = (options["compiler"] or "").encode()
+        flags = (options["cflags"] or "").encode()
+        cache = (options["cache_dir"] or "").encode()
+        math_backend = (options["math_backend"] or "").encode()
+        native_options.compiler = <const char *>compiler if compiler else NULL
+        native_options.cflags = <const char *>flags if flags else NULL
+        native_options.cache_dir = <const char *>cache if cache else NULL
+        native_options.math_backend = <const char *>math_backend if math_backend else NULL
+        native_options.trace = int(options["trace"])
+        native_options.compiler_output = int(options["compiler_output"])
+        cdef const char *version_ptr = version
+        cdef const char *source_ptr = source
+        with nogil:
+            rc = b2_artifact_prepare_source(version_ptr, source_ptr, &signature, jit_mode,
+                                           &native_options, &handle._handle, &error)
+        if rc:
+            raise_artifact_error(rc, &error)
+        handle._artifact_document = b""
+        if recipe is not None:
+            handle._recipe_document = msgpack.packb(recipe, use_bin_type=True, strict_types=True)
+        return handle
+
+    def retain_author_recipe(self, recipe):
+        """Attach author provenance once to a graph-specialized handle."""
+        import msgpack
+        from .menudet_recipe import validate_menudet_recipe
+
+        if self._recipe_document is not None:
+            raise ValueError("Menudet handle already retains an author recipe")
+        recipe = validate_menudet_recipe(recipe)
+        self._recipe_document = msgpack.packb(recipe, use_bin_type=True, strict_types=True)
+
+    def recipe_matches(self, recipe):
+        """Compare a passive recipe to the native handle's immutable snapshot."""
+        import msgpack
+        from .menudet_recipe import passive_recipe_value
+
+        return (self._recipe_document is not None and passive_recipe_value(recipe)
+                and msgpack.packb(recipe, use_bin_type=True, strict_types=True) == self._recipe_document)
 
     def info(self):
         cdef int i
@@ -3377,21 +3532,20 @@ def me_output_dtype(expression, operands):
     in which case the caller should use its numpy fallback.
     """
     cdef Py_ssize_t n = len(operands)
-    cdef me_variable* variables = NULL
-    cdef me_variable *var
+    cdef me_input_spec* variables = NULL
+    cdef me_input_spec *var
     cdef bytes var_name
     cdef bytes expression_bytes
     cdef np.dtype operand_dtype
     cdef Py_ssize_t built = 0
     cdef int error = 0
     cdef int rc = 0
-    cdef me_expr *out_expr = NULL
     cdef me_dtype out_dt
     cdef size_t itemsize = 0
     cdef Py_ssize_t i
 
     if n > 0:
-        variables = <me_variable *> malloc(sizeof(me_variable) * n)
+        variables = <me_input_spec *> calloc(n, sizeof(me_input_spec))
         if variables == NULL:
             raise MemoryError()
 
@@ -3407,10 +3561,9 @@ def me_output_dtype(expression, operands):
                 return None
             var_name = k.encode("utf-8") if isinstance(k, str) else k
             var.name = <char *> malloc(strlen(var_name) + 1)
-            strcpy(var.name, var_name)
-            var.address = NULL
-            var.type = 0
-            var.context = NULL
+            if var.name == NULL:
+                raise MemoryError()
+            strcpy(<char *>var.name, var_name)
             var.itemsize = operand_dtype.itemsize if operand_dtype.num in (18, 19) else 0
             built += 1
 
@@ -3419,15 +3572,26 @@ def me_output_dtype(expression, operands):
         expression_bytes = (
             (<str>expression).encode("utf-8") if isinstance(expression, str) else expression
         )
-        rc = me_compile(expression_bytes, variables, <int>n, ME_AUTO, &error, &out_expr)
-        if rc != ME_COMPILE_SUCCESS or out_expr == NULL:
-            if out_expr != NULL:
-                me_free(out_expr)
+        if any(line.lstrip().startswith("def ") for line in expression_bytes.decode("utf-8").splitlines()):
+            # Source-authored UDFs are explicitly portable kernels, not formulas.
+            import re
+            from blosc2.menudet_kernel import MenudetKernel
+            try:
+                entry = re.search(r"(?m)^def ([A-Za-z_]\w*)\(", expression_bytes.decode("utf-8"))
+                if entry is None:
+                    return None
+                kernel = MenudetKernel.from_recipe({
+                    "version": 1, "language_version": "0.2",
+                    "source": expression_bytes.decode("utf-8"), "entry_point": entry.group(1),
+                    "inputs": list(operands), "constants": [], "output": None,
+                    "cardinality": "elementwise", "ndim": 0, "casting": "unsafe",
+                }, operands)
+            except (TypeError, ValueError, NotImplementedError):
+                return None
+            return kernel.output_dtype
+        rc = b2_formula_describe(expression_bytes, variables, <size_t>n, &out_dt, &itemsize)
+        if rc != 0:
             return None
-
-        out_dt = me_get_dtype(out_expr)
-        itemsize = me_get_itemsize(out_expr)
-        me_free(out_expr)
 
         if out_dt == ME_STRING:
             if itemsize == 0 or itemsize % 4 != 0:
@@ -3440,7 +3604,7 @@ def me_output_dtype(expression, operands):
         return _numpy_dtype_from_me_dtype(out_dt)
     finally:
         for i in range(built):
-            free(variables[i].name)
+            free(<void *>variables[i].name)
         free(variables)
 
 
@@ -5386,6 +5550,7 @@ cdef class SChunk:
                         free(me_data.np_typesizes)
                     if me_data.miniexpr_handle != NULL:  # XXX do we really need the conditional?
                         me_free(me_data.miniexpr_handle)
+                    b2_formula_grid_free(me_data.formula_grid_handle)
                     if me_data.eval_params != NULL:
                         free(me_data.eval_params)
                     free(me_data)
@@ -5542,11 +5707,14 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     cdef me_expr* miniexpr_handle = udata.miniexpr_handle
     cdef void* aux_reduc_ptr
 
-    if miniexpr_handle == NULL:
+    if miniexpr_handle == NULL and udata.formula_grid_handle == NULL:
         return _miniexpr_fail(worker, "miniexpr: handle not assigned")
 
     # Query valid (unpadded) items for this block
-    rc = me_nd_valid_nitems(miniexpr_handle, nchunk, nblock, &valid_nitems)
+    if udata.formula_grid_handle != NULL:
+        rc = b2_formula_grid_valid(udata.formula_grid_handle, nchunk, nblock, &valid_nitems)
+    else:
+        rc = me_nd_valid_nitems(miniexpr_handle, nchunk, nblock, &valid_nitems)
     if rc != 0:
         return _miniexpr_fail(worker, "miniexpr: invalid block")
     if valid_nitems <= 0:
@@ -5772,8 +5940,12 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
         # Reduction operation: evaluate only valid items into a single output element.
         # NOTE: miniexpr handles scalar outputs in me_eval_nd without touching tail bytes.
         aux_reduc_ptr = <void *> (<uintptr_t> udata.aux_reduc_ptr + offset_bytes)
-    rc = me_eval_nd(miniexpr_handle, <const void**> input_buffers, udata.ninputs,
-                    aux_reduc_ptr, output_blocknitems, nchunk, nblock, udata.eval_params)
+    if udata.formula_grid_handle != NULL:
+        rc = b2_formula_grid_eval(udata.formula_grid_handle, <const void **>input_buffers,
+                                 output_blocknitems, nchunk, nblock, aux_reduc_ptr)
+    else:
+        rc = me_eval_nd(miniexpr_handle, <const void**> input_buffers, udata.ninputs,
+                       aux_reduc_ptr, output_blocknitems, nchunk, nblock, udata.eval_params)
     if rc != 0:
         return _miniexpr_fail(worker, "miniexpr: issues during evaluation")
 
@@ -7724,7 +7896,7 @@ cdef class NDArray:
         return udata
 
     cdef me_udata *_fill_me_udata(self, inputs, fp_accuracy, aux_reduc, jit=None):
-        cdef me_udata *udata = <me_udata *> calloc(1, sizeof(me_udata))
+        cdef me_udata *udata = NULL
         cdef me_eval_params* eval_params
         cdef b2nd_array_t** inputs_
         cdef uint8_t** np_data
@@ -7738,6 +7910,7 @@ cdef class NDArray:
             aux_reduc_ptr = <void *> np.PyArray_DATA(<np.ndarray> aux_reduc)
         operands = list(inputs.values())
         ninputs = len(operands)
+        udata = <me_udata *> calloc(1, sizeof(me_udata))
         if udata == NULL:
             raise MemoryError("Cannot allocate miniexpr user data")
         inputs_ = NULL
@@ -7878,9 +8051,12 @@ cdef class NDArray:
                     (<b2nd_array_t*><uintptr_t>operand.c_array).sc):
                 raise ValueError("miniexpr cannot read operands that use a codec or filter registered "
                                  "from Python")
-        # Set prefilter for miniexpr
+        # Do not install a prefilter or allocate worker state until preparation
+        # succeeds: rejected source must leave the destination usable.
         cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
-        cparams.prefilter = <blosc2_prefilter_fn> miniexpr_prefilter
+        if cparams.prefilter != NULL:
+            raise ValueError("The destination already has a prefilter")
+        _check_cparams(cparams)
 
         cdef int jit_mode = b2_artifact_auto_jit_mode()
         if jit is True:
@@ -7888,7 +8064,8 @@ cdef class NDArray:
         elif jit is False:
             jit_mode = ME_JIT_OFF
 
-        cdef me_udata* udata = self._fill_me_udata(inputs, fp_accuracy, aux_reduc, jit=jit)
+        cdef me_udata* udata = NULL
+        cdef void* formula_grid_handle = NULL
 
         # Optional candidate-block bitmap (1-D only): a contiguous uint8 array,
         # one byte per global miniexpr block (0 = skip, non-zero = evaluate).
@@ -7898,14 +8075,15 @@ cdef class NDArray:
         cdef np.ndarray cb = None
         if candidate_blocks is not None and self.array.ndim == 1:
             cb = np.ascontiguousarray(candidate_blocks, dtype=np.uint8)
-            udata.candidate_blocks = <const uint8_t*> np.PyArray_DATA(cb)
-            udata.candidate_blocks_len = <int64_t> cb.shape[0]
 
         # Get the compiled expression handle for multi-threading
         cdef Py_ssize_t n = len(inputs)
-        cdef me_variable* variables = <me_variable *> malloc(sizeof(me_variable) * n)
-        if variables == NULL:
-            raise MemoryError()
+        if n > 128:
+            raise ValueError("miniexpr supports at most 128 input slots")
+        cdef me_variable variables[128]
+        memset(variables, 0, sizeof(variables))
+        names = [k.encode("utf-8") if isinstance(k, str) else k for k in inputs]
+        cdef bytes var_name
         cdef me_variable *var
         cdef np.dtype out_np_dtype = np.dtype(self.dtype)
         cdef me_dtype me_output_dtype = _me_dtype_from_numpy_dtype(out_np_dtype)
@@ -7915,9 +8093,8 @@ cdef class NDArray:
         cdef np.dtype operand_dtype
         for i, (k, v) in enumerate(inputs.items()):
             var = &variables[i]
-            var_name = k.encode("utf-8") if isinstance(k, str) else k
-            var.name = <char *> malloc(strlen(var_name) + 1)
-            strcpy(var.name, var_name)
+            var_name = names[i]
+            var.name = var_name
             operand_dtype = np.dtype(v.dtype)
             var.dtype = _me_dtype_from_numpy_dtype(operand_dtype)
             if <int>var.dtype < 0:
@@ -7942,46 +8119,78 @@ cdef class NDArray:
             expression_display = str(expression)
             expression_bytes = expression_display.encode("utf-8")
         cdef me_dtype = me_output_dtype
-        cdef me_expr *out_expr
+        cdef me_expr *out_expr = NULL
         cdef int ndims = self.array.ndim
         cdef int64_t* shape = &self.array.shape[0]
         cdef int32_t* chunkshape = &self.array.chunkshape[0]
         cdef int32_t* blockshape = &self.array.blockshape[0]
-        cdef int rc = _me_compile_nd_configured(expression_bytes, variables, n, me_dtype, ndims,
-                                         shape, chunkshape, blockshape, jit_mode,
-                                         &error, &out_expr)
+        cdef int rc
+        import re
+        # Formula reductions and ND coordinates are deliberately not part of the
+        # new formula contract yet. Keep those historic callers on the
+        # compatibility evaluator instead of silently changing their semantics.
+        legacy_formula = re.search(
+            r"\b(?:block_)?(?:sum|mean|prod|min|max|any|all|argmin|argmax|std|var)\s*\(",
+            expression_display,
+        ) or re.search(r"\b(?:_flat_idx|_ndim|_[in]\d+)\b", expression_display)
+        if aux_reduc is None and not legacy_formula and not any(
+                line.lstrip().startswith("def ") for line in expression_display.splitlines()):
+            # Plain formulas keep their language regardless of JIT preference.
+            rc = b2_formula_grid_prepare(expression_bytes, variables, n, me_dtype,
+                                        out_np_dtype.itemsize, ndims, shape, chunkshape,
+                                         blockshape, &formula_grid_handle)
+            rc = ME_COMPILE_SUCCESS if rc == 0 else ME_COMPILE_ERR_OOM if rc == -6 else ME_COMPILE_ERR_INVALID_ARG
+        else:
+            # Explicit transition-only compatibility path. Never reclassify
+            # full source or unresolved formula reductions as portable kernels.
+            rc = _me_compile_nd_configured(expression_bytes, variables, n, me_dtype, ndims,
+                                          shape, chunkshape, blockshape, jit_mode,
+                                          &error, &out_expr)
         cdef str me_error_msg = _me_compile_error_details(rc, error)
+        if rc != ME_COMPILE_SUCCESS:
+            me_free(out_expr)
+            b2_formula_grid_free(formula_grid_handle)
         if rc == ME_COMPILE_ERR_INVALID_ARG_TYPE:
             raise TypeError(f"miniexpr does not support operand or output dtype: {expression_display}; details: {me_error_msg}")
         if rc != ME_COMPILE_SUCCESS:
             raise NotImplementedError(f"Cannot compile expression: {expression_display}; details: {me_error_msg}")
         # The output container was allocated before compiling, so a width miniexpr
         # infers differently from the container's would overrun the block buffer.
-        cdef size_t inferred_itemsize = me_get_itemsize(out_expr)
-        if me_output_dtype in (ME_STRING, ME_BYTES) and inferred_itemsize != <size_t> out_np_dtype.itemsize:
+        cdef size_t inferred_itemsize = me_get_itemsize(out_expr) if out_expr != NULL else out_np_dtype.itemsize
+        if out_expr != NULL and me_output_dtype in (ME_STRING, ME_BYTES) and inferred_itemsize != <size_t> out_np_dtype.itemsize:
             me_free(out_expr)
             raise ValueError(
                 f"miniexpr infers a {inferred_itemsize}-byte string result for "
                 f"{expression_display}, but the output array is {out_np_dtype}"
             )
-        udata.miniexpr_handle = out_expr
-
-        # Free resources
-        for i in range(len(inputs)):
-            free(variables[i].name)
-        free(variables)
-
         cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> calloc(1, sizeof(blosc2_prefilter_params))
+        if preparams == NULL:
+            me_free(out_expr)
+            b2_formula_grid_free(formula_grid_handle)
+            raise MemoryError("Cannot allocate miniexpr prefilter parameters")
+        try:
+            udata = self._fill_me_udata(inputs, fp_accuracy, aux_reduc, jit=jit)
+        except BaseException:
+            free(preparams)
+            me_free(out_expr)
+            b2_formula_grid_free(formula_grid_handle)
+            raise
+        udata.miniexpr_handle = out_expr
+        udata.formula_grid_handle = formula_grid_handle
+        if cb is not None:
+            udata.candidate_blocks = <const uint8_t*> np.PyArray_DATA(cb)
+            udata.candidate_blocks_len = <int64_t> cb.shape[0]
         preparams.user_data = udata
         preparams.output_is_disposable = True if (aux_reduc is not None or cparams.clevel == 0) else False
         cparams.preparams = preparams
-        _check_cparams(cparams)
+        cparams.prefilter = <blosc2_prefilter_fn> miniexpr_prefilter
 
         if self.array.sc.cctx != NULL:
             # Freeing NULL context can lead to segmentation fault
             blosc2_free_ctx(self.array.sc.cctx)
         self.array.sc.cctx = blosc2_create_cctx(dereference(cparams))
         if self.array.sc.cctx == NULL:
+            (<SChunk>self.schunk)._remove_prefilter(None, False)
             raise RuntimeError("Could not create compression context")
 
         # Return the anchored bitmap buffer (or None) so the caller keeps it
@@ -7989,78 +8198,35 @@ cdef class NDArray:
         return cb
 
     def _dsl_jit_status(self, expression, inputs):
-        """Compile *expression* with JIT against this array's grid and report whether
-        miniexpr produced a runtime JIT kernel (vs an interpreter fallback).
+        """Compatibility spelling for a portable preparation-only JIT probe."""
+        import re
+        from blosc2.menudet_kernel import MenudetError, MenudetKernel, menudet_dtype_descriptor
 
-        Compiles and immediately frees the program; it does not set a prefilter or
-        run the kernel.  Returns a dict with ``compiled`` (bool), ``jit`` (bool) and
-        ``status`` (miniexpr compile-status name).  ``inputs`` is a name -> NDArray
-        mapping; all operands must share this array's shape/chunks/blocks.
-        """
-        cdef Py_ssize_t n = len(inputs)
-        cdef me_variable* variables = NULL
-        if n > 0:
-            variables = <me_variable *> malloc(sizeof(me_variable) * n)
-            if variables == NULL:
-                raise MemoryError()
-        cdef me_variable *var
-        cdef np.dtype out_np_dtype = np.dtype(self.dtype)
-        cdef me_dtype me_output_dtype = _me_dtype_from_numpy_dtype(out_np_dtype)
-        if <int>me_output_dtype < 0:
-            free(variables)
-            raise TypeError(f"miniexpr does not support output dtype: {out_np_dtype}")
-
-        cdef np.dtype operand_dtype
-        cdef bytes var_name
-        for i, (k, v) in enumerate(inputs.items()):
-            var = &variables[i]
-            var_name = k.encode("utf-8") if isinstance(k, str) else k
-            var.name = <char *> malloc(strlen(var_name) + 1)
-            strcpy(var.name, var_name)
-            operand_dtype = np.dtype(v.dtype)
-            var.dtype = _me_dtype_from_numpy_dtype(operand_dtype)
-            if <int>var.dtype < 0:
-                for j in range(i + 1):
-                    free(variables[j].name)
-                free(variables)
-                raise TypeError(f"miniexpr does not support operand dtype '{operand_dtype}' for input '{k}'")
-            var.address = NULL
-            var.type = 0
-            var.context = NULL
-            var.itemsize = v.dtype.itemsize if v.dtype.num in (18, 19) else 0
-
-        backend = blosc2.jit_config.execution_options()["jit_backend"]
-        if backend in ("tcc", "cc"):
-            from blosc2.lazyexpr import _apply_jit_backend_pragma
-            expression = _apply_jit_backend_pragma(expression, inputs, backend)
-        from blosc2.utils import canonicalize_miniexpr_functions
-        expression = canonicalize_miniexpr_functions(expression)
-        cdef bytes expression_bytes = (
-            (<str>expression).encode("utf-8") if isinstance(expression, str) else expression
-        )
-        cdef int error = 0
-        cdef me_expr *out_expr = NULL
-        cdef int ndims = self.array.ndim
-        cdef int64_t* shape = &self.array.shape[0]
-        cdef int32_t* chunkshape = &self.array.chunkshape[0]
-        cdef int32_t* blockshape = &self.array.blockshape[0]
-        cdef int rc = _me_compile_nd_configured(expression_bytes, variables, n, me_output_dtype, ndims,
-                                        shape, chunkshape, blockshape, ME_JIT_ON,
-                                        &error, &out_expr)
-        for i in range(n):
-            free(variables[i].name)
-        free(variables)
-
-        cdef bint jit = False
-        if rc == ME_COMPILE_SUCCESS and out_expr != NULL:
-            jit = me_expr_has_jit_kernel(out_expr)
-        if out_expr != NULL:
-            me_free(out_expr)
-        return {
-            "compiled": rc == ME_COMPILE_SUCCESS,
-            "jit": bool(jit),
-            "status": _me_compile_status_name(rc),
+        entry = re.search(r"(?m)^def ([A-Za-z_]\w*)\(", expression)
+        if entry is None:
+            return {"compiled": False, "jit": False, "status": "invalid_source"}
+        ndim = self.ndim if re.search(r"\b(?:_flat_idx|_ndim|_[in]\d+)\b", expression) else 0
+        recipe = {
+            "version": 1, "language_version": "0.2", "source": expression,
+            "entry_point": entry.group(1), "inputs": list(inputs), "constants": [],
+            "output": menudet_dtype_descriptor(self.dtype),
+            "cardinality": "elementwise", "ndim": ndim, "casting": "unsafe",
         }
+        try:
+            kernel = MenudetKernel.from_recipe(
+                recipe, {name: value.dtype for name, value in inputs.items()}, jit=True
+            )
+        except MenudetError as error:
+            if "declared elementwise result disagrees with block scalar source" not in str(error):
+                return {"compiled": False, "jit": False, "status": error.status}
+            recipe["cardinality"] = "block_scalar"
+            try:
+                kernel = MenudetKernel.from_recipe(
+                    recipe, {name: value.dtype for name, value in inputs.items()}, jit=True
+                )
+            except MenudetError as scalar_error:
+                return {"compiled": False, "jit": False, "status": scalar_error.status}
+        return {"compiled": True, "jit": kernel.has_jit, "status": "ME_COMPILE_SUCCESS"}
 
     @_handle_locked
     def _set_pref_matmul(self, inputs, fp_accuracy):

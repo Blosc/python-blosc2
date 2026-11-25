@@ -58,14 +58,14 @@ def test_small_constructors_use_menudet_without_jit(monkeypatch):
         pytest.fail("Supported small ramps must not create a legacy LazyUDF")
 
     monkeypatch.setattr(blosc2, "lazyudf", forbidden)
-    original = blosc2.MenudetKernel.from_json
+    original = blosc2.MenudetKernel.from_recipe
     observed = []
 
-    def load(artifact, *, jit=None):
+    def load(recipe, inputs, *, jit=None):
         observed.append(jit)
-        return original(artifact, jit=jit)
+        return original(recipe, inputs, jit=jit)
 
-    monkeypatch.setattr(blosc2.MenudetKernel, "from_json", load)
+    monkeypatch.setattr(blosc2.MenudetKernel, "from_recipe", load)
     np.testing.assert_array_equal(blosc2.arange(31)[:], np.arange(31))
     assert observed[-1] is False
     np.testing.assert_allclose(blosc2.linspace(0, 1, 31)[:], np.linspace(0, 1, 31))

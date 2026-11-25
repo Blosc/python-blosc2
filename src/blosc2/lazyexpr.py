@@ -2365,9 +2365,10 @@ def fast_eval(  # noqa: C901
         if isinstance(expr_string_miniexpr, str):
             if not is_dsl and _miniexpr_integer_atan2(expr_string_miniexpr, operands):
                 use_miniexpr = False
-            expr_string_miniexpr = _apply_jit_backend_pragma(
-                expr_string_miniexpr, operands_miniexpr, jit_backend
-            )
+            if is_dsl:
+                expr_string_miniexpr = _apply_jit_backend_pragma(
+                    expr_string_miniexpr, operands_miniexpr, jit_backend
+                )
 
         def _miniexpr_eligible_operand(op):
             if isinstance(op, blosc2.NDArray):

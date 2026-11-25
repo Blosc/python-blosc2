@@ -87,19 +87,28 @@ class MenudetFunction:
             raise author.dsl_error
         if author.row_columns is not None:
             raise TypeError("Menudet decorators currently accept array parameters, not row proxies")
-        # Annotations/defaults are Python binding metadata, not native syntax or
-        # captures. Normalize only this author's header; leave @dsl_kernel intact.
+        # Menudet 0.2 retains authored element types in portable source. Resolve
+        # Python aliases once; the native parser never sees module expressions.
         pragmas = {
             **_header_pragmas(author.dsl_source or ""),
             **_header_pragmas(inspect.cleandoc(func.__doc__ or "")),
         }
         tree = ast.parse(author.dsl_source)
         function = tree.body[0]
-        function.returns = None
+        function.returns = (
+            ast.Name(id=menudet_dtype_descriptor(self._output_dtype)["dtype"], ctx=ast.Load())
+            if self._output_dtype is not None and self._output_dtype.kind not in "SU"
+            else None
+        )
         function.args.defaults = []
         function.args.posonlyargs, function.args.args = [], function.args.posonlyargs + function.args.args
         for arg in function.args.args:
-            arg.annotation = None
+            dtype = self._input_dtypes.get(arg.arg)
+            arg.annotation = (
+                ast.Name(id=menudet_dtype_descriptor(dtype)["dtype"], ctx=ast.Load())
+                if dtype is not None and dtype.kind not in "SU"
+                else None
+            )
         unparsed = ast.unparse(tree)
         if pragmas:
             header = "".join(f"# me:{k}={v}\n" for k, v in pragmas.items())
@@ -126,9 +135,19 @@ class MenudetFunction:
             if arithmetic_names(expression) == tuple(sorted(self._names)):
                 self._expression = expression
         self._author = author
+        author.input_constraints = {
+            name: menudet_dtype_descriptor(dtype)
+            for name, dtype in self._input_dtypes.items()
+            if dtype.kind in "SU"
+        }
         self._jit, self._require_jit = jit, require_jit
         self._partitions = tuple(partitions) if partitions is not None else None
-        self._export_options = {"cardinality": cardinality, "ndim": ndim, "casting": casting}
+        self._export_options = {
+            "cardinality": cardinality,
+            "ndim": ndim,
+            "casting": casting,
+            "version": "0.2",
+        }
         self._kernels = {}
         self._lock = RLock()
         functools.update_wrapper(self, func, updated=())
@@ -246,11 +265,26 @@ class MenudetFunction:
                                 "Native output inference is unavailable; add a return dtype annotation"
                             )
                 if kernel is not None:
+                    # Retain the author recipe independently of the optimized
+                    # graph specialization and its concrete input signature.
+                    kernel._recipe = {
+                        "version": 1,
+                        "language_version": self._export_options["version"],
+                        "source": self._author.dsl_source,
+                        "entry_point": self._author.__name__,
+                        "inputs": list(self._names),
+                        "constants": [],
+                        "output": None,
+                        "cardinality": "elementwise",
+                        "ndim": 0,
+                        "casting": "unsafe",
+                        "metadata": {},
+                        "input_constraints": {},
+                    }
+                    kernel._handle.retain_author_recipe(kernel._recipe)
                     self._kernels[key] = kernel
                     return kernel
                 if output is None:
-                    if any(dtype.kind not in "biuf" for dtype in dtypes.values()):
-                        raise TypeError("Nonnumeric kernels require a return dtype annotation")
                     kernel = prepare_menudet_kernel(
                         self._author, dtypes, None, jit=jit, **self._export_options
                     )

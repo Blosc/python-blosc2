@@ -4,8 +4,112 @@
 #ifndef B2_DSL_ARTIFACT_BRIDGE_H
 #define B2_DSL_ARTIFACT_BRIDGE_H
 #include "miniexpr.h"
+#include "miniexpr_kernel.h"
+#include "miniexpr_grid.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+/* Formula discovery uses the same typed contract as formula execution. Never
+ * wrap a formula in a different language merely to ask for its string width. */
+static int b2_formula_describe(const char *source, const me_input_spec *inputs,
+    size_t ninputs, me_dtype *dtype, size_t *width) {
+    me_signature signature = ME_SIGNATURE_INITIALIZER;
+    signature.inputs = inputs;
+    signature.ninputs = ninputs;
+    me_kernel *kernel = NULL;
+    int rc = me_prepare_formula(source, &signature, NULL, &kernel, NULL);
+    if (rc == ME_SUCCESS) {
+        me_kernel_info info = ME_KERNEL_INFO_INITIALIZER;
+        rc = me_describe(kernel, &info);
+        if (rc == ME_SUCCESS) {
+            *dtype = info.output_dtype;
+            *width = info.output_itemsize;
+        }
+    }
+    me_kernel_free(kernel);
+    return rc;
+}
+
+typedef struct {
+    me_kernel *kernel;
+    me_grid *grid;
+    size_t ninputs;
+    size_t widths[ME_MAX_VARS];
+    size_t output_width;
+} b2_formula_grid;
+
+static void b2_formula_grid_free(void *handle) {
+    b2_formula_grid *state = (b2_formula_grid *)handle;
+    if (!state) return;
+    me_kernel_free(state->kernel);
+    me_grid_free(state->grid);
+    free(state);
+}
+
+static int b2_formula_grid_prepare(const char *source, const me_variable *inputs,
+    int ninputs, me_dtype dtype, size_t width, int ndim, const int64_t *shape,
+    const int32_t *chunks, const int32_t *blocks, void **out) {
+    *out = NULL;
+    if (ninputs < 0 || ninputs > ME_MAX_VARS || !width) return ME_ERR_INVALID_ARG;
+    b2_formula_grid *state = (b2_formula_grid *)calloc(1, sizeof(*state));
+    if (!state) return ME_ERR_OOM;
+    me_input_spec slots[ME_MAX_VARS];
+    for (int i = 0; i < ninputs; i++) {
+        slots[i] = (me_input_spec){inputs[i].name, inputs[i].dtype, inputs[i].itemsize};
+        state->widths[i] = inputs[i].itemsize;
+        if (!state->widths[i]) {
+            switch (inputs[i].dtype) {
+            case ME_BOOL: case ME_INT8: case ME_UINT8: state->widths[i] = 1; break;
+            case ME_INT16: case ME_UINT16: state->widths[i] = 2; break;
+            case ME_INT32: case ME_UINT32: case ME_FLOAT32: state->widths[i] = 4; break;
+            case ME_INT64: case ME_UINT64: case ME_FLOAT64: case ME_COMPLEX64: state->widths[i] = 8; break;
+            case ME_COMPLEX128: state->widths[i] = 16; break;
+            default: break;
+            }
+        }
+    }
+    state->ninputs = (size_t)ninputs;
+    state->output_width = width;
+    me_signature signature = ME_SIGNATURE_INITIALIZER;
+    signature.inputs = slots;
+    signature.ninputs = state->ninputs;
+    signature.output_dtype = dtype;
+    signature.output_itemsize = width;
+    signature.cardinality = ME_ELEMENTWISE;
+    int rc = me_prepare_formula(source, &signature, NULL, &state->kernel, NULL);
+    me_grid_spec grid = ME_GRID_SPEC_INITIALIZER;
+    grid.ndim = ndim;
+    grid.shape = shape;
+    grid.chunkshape = chunks;
+    grid.blockshape = blocks;
+    if (rc == ME_SUCCESS) rc = me_grid_create(&grid, &state->grid, NULL);
+    if (rc != ME_SUCCESS) b2_formula_grid_free(state);
+    else *out = state;
+    return rc;
+}
+
+static int b2_formula_grid_valid(const void *handle, int64_t chunk, int64_t block,
+    int64_t *valid) {
+    const b2_formula_grid *state = (const b2_formula_grid *)handle;
+    me_grid_block_info info = ME_GRID_BLOCK_INFO_INITIALIZER;
+    int rc = me_grid_describe_block(state->grid, chunk, block, &info, NULL);
+    if (rc == ME_SUCCESS) *valid = (int64_t)info.valid_nitems;
+    return rc;
+}
+
+static int b2_formula_grid_eval(const void *handle, const void **inputs, size_t nitems,
+    int64_t chunk, int64_t block, void *output) {
+    const b2_formula_grid *state = (const b2_formula_grid *)handle;
+    me_buffer buffers[ME_MAX_VARS];
+    for (size_t i = 0; i < state->ninputs; i++) {
+        if (!state->widths[i] || nitems > SIZE_MAX / state->widths[i]) return ME_ERR_INVALID_ARG;
+        buffers[i] = (me_buffer){inputs[i], nitems * state->widths[i]};
+    }
+    if (nitems > SIZE_MAX / state->output_width) return ME_ERR_INVALID_ARG;
+    return me_grid_eval_block(state->grid, state->kernel, chunk, block, buffers,
+        state->ninputs, (me_mut_buffer){output, nitems * state->output_width}, NULL, NULL);
+}
 
 #ifdef B2_HAVE_MENUDET_ARTIFACT
 #include "miniexpr_artifact.h"
@@ -21,6 +125,13 @@ static int b2_artifact_options_available(void) {
 static int b2_artifact_auto_jit_mode(void) {
 #ifdef ME_ARTIFACT_EXECUTION_KIND_VERSION
     return 3;
+#else
+    return 0;
+#endif
+}
+static int b2_core_prepare_available(void) {
+#ifdef ME_ARTIFACT_DIRECT_PREPARE_VERSION
+    return 1;
 #else
     return 0;
 #endif
@@ -96,6 +207,23 @@ static me_dtype b2_artifact_dtype(const void *handle, int index) { (void)handle;
 static me_dtype b2_artifact_output(const void *handle) { (void)handle; return ME_AUTO; }
 static int b2_artifact_jit(const void *handle) { (void)handle; return 0; }
 #endif
+
+static int b2_artifact_prepare_source(const char *version, const char *source,
+    const me_signature *signature, int jit, const me_jit_options *options,
+    void **out, b2_artifact_error *error) {
+#ifdef ME_ARTIFACT_DIRECT_PREPARE_VERSION
+    me_artifact *handle = NULL;
+    int rc = me_artifact_prepare_menudet(version, source, signature, jit, options, &handle, error);
+    *out = handle;
+    return rc;
+#else
+    (void)version; (void)source; (void)signature; (void)jit; (void)options;
+    *out = NULL;
+    memset(error, 0, sizeof(*error));
+    snprintf(error->message, sizeof(error->message), "Build with direct Menudet preparation support");
+    return -100;
+#endif
+}
 
 static int b2_artifact_load_options(const char *json, size_t size, int jit,
                                   const me_jit_options *options, void **out, b2_artifact_error *error) {

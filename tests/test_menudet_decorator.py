@@ -89,19 +89,19 @@ def test_specialization_reuses_validated_export(
         function.__annotations__["return"] = np.float64
     author = blosc2.menudet(jit=jit)(function)
     original_captures = menudet_result._export_captures
-    original_import = blosc2.MenudetKernel.from_json
+    original_import = blosc2.MenudetKernel.from_recipe
     captures, policies = [], []
 
     def record_captures(*args, **kwargs):
         captures.append(None)
         return original_captures(*args, **kwargs)
 
-    def record_import(cls, artifact, *, jit=None, infer_output=False):
+    def record_import(cls, recipe, input_dtypes, *, jit=None):
         policies.append(jit)
-        return original_import(artifact, jit=jit, infer_output=infer_output)
+        return original_import(recipe, input_dtypes, jit=jit)
 
     monkeypatch.setattr(menudet_result, "_export_captures", record_captures)
-    monkeypatch.setattr(blosc2.MenudetKernel, "from_json", classmethod(record_import))
+    monkeypatch.setattr(blosc2.MenudetKernel, "from_recipe", classmethod(record_import))
     x = np.arange(4, dtype=dtype)
     kernel = author.specialize(x)
     np.testing.assert_array_equal(kernel.evaluate_block({"x": x}), x + offset)

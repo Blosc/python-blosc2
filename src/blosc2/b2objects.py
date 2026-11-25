@@ -17,6 +17,7 @@ from blosc2.expression_graph import bounded_recipe
 
 _B2OBJECT_META_KEY = "b2o"
 _B2OBJECT_VERSION = 1
+_MENUDET_OBJECT_VERSION = 2
 _B2OBJECT_USER_VLMETA_KEY = "_b2o_user_vlmeta"
 
 
@@ -47,7 +48,10 @@ def make_b2object_carrier(
     **kwargs,
 ):
     meta = dict(kwargs.pop("meta", {}))
-    meta[_B2OBJECT_META_KEY] = {"kind": kind, "version": _B2OBJECT_VERSION}
+    meta[_B2OBJECT_META_KEY] = {
+        "kind": kind,
+        "version": _MENUDET_OBJECT_VERSION if kind == "menudet" else _B2OBJECT_VERSION,
+    }
     kwargs["meta"] = meta
     return blosc2.empty(shape=shape, dtype=dtype, chunks=chunks, blocks=blocks, **kwargs)
 
@@ -120,8 +124,8 @@ def encode_b2object_payload(obj) -> dict[str, Any] | None:
     if isinstance(obj, MenudetLazyArray):
         return {
             "kind": "menudet",
-            "version": _B2OBJECT_VERSION,
-            "artifact": obj.kernel.to_json(),
+            "version": _MENUDET_OBJECT_VERSION,
+            "recipe": obj.kernel.to_recipe(),
             "shape": list(obj._domain),
             "partitions": list(obj.partitions),
             "operands": {name: encode_operand_reference(value) for name, value in obj.inputs.items()},
@@ -148,18 +152,38 @@ def decode_b2object_payload(payload: dict[str, Any], *, carrier_path=None, carri
     deserialize = normalize_deserialize(deserialize)
     kind = payload.get("kind")
     version = payload.get("version")
-    if version != _B2OBJECT_VERSION:
+    if kind not in {"c2array", "menudet", "remote_array", "lazyexpr", "lazyudf"}:
+        raise ValueError(f"Unsupported persisted Blosc2 object kind: {kind!r}")
+    if version != _B2OBJECT_VERSION and not (kind == "menudet" and version == _MENUDET_OBJECT_VERSION):
         raise ValueError(f"Unsupported persisted Blosc2 object version: {version!r}")
     if kind == "c2array":
         ref = blosc2.Ref.from_dict(payload)
         return ref.open(deserialize=deserialize)
     if kind == "menudet":
-        kernel = blosc2.MenudetKernel.from_json(payload["artifact"])
+        if version == _MENUDET_OBJECT_VERSION:
+            from blosc2.menudet_recipe import validate_menudet_recipe
+
+            recipe = validate_menudet_recipe(payload["recipe"])
+            shape, partitions = payload.get("shape"), payload.get("partitions")
+            if (
+                type(shape) is not list
+                or type(partitions) is not list
+                or len(shape) != len(partitions)
+                or any(type(n) is not int or not 0 <= n < 2**63 for n in shape)
+                or any(type(n) is not int or not 0 < n < 2**63 for n in partitions)
+            ):
+                raise ValueError("Invalid persisted Menudet domain or partitions")
+        else:
+            kernel = blosc2.MenudetKernel.from_json(payload["artifact"])
         operands, missing = decode_operand_mapping(
             payload["operands"], base_path=carrier_path, deserialize=deserialize
         )
         if missing:
             raise FileNotFoundError(f"Missing Menudet operands: {missing}")
+        if version == _MENUDET_OBJECT_VERSION:
+            kernel = blosc2.MenudetKernel.from_recipe(
+                recipe, {name: operand.dtype for name, operand in operands.items()}
+            )
         return kernel.lazy(operands, shape=payload["shape"], partitions=payload["partitions"])
     if kind == "remote_array":
         if carrier is None:
@@ -239,6 +263,10 @@ def _preflight_operand_recipes(mapping, active=(), *, validate_expressions=True)
             raise TypeError("Structured operand recipe requires a string kind")
         if kind == "lazyudf":
             raise UnsupportedLegacyRecipeError()
+        if kind == "menudet" and payload.get("version") == _MENUDET_OBJECT_VERSION:
+            from blosc2.menudet_recipe import validate_menudet_recipe
+
+            validate_menudet_recipe(payload.get("recipe"))
         if kind == "lazyexpr" and validate_expressions:
             expression = payload.get("expression")
             if type(expression) is not str:
@@ -275,10 +303,14 @@ def open_b2object(obj):
         raise UnsupportedLegacyRecipeError()
 
     payload = read_b2object_payload(obj)
-    if marker.get("version") != _B2OBJECT_VERSION:
+    if marker.get("version") != _B2OBJECT_VERSION and not (
+        marker.get("kind") == "menudet" and marker.get("version") == _MENUDET_OBJECT_VERSION
+    ):
         raise ValueError(f"Unsupported persisted Blosc2 object version: {marker.get('version')!r}")
     if marker.get("kind") != payload.get("kind"):
         raise ValueError("Persisted Blosc2 object marker/payload kind mismatch")
+    if marker.get("version") != payload.get("version"):
+        raise ValueError("Persisted Blosc2 object marker/payload version mismatch")
     carrier_path = None
     schunk = getattr(obj, "schunk", obj)
     if getattr(schunk, "urlpath", None) is not None:
