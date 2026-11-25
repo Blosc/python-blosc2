@@ -1,2 +1,2 @@
-__version__ = "4.16.2.dev0"
+__version__ = "5.0.0.alpha1"
 __array_api_version__ = "2024.12"
