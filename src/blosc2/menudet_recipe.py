@@ -3,6 +3,8 @@
 import ast
 import copy
 import math
+import tokenize
+from io import StringIO
 
 import numpy as np
 
@@ -123,20 +125,58 @@ def passive_recipe_value(value, depth=0, budget=None):
     return False
 
 
+def _parse_recipe_header(source):
+    """Parse only the portable def header so native DSL bodies like `!x` stay intact."""
+    from .menudet_kernel import MenudetError
+
+    if type(source) is not str or "\0" in source or len(source.encode("utf-8")) > 1024**2:
+        raise MenudetError("Invalid source text", status="invalid_source")
+    try:
+        tokens = tokenize.generate_tokens(StringIO(source).readline)
+        lparen = rparen = colon = None
+        depth = 0
+        seen_def = False
+        for tok in tokens:
+            if not seen_def:
+                if tok.type in (tokenize.ENCODING, tokenize.COMMENT, tokenize.NL):
+                    continue
+                if tok.type == tokenize.NAME and tok.string == "def":
+                    seen_def = True
+                    continue
+                raise MenudetError("Recipe must contain one function", status="invalid_source")
+            if lparen is None:
+                if tok.type == tokenize.OP and tok.string == "(":
+                    lparen = tok
+                    depth = 1
+                continue
+            if tok.type == tokenize.OP and tok.string == "(":
+                depth += 1
+                continue
+            if tok.type == tokenize.OP and tok.string == ")":
+                depth -= 1
+                if depth == 0:
+                    rparen = tok
+                continue
+            if rparen is not None and tok.type == tokenize.OP and tok.string == ":":
+                colon = tok
+                break
+        if not seen_def or lparen is None or rparen is None or colon is None:
+            raise MenudetError("Invalid source syntax", status="invalid_source")
+        lines = source.splitlines(keepends=True)
+        header = "".join(lines[: colon.end[0] - 1]) + lines[colon.end[0] - 1][: colon.end[1]]
+        tree = ast.parse(header + "\n    pass\n")
+    except (SyntaxError, ValueError, RecursionError, tokenize.TokenError) as error:
+        raise MenudetError("Invalid source syntax", status="invalid_source") from error
+    if len(tree.body) != 1 or not isinstance(tree.body[0], ast.FunctionDef):
+        raise MenudetError("Recipe must contain one function", status="invalid_source")
+    return tree.body[0]
+
+
 def _recipe_function(recipe):
     """Check the portable header; do not execute Python annotations."""
     from .menudet_kernel import MenudetError
 
-    source = recipe["source"]
-    if type(source) is not str or "\0" in source or len(source.encode("utf-8")) > 1024**2:
-        raise MenudetError("Invalid source text", status="invalid_source")
-    try:
-        tree = ast.parse(source)
-    except (SyntaxError, ValueError, RecursionError) as error:
-        raise MenudetError("Invalid source syntax", status="invalid_source") from error
-    if len(tree.body) != 1 or not isinstance(tree.body[0], ast.FunctionDef):
-        raise MenudetError("Recipe must contain one function", status="invalid_source")
-    function = tree.body[0]
+    function = _parse_recipe_header(recipe["source"])
     if (
         function.name != recipe["entry_point"]
         or function.decorator_list
@@ -235,7 +275,7 @@ def validate_menudet_recipe(recipe):
 
 def unannotated_menudet_source(source):
     """Remove header annotations only; retain comments, pragmas and body text."""
-    function = ast.parse(source).body[0]
+    function = _parse_recipe_header(source)
     starts = [0]
     for line in source.splitlines(keepends=True):
         starts.append(starts[-1] + len(line))
