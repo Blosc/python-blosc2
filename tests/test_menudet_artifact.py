@@ -118,13 +118,17 @@ def test_prepare_infers_output_without_probe_artifact(native_artifacts):
 
     kernel = DSLKernel.from_source("def k(x):\n    return x + 1\n")
     prepared = prepare_menudet_kernel(kernel, {"x": np.dtype("float32")}, None)
+    assert prepared.to_recipe()["language_version"] == "0.2"
     assert prepared.output_dtype == np.dtype("float32")
     assert prepared.inferred_dtype == np.dtype("float32")
     decoded = json.loads(prepared.to_json())
+    assert decoded["language"]["version"] == "0.1"
     assert decoded["output"] == {"contract": "elementwise", "dtype": "float32"}
     np.testing.assert_array_equal(
         prepared.evaluate({"x": np.arange(4, dtype="float32")}), np.arange(1, 5, dtype="float32")
     )
+    with pytest.raises(blosc2.MenudetError, match=r'omit version or pass "0\.2"'):
+        prepare_menudet_kernel(kernel, {"x": np.dtype("float32")}, version="0.1")
 
 
 def test_export_capture_snapshot(native_artifacts, monkeypatch):
