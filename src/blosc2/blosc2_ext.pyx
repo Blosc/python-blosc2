@@ -1153,7 +1153,7 @@ cdef extern from "b2nd_kernel_pilot.h":
     ctypedef struct me_error:
         char message[256]
     int b2_pilot_available()
-    int b2_pilot_map(b2nd_array_t *, const char *, double *, int32_t, c_bool, size_t, me_error *) noexcept nogil
+    int b2_pilot_map(b2nd_array_t *, const void *, double *, int32_t, c_bool, size_t, me_error *) noexcept nogil
 
 cdef extern from "dsl_artifact_bridge.h":
     ctypedef struct b2_artifact_input:
@@ -7148,39 +7148,41 @@ cdef class NDArray:
         return <uintptr_t> self.array
 
     @_handle_locked
-    def _evaluate_b2nd_kernel_pilot(self, str source, size_t max_scratch=65536, *,
-                                    partition=None, bint block_scalar=False):
-        """Exercise the C-Blosc2 pilot on a 1-D float64 map or logical reduction."""
+    def _evaluate_b2nd_kernel_pilot(self, kernel, size_t max_scratch=65536, *, partition=None):
+        """Run a prepared MenudetKernel through the opt-in C-Blosc2 pilot."""
         cdef np.ndarray output
-        cdef bytes encoded
-        cdef const char *text
+        cdef MenudetArtifactHandle owner
         cdef double *data
         cdef me_error error
         cdef int rc
         cdef int32_t group = 0
         cdef int64_t output_size
+        cdef bint block_scalar
         if not b2_pilot_available():
             raise NotImplementedError("Build with B2_EXPERIMENTAL_SHARED_MINIEXPR_CORE")
         if self.array.ndim != 1 or self.dtype != np.dtype("float64"):
             raise ValueError("The b2nd kernel pilot requires a native float64 vector")
+        if not isinstance(kernel, blosc2.MenudetKernel):
+            raise TypeError("The b2nd kernel pilot requires a prepared MenudetKernel")
+        owner = kernel._handle
+        if owner is None or owner._handle == NULL:
+            raise ValueError("The b2nd kernel pilot requires an initialized native kernel")
+        # Keep the native owner (and any graph it borrows from) alive across nogil.
+        block_scalar = b2_artifact_cardinality(owner._handle) == 1
         if partition is not None:
             if type(partition) is not int or not 1 <= partition <= 2147483647:
                 raise ValueError("The pilot partition must be a positive int32 extent")
             group = partition
         if block_scalar and not group:
             raise ValueError("The block-scalar pilot requires an explicit logical partition")
-        encoded = source.encode("utf-8")
-        if not encoded or b"\0" in encoded:
-            raise ValueError("Invalid Menudet source for the b2nd kernel pilot")
         output_size = self.array.shape[0]
         if block_scalar:
             output_size = output_size // group + (output_size % group != 0)
         output = np.empty(output_size, dtype=np.float64)
-        text = encoded
         data = <double *> output.data
         memset(&error, 0, sizeof(error))
         with nogil:
-            rc = b2_pilot_map(self.array, text, data, group, block_scalar, max_scratch, &error)
+            rc = b2_pilot_map(self.array, owner._handle, data, group, block_scalar, max_scratch, &error)
         if rc < 0:
             message = (<bytes>error.message).decode("utf-8", "replace")
             raise ValueError(message or f"b2nd kernel pilot failed (status {rc}); check the kernel and scratch budget")
