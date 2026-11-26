@@ -1,7 +1,8 @@
 # Menudet recipes in b2o v2
 
-Implementation draft for Python-Blosc2 5.0 / C-Blosc2 4.0. Kernel language,
-recipe and container versions are separate.
+Storage contract for the Python-Blosc2 4.17 migration and 5.x. Kernel language,
+recipe and container versions are separate; the storage migration does not
+require C-Blosc2 4.x.
 
 ## Container records
 
@@ -32,6 +33,9 @@ reader; standard builds retain that reader.
 Computed and generated CTable columns use an analogous version-2 `recipe`
 field in their own metadata, retaining bindings and independent-row geometry.
 Older column metadata without a version remains a v1 JSON read.
+Opening a table or making an unrelated schema change preserves legacy entries.
+An explicit `CTable.save()` migrates the destination copy only, including the
+transformers of materialized generated columns.
 
 ## Reusable recipe
 
