@@ -261,6 +261,7 @@ def test_graph_sources_empty_domain_does_not_read(monkeypatch):
 def test_automatic_compressed_worker_failure_is_not_replayed(monkeypatch, parallel_sources_runtime):
     import blosc2.native_graph as native
     import blosc2.resident_execution as resident
+
     # Exercise the bounded-reader worker route; prefilter failures have their
     # own callback/merge propagation test.
     monkeypatch.setattr(native, "_pairwise_prefilter_kernel", lambda *args: None)

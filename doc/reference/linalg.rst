@@ -9,6 +9,7 @@ The following functions can be used for computing linear algebra operations with
     diagonal
     matmul
     matrix_transpose
+    moveaxis
     outer
     permute_dims
     tensordot
@@ -20,6 +21,7 @@ The following functions can be used for computing linear algebra operations with
 .. autofunction:: blosc2.linalg.diagonal
 .. autofunction:: blosc2.linalg.matmul
 .. autofunction:: blosc2.linalg.matrix_transpose
+.. autofunction:: blosc2.linalg.moveaxis
 .. autofunction:: blosc2.linalg.outer
 .. autofunction:: blosc2.linalg.permute_dims
 .. autofunction:: blosc2.linalg.tensordot
