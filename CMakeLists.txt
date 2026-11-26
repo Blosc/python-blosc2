@@ -70,6 +70,8 @@ add_custom_command(
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_array_bridge.h"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_artifact_bridge.h"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/b2nd_kernel_pilot.h"
+          "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/b2nd_exec_bridge.h"
+          "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/b2nd_exec.pxi"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_graph_bridge.h"
   VERBATIM)
 
@@ -299,6 +301,9 @@ else()
     if(B2_EXPERIMENTAL_SHARED_MINIEXPR_CORE)
         target_include_directories(blosc2_ext PRIVATE "${blosc2_SOURCE_DIR}/blosc")
         target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_B2ND_KERNEL_PILOT)
+        if(EXISTS "${blosc2_SOURCE_DIR}/blosc/b2nd-exec.h")
+            target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_B2ND_EXEC)
+        endif()
     endif()
     file(STRINGS "${blosc2_SOURCE_DIR}/include/blosc2.h" _blosc2_version_line
          REGEX "^#define[ \t]+BLOSC2_VERSION_STRING")

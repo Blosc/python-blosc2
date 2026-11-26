@@ -2137,6 +2137,9 @@ def native_graph_sources_available():
     return bool(b2_graph_sources_available())
 
 
+include "b2nd_exec.pxi"
+
+
 cdef class NativeGraphHandle:
     cdef void *_handle
 
