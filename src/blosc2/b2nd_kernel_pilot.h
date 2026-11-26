@@ -29,8 +29,16 @@ static int b2_pilot_write(void *context, int64_t chunk, int64_t block,
     return 0;
 }
 
-static int b2_pilot_map(b2nd_array_t *input, const char *source, double *output,
-                        size_t scratch, me_error *error) {
+static int b2_pilot_write_scalar(void *context, int64_t chunk, int64_t block,
+                                 const me_grid_block_info *info, me_buffer result) {
+    (void)block;
+    (void)info;
+    ((double *)context)[chunk] = *(const double *)result.data;
+    return 0;
+}
+
+static int b2_pilot_map(b2nd_array_t *input, const char *source, double *output, int32_t partition,
+                       bool scalar, size_t scratch, me_error *error) {
     const size_t width = sizeof(double);
     if (!input || input->ndim != 1 || !input->sc || input->sc->typesize != width) {
         return BLOSC2_ERROR_INVALID_PARAM;
@@ -39,17 +47,22 @@ static int b2_pilot_map(b2nd_array_t *input, const char *source, double *output,
     me_signature signature = ME_SIGNATURE_INITIALIZER;
     signature.inputs = &slot;
     signature.ninputs = 1;
-    signature.cardinality = ME_ELEMENTWISE;
+    signature.cardinality = scalar ? ME_BLOCK_SCALAR : ME_ELEMENTWISE;
     me_kernel *kernel = NULL;
     if (me_prepare_menudet("0.2", source, &signature, NULL, &kernel, error) != ME_SUCCESS) {
         return BLOSC2_ERROR_INVALID_PARAM;
     }
     me_kernel_info info = ME_KERNEL_INFO_INITIALIZER;
     int rc = BLOSC2_ERROR_INVALID_PARAM;
-    if (me_describe(kernel, &info) == ME_SUCCESS && info.cardinality == ME_ELEMENTWISE &&
+    if (me_describe(kernel, &info) == ME_SUCCESS && info.cardinality == signature.cardinality &&
         !info.context_ndim && info.output_dtype == ME_FLOAT64) {
-        rc = b2nd_eval_kernel_grid(input, kernel, 1, &width, scratch, b2_pilot_read, input,
-                                   b2_pilot_write, output, error);
+        if (partition > 0) {
+            rc = b2nd_eval_kernel_partitions_1d(input->shape[0], partition, kernel, 1, &width, scratch,
+                b2_pilot_read, input, scalar ? b2_pilot_write_scalar : b2_pilot_write, output, error);
+        } else if (!scalar) {
+            rc = b2nd_eval_kernel_grid(input, kernel, 1, &width, scratch, b2_pilot_read, input,
+                b2_pilot_write, output, error);
+        }
     }
     me_kernel_free(kernel);
     return rc;
@@ -58,9 +71,9 @@ static int b2_pilot_map(b2nd_array_t *input, const char *source, double *output,
 static int b2_pilot_available(void) { return 1; }
 #else
 static int b2_pilot_available(void) { return 0; }
-static int b2_pilot_map(b2nd_array_t *input, const char *source, double *output,
-                        size_t scratch, me_error *error) {
-    (void)input; (void)source; (void)output; (void)scratch; (void)error;
+static int b2_pilot_map(b2nd_array_t *input, const char *source, double *output, int32_t partition,
+                       bool scalar, size_t scratch, me_error *error) {
+    (void)input; (void)source; (void)output; (void)partition; (void)scalar; (void)scratch; (void)error;
     return BLOSC2_ERROR_INVALID_PARAM;
 }
 #endif
