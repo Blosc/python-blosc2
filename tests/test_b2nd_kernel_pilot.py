@@ -28,6 +28,34 @@ def group_sum(x):
     return block_sum(x)  # noqa: F821
 
 
+@blosc2.menudet(jit=False, cardinality="block_scalar")
+def partition_fp(x):
+    y = 1.0 / x + x * x
+    return block_sum(y)  # noqa: F821
+
+
+@pytest.mark.skipif(not AVAILABLE, reason="requires the C-Blosc2 scheduler pilot build")
+def test_b2nd_kernel_pilot_reports_fp_status_across_groups():
+    values = np.array([0.0, 2.0, 3.0, 4.0, 1e200], dtype=np.float64)
+    source = blosc2.asarray(values, chunks=(3,), blocks=(2,))
+    kernel = partition_fp.specialize(source)
+    actual, report = source._evaluate_b2nd_kernel_pilot(kernel, partition=2, return_report=True)
+    expected, flags = [], 0
+    for start in range(0, len(values), 2):
+        result, status = kernel.evaluate_block({"x": values[start : start + 2]}, return_status=True)
+        expected.append(np.asarray(result).item())
+        flags |= status["flags"]
+        assert report["fp_supported"] == status["supported"]
+    np.testing.assert_array_equal(actual, np.asarray(expected), strict=True)
+    assert report == {
+        "fp_supported": True,
+        "fp_flags": flags,
+        "execution_kind": kernel.execution_kind,
+        "prepared_has_jit": False,
+    }
+    assert flags & 2 and flags & 4  # Divide by zero in the first group, overflow in the last.
+
+
 @pytest.mark.parametrize("with_pilot", [False, True])
 def test_block_scalar_public_syntax(with_pilot, monkeypatch):
     if with_pilot and not AVAILABLE:
@@ -118,10 +146,11 @@ def test_b2nd_kernel_pilot_preserves_persisted_partitions(chunk, block, tmp_path
 @pytest.mark.skipif(not AVAILABLE, reason="requires the C-Blosc2 scheduler pilot build")
 def test_b2nd_kernel_pilot_empty_logical_domain():
     source = blosc2.asarray(np.empty(0, dtype=np.float64))
-    actual = source._evaluate_b2nd_kernel_pilot(
-        partition_sum.specialize(source), max_scratch=0, partition=3
+    actual, report = source._evaluate_b2nd_kernel_pilot(
+        partition_sum.specialize(source), max_scratch=0, partition=3, return_report=True
     )
     np.testing.assert_array_equal(actual, np.empty(0, dtype=np.float64), strict=True)
+    assert report["fp_flags"] == 0 and report["execution_kind"] is None
 
 
 @pytest.mark.skipif(AVAILABLE, reason="requires a standard build")

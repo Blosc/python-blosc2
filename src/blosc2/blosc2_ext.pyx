@@ -1152,9 +1152,13 @@ cdef extern from "miniexpr_kernel.h":
 cdef extern from "b2nd_kernel_pilot.h":
     ctypedef struct me_error:
         char message[256]
+    ctypedef struct me_fp_status:
+        unsigned flags
+        c_bool supported
     int b2_pilot_available()
     int b2_pilot_scalar_eligible(const void *)
-    int b2_pilot_map(b2nd_array_t *, const void *, double *, int32_t, c_bool, size_t, me_error *) noexcept nogil
+    int b2_pilot_map(b2nd_array_t *, const void *, double *, int32_t, c_bool, size_t,
+                     me_fp_status *, me_error *) noexcept nogil
 
 cdef extern from "dsl_artifact_bridge.h":
     ctypedef struct b2_artifact_input:
@@ -7152,12 +7156,15 @@ cdef class NDArray:
         return <uintptr_t> self.array
 
     @_handle_locked
-    def _evaluate_b2nd_kernel_pilot(self, kernel, size_t max_scratch=65536, *, partition=None):
+    def _evaluate_b2nd_kernel_pilot(self, kernel, size_t max_scratch=65536, *, partition=None,
+                                    bint return_report=False):
         """Run a prepared MenudetKernel through the opt-in C-Blosc2 pilot."""
         cdef np.ndarray output
         cdef MenudetArtifactHandle owner
         cdef double *data
         cdef me_error error
+        cdef me_fp_status fp
+        cdef me_fp_status *report = NULL
         cdef int rc
         cdef int32_t group = 0
         cdef int64_t output_size
@@ -7179,6 +7186,10 @@ cdef class NDArray:
             group = partition
         if block_scalar and not group:
             raise ValueError("The block-scalar pilot requires an explicit logical partition")
+        if return_report:
+            if not group:
+                raise ValueError("Pilot status reporting requires an explicit logical partition")
+            report = &fp
         output_size = self.array.shape[0]
         if block_scalar:
             output_size = output_size // group + (output_size % group != 0)
@@ -7186,10 +7197,16 @@ cdef class NDArray:
         data = <double *> output.data
         memset(&error, 0, sizeof(error))
         with nogil:
-            rc = b2_pilot_map(self.array, owner._handle, data, group, block_scalar, max_scratch, &error)
+            rc = b2_pilot_map(self.array, owner._handle, data, group, block_scalar, max_scratch, report, &error)
         if rc < 0:
             message = (<bytes>error.message).decode("utf-8", "replace")
             raise ValueError(message or f"b2nd kernel pilot failed (status {rc}); check the kernel and scratch budget")
+        if return_report:
+            return output, {
+                "fp_flags": fp.flags, "fp_supported": bool(fp.supported),
+                "execution_kind": kernel.execution_kind if self.array.shape[0] else None,
+                "prepared_has_jit": bool(b2_artifact_jit(owner._handle)),
+            }
         return output
 
     @property

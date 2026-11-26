@@ -54,7 +54,7 @@ static int b2_pilot_scalar_eligible(const void *artifact) {
 }
 
 static int b2_pilot_map(b2nd_array_t *input, const void *artifact, double *output, int32_t partition,
-                       bool scalar, size_t scratch, me_error *error) {
+                       bool scalar, size_t scratch, me_fp_status *fp, me_error *error) {
     const size_t width = sizeof(double);
     if (!input || input->ndim != 1 || !input->sc || input->sc->typesize != width) {
         return BLOSC2_ERROR_INVALID_PARAM;
@@ -70,7 +70,7 @@ static int b2_pilot_map(b2nd_array_t *input, const void *artifact, double *outpu
     }
     if (partition > 0) {
         return b2nd_eval_kernel_partitions_1d(input->shape[0], partition, kernel, 1, &width, scratch,
-            b2_pilot_read, input, scalar ? b2_pilot_write_scalar : b2_pilot_write, output, error);
+            b2_pilot_read, input, scalar ? b2_pilot_write_scalar : b2_pilot_write, output, fp, error);
     }
     if (scalar) {
         return BLOSC2_ERROR_INVALID_PARAM;
@@ -84,8 +84,8 @@ static int b2_pilot_available(void) { return 1; }
 static int b2_pilot_available(void) { return 0; }
 static int b2_pilot_scalar_eligible(const void *artifact) { (void)artifact; return 0; }
 static int b2_pilot_map(b2nd_array_t *input, const void *artifact, double *output, int32_t partition,
-                       bool scalar, size_t scratch, me_error *error) {
-    (void)input; (void)artifact; (void)output; (void)partition; (void)scalar; (void)scratch; (void)error;
+                       bool scalar, size_t scratch, me_fp_status *fp, me_error *error) {
+    (void)input; (void)artifact; (void)output; (void)partition; (void)scalar; (void)scratch; (void)fp; (void)error;
     return BLOSC2_ERROR_INVALID_PARAM;
 }
 #endif
