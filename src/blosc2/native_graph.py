@@ -565,6 +565,59 @@ def _native_cached_output_ok(expr, schedule, output):
     return not any(type(value) is np.ndarray and np.shares_memory(output, value) for value in operands)
 
 
+@lru_cache(maxsize=32)
+def _resident_min_plan(items, tile):
+    import blosc2
+
+    return blosc2.blosc2_ext._ResidentMinI64Plan(items, tile)
+
+
+def compute_c_blosc2_min_if_eligible(expr, item, tile, options):
+    """Opt-in whole-domain min(input) pilot; bind current resident values on each call."""
+    import blosc2
+
+    if (
+        _NUMPY_VALUE_PROMOTION
+        or not getattr(blosc2.blosc2_ext, "_b2nd_min_i64_available", lambda: False)()
+        or type(expr) is not blosc2.LazyExpr
+        or not isinstance(item, tuple)
+        or item
+        or options.keys() - {"_getitem"}
+        or type(tile) is not int
+        or not 0 < tile < 2**63
+        or len(expr.operands) != 1
+        or any(hasattr(expr, key) for key in ("_output", "_indices", "_order", "_where_args"))
+        or getattr(expr, "_eval_kwargs", None) is not None
+    ):
+        return None
+    name, value = next(iter(expr.operands.items()))
+    if (
+        type(value) is not np.ndarray
+        or value.ndim != 1
+        or value.dtype != np.dtype(np.int64)
+        or not value.size
+        or not value.flags.c_contiguous
+        or not value.flags.aligned
+    ):
+        return None
+    try:
+        call = expression_syntax(expr.expression)[0].body
+    except SyntaxError:
+        return None
+    if not (
+        isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "min"
+        and not call.keywords
+        and len(call.args) == 1
+        and isinstance(call.args[0], ast.Name)
+        and call.args[0].id == name
+    ):
+        return None
+    result, expr._native_execution_report = _resident_min_plan(value.size, tile).execute(value)
+    return result
+
+
 def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=None, options=None):  # noqa: C901 -- conservative metadata-only admission gates
     """Prepare the conservative automatic subset, without reading array values.
 

@@ -5421,6 +5421,7 @@ class LazyExpr(LazyArray):
         jit, jit_backend = _jit_from_env(jit, jit_backend)
         if _require_native is None:
             from .native_graph import (
+                compute_c_blosc2_min_if_eligible,
                 compute_native_graph,
                 compute_native_prefilter_if_eligible,
                 compute_prefilter_argreduce_if_eligible,
@@ -5438,6 +5439,11 @@ class LazyExpr(LazyArray):
             native_accuracy = fp_accuracy
             if native_accuracy is None and policy["fp_accuracy"] != blosc2.FPAccuracy.DEFAULT:
                 native_accuracy = policy["fp_accuracy"]
+
+            if native_jit is False and native_backend is None and native_accuracy is None:
+                minimum = compute_c_blosc2_min_if_eligible(self, item, _native_tile_items, kwargs)
+                if minimum is not None:
+                    return minimum
 
             arg_reduction = compute_prefilter_argreduce_if_eligible(
                 self,

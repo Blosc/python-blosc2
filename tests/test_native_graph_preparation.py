@@ -598,6 +598,57 @@ def test_native_text_frontend_and_json_equivalence():
     assert not report["fp_flags"]
 
 
+@pytest.mark.skipif(
+    not getattr(blosc2.blosc2_ext, "_b2nd_min_i64_available", lambda: False)(),
+    reason="requires the C-Blosc2 resident graph pilot",
+)
+def test_resident_min_pilot_against_graph():
+    values = np.arange(37, dtype=np.int64)
+    with blosc2.expression_evaluation("safe"):
+        expr = blosc2.lazyexpr("min(x)", {"x": values})
+    for tile, index in [(8, 36), (8, 4), (50, 17)]:
+        values[:] = 2**62
+        values[index] = np.iinfo(np.int64).min
+        expected = expr.compute(_require_native=True, _native_tile_items=tile)
+        reference = expr._native_execution_report
+        result = expr.compute(jit=False, _native_tile_items=tile)
+        report = expr._native_execution_report
+        assert report["route"] == "c-blosc2-resident-min"
+        assert result.dtype == expected.dtype
+        assert result.shape == expected.shape == ()
+        assert result.tobytes() == expected.tobytes()
+        assert result == values[index]
+        assert report["fp_flags"] == reference["fp_flags"] == 0
+        assert report["zero_copy_tiles"] == reference["zero_copy_tiles"] == (len(values) + tile - 1) // tile
+        assert report["input_materialization_bytes"] == report["temporary_bytes"] == 0
+    # An initial changes the graph; a strided view must not be normalized just to enter the pilot.
+    assert expr.compute(jit=False, initial=-1) == values.min()
+    assert expr._native_execution_report.get("route") != "c-blosc2-resident-min"
+    with blosc2.expression_evaluation("safe"):
+        strided = blosc2.lazyexpr("min(x)", {"x": values[::2]})
+    assert strided.compute(jit=False) == values[::2].min()
+    assert strided._native_execution_report.get("route") != "c-blosc2-resident-min"
+
+
+@pytest.mark.skipif(
+    not getattr(blosc2.blosc2_ext, "_b2nd_min_i64_available", lambda: False)(),
+    reason="requires the C-Blosc2 resident graph pilot",
+)
+def test_resident_min_pilot_binding_validation():
+    with pytest.raises(ValueError, match="prepare"):
+        blosc2.blosc2_ext._ResidentMinI64Plan(0, 8)
+    plan = blosc2.blosc2_ext._ResidentMinI64Plan(4, 8)
+    with pytest.raises(ValueError, match="match"):
+        plan.execute(np.arange(3, dtype=np.int64))
+    with pytest.raises(ValueError, match="contiguous"):
+        plan.execute(np.arange(8, dtype=np.int64)[::2])
+    with pytest.raises(ValueError, match="int64"):
+        plan.execute(np.arange(4, dtype=np.float64))
+    result, report = plan.execute(np.arange(4, dtype=np.int64))
+    assert result == 0
+    assert not report["fp_supported"]  # Integer-only execution does not probe the FP environment.
+
+
 def test_explicit_conversion_budget_preflight():
     plan = NativeGraph.from_json(graph([{"op": "input", "name": "x", "dtype": "float32"}], output="float64"))
     with pytest.raises(blosc2.MenudetError, match="budget"):

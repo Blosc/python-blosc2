@@ -1156,6 +1156,12 @@ cdef extern from "b2nd_kernel_pilot.h":
         unsigned flags
         c_bool supported
     int b2_pilot_available()
+    ctypedef struct b2nd_min_i64_plan:
+        pass
+    int b2_min_i64_available()
+    int b2nd_min_i64_prepare(int64_t, int64_t, b2nd_min_i64_plan *)
+    int b2nd_min_i64_execute(const b2nd_min_i64_plan *, const int64_t *, int64_t,
+                             int64_t *, int64_t *, size_t *) noexcept nogil
     int b2_pilot_scalar_eligible(const void *)
     int b2_pilot_map(b2nd_array_t *, const void *, double *, int32_t, c_bool, size_t,
                      me_fp_status *, me_error *) noexcept nogil
@@ -2532,6 +2538,38 @@ def menudet_artifact_available():
 
 def _b2nd_kernel_pilot_available():
     return bool(b2_pilot_available())
+
+
+def _b2nd_min_i64_available():
+    return bool(b2_min_i64_available())
+
+
+cdef class _ResidentMinI64Plan:
+    cdef b2nd_min_i64_plan plan
+
+    def __cinit__(self, int64_t items, int64_t tile):
+        if b2nd_min_i64_prepare(items, tile, &self.plan):
+            raise ValueError("Cannot prepare resident int64 minimum")
+
+    def execute(self, np.ndarray value not None):
+        cdef np.ndarray result = np.empty((), dtype=np.int64)
+        cdef int64_t items = np.PyArray_SIZE(value), tiles
+        cdef size_t scratch
+        cdef int rc
+        if (value.ndim != 1 or value.dtype != np.dtype(np.int64)
+                or not value.flags.aligned or not value.flags.c_contiguous):
+            raise ValueError("Expected a contiguous native int64 vector")
+        with nogil:
+            rc = b2nd_min_i64_execute(&self.plan, <const int64_t *>np.PyArray_DATA(value), items,
+                                      <int64_t *>np.PyArray_DATA(result), &tiles, &scratch)
+        if rc:
+            raise ValueError("Input does not match resident int64 minimum plan")
+        return result, {"route": "c-blosc2-resident-min", "backend": "c-blosc2",
+                        "semantic_revision": "menudet-numpy-0.1", "tasks": 1,
+                        "evaluated_tiles": tiles, "zero_copy_tiles": tiles, "reducer_state_bytes": scratch,
+                        "temporary_bytes": 0, "intermediate_bytes": 0, "gathered_bytes": 0,
+                        "input_materialization_bytes": 0, "output_copy_bytes": 0, "fp_flags": 0,
+                        "fp_supported": False}
 
 
 def menudet_auto_jit_mode():

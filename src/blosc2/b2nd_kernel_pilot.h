@@ -89,4 +89,23 @@ static int b2_pilot_map(b2nd_array_t *input, const void *artifact, double *outpu
     return BLOSC2_ERROR_INVALID_PARAM;
 }
 #endif
+
+/* Older pilot builds still provide the grid executor only. */
+#ifdef B2ND_RESIDENT_MIN_I64_API
+#define b2_min_i64_available() 1
+#else
+#define b2_min_i64_available() 0
+typedef struct {
+    int unused;
+} b2nd_min_i64_plan;
+static int b2nd_min_i64_prepare(int64_t items, int64_t tile, b2nd_min_i64_plan *plan) {
+    (void)items; (void)tile; (void)plan;
+    return BLOSC2_ERROR_INVALID_PARAM;
+}
+static int b2nd_min_i64_execute(const b2nd_min_i64_plan *plan, const int64_t *input,
+                                int64_t items, int64_t *output, int64_t *tiles, size_t *scratch) {
+    (void)plan; (void)input; (void)items; (void)output; (void)tiles; (void)scratch;
+    return BLOSC2_ERROR_INVALID_PARAM;
+}
+#endif
 #endif
