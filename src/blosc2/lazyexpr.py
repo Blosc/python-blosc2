@@ -5441,6 +5441,11 @@ class LazyExpr(LazyArray):
                 native_accuracy = policy["fp_accuracy"]
 
             if native_jit is False and native_backend is None and native_accuracy is None:
+                from .typed_exec import compute_typed_resident_if_eligible
+
+                typed = compute_typed_resident_if_eligible(self, item, _native_tile_items, kwargs)
+                if typed is not None:
+                    return typed
                 minimum = compute_c_blosc2_min_if_eligible(self, item, _native_tile_items, kwargs)
                 if minimum is not None:
                     return minimum

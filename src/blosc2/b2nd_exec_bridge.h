@@ -23,6 +23,11 @@ typedef struct {
     size_t itemsize, ninputs, nitems, tile_items, mapped_bytes, reducer_bytes, output_items;
 } b2_exec_info;
 
+typedef struct {
+    size_t tiles, map_calls, direct_tiles, mapped_bytes;
+    me_fp_status fp;
+} b2_exec_report;
+
 #ifdef B2_HAVE_B2ND_EXEC
 #include "b2nd-exec.h"
 
@@ -105,6 +110,18 @@ static int b2_exec_schedule_describe(const void *schedule, b2_exec_info *out) {
     }
     return rc;
 }
+static int b2_exec_execute(const void *schedule, const me_buffer *inputs, size_t ninputs,
+                           me_mut_buffer output, unsigned raise_mask,
+                           b2_exec_report *report, me_error *error) {
+    b2nd_exec_report native = {0};
+    int rc = b2nd_exec_execute(schedule, inputs, ninputs, output, raise_mask, &native, error);
+    report->tiles = native.tiles;
+    report->map_calls = native.map_calls;
+    report->direct_tiles = native.direct_tiles;
+    report->mapped_bytes = native.mapped_bytes;
+    report->fp = native.fp;
+    return rc;
+}
 #else
 static int b2_exec_available(void) { return 0; }
 static int b2_exec_prepare(const b2_exec_node *nodes, size_t count, size_t ninputs,
@@ -126,6 +143,13 @@ static int b2_exec_specialize(const void *plan, const b2_exec_meta *inputs, size
 }
 static int b2_exec_schedule_describe(const void *schedule, b2_exec_info *out) {
     (void)schedule; (void)out; return ME_ERR_UNSUPPORTED;
+}
+static int b2_exec_execute(const void *schedule, const me_buffer *inputs, size_t ninputs,
+                           me_mut_buffer output, unsigned raise_mask,
+                           b2_exec_report *report, me_error *error) {
+    (void)schedule; (void)inputs; (void)ninputs; (void)output; (void)raise_mask;
+    (void)report; (void)error;
+    return ME_ERR_UNSUPPORTED;
 }
 #endif
 #endif

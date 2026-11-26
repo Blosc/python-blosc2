@@ -12,6 +12,15 @@ cdef extern from "b2nd_exec_bridge.h":
     ctypedef struct b2_exec_info:
         int dtype, reduction, identity
         size_t itemsize, ninputs, nitems, tile_items, mapped_bytes, reducer_bytes, output_items
+    ctypedef struct me_buffer:
+        const void *data
+        size_t capacity
+    ctypedef struct me_mut_buffer:
+        void *data
+        size_t capacity
+    ctypedef struct b2_exec_report:
+        size_t tiles, map_calls, direct_tiles, mapped_bytes
+        me_fp_status fp
     int b2_exec_available()
     int b2_exec_prepare(const b2_exec_node *, size_t, size_t, uint32_t, int, void **, me_error *) nogil
     void b2_exec_free(void *)
@@ -20,6 +29,8 @@ cdef extern from "b2nd_exec_bridge.h":
     int b2_exec_specialize(const void *, const b2_exec_meta *, size_t, size_t, size_t,
                           void **, me_error *) nogil
     int b2_exec_schedule_describe(const void *, b2_exec_info *)
+    int b2_exec_execute(const void *, const me_buffer *, size_t, me_mut_buffer,
+                        unsigned, b2_exec_report *, me_error *) nogil
 
 
 def _b2nd_exec_available():
@@ -140,3 +151,45 @@ cdef class _TypedExecSchedule:
         return {"items": self._info.nitems, "tile_items": self._info.tile_items,
                 "mapped_bytes": self._info.mapped_bytes, "reducer_bytes": self._info.reducer_bytes,
                 "output_items": self._info.output_items}
+
+    def execute(self, inputs, unsigned raise_mask=0):
+        cdef me_buffer buffers[128]
+        cdef me_mut_buffer destination
+        cdef me_error error
+        cdef b2_exec_report report
+        cdef np.ndarray value, output
+        cdef size_t count = len(inputs)
+        cdef int i, rc
+        if self._schedule == NULL:
+            raise ValueError("Uninitialized typed schedule")
+        if count != self._info.ninputs:
+            raise ValueError("Typed input count mismatch")
+        # Retain every array while the GIL is released; no implicit conversions.
+        values = tuple(inputs)
+        for i, value_object in enumerate(values):
+            dtype, shape = self._metadata[i]
+            if type(value_object) is not np.ndarray:
+                raise TypeError("Typed execution requires explicit NumPy buffers")
+            value = value_object
+            if value.dtype != dtype or value_object.shape != shape:
+                raise ValueError("Typed input dtype/shape mismatch")
+            if not value.flags.c_contiguous or not value.flags.aligned or not value.dtype.isnative:
+                raise ValueError("Typed inputs must be native aligned contiguous arrays")
+            buffers[i].data = np.PyArray_DATA(value)
+            buffers[i].capacity = value.nbytes
+        shape = () if self._info.reduction else self._metadata[0][1]
+        output = np.empty(shape, dtype=_numpy_dtype_from_me_dtype(<me_dtype>self._info.dtype))
+        destination.data = np.PyArray_DATA(output)
+        destination.capacity = output.nbytes
+        memset(&error, 0, sizeof(error))
+        memset(&report, 0, sizeof(report))
+        with nogil:
+            rc = b2_exec_execute(self._schedule, buffers, count, destination, raise_mask, &report, &error)
+        if rc:
+            raise_exec_error(rc, &error)
+        return output, {"route": "c-blosc2-typed-resident", "tiles": report.tiles,
+                        "map_calls": report.map_calls, "direct_tiles": report.direct_tiles,
+                        "evaluated_tiles": report.map_calls, "zero_copy_tiles": report.tiles,
+                        "input_materialization_bytes": 0,
+                        "temporary_bytes": report.mapped_bytes, "reducer_bytes": self._info.reducer_bytes,
+                        "fp_flags": report.fp.flags, "fp_supported": bool(report.fp.supported)}

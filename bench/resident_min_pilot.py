@@ -90,13 +90,15 @@ def main():
                 return expr.compute(jit=False, _native_tile_items=args.tile, _require_native=True)
 
             compute_pilot()
-            assert expr._native_execution_report["route"].startswith("c-blosc2-resident-")
+            assert expr._native_execution_report["route"].startswith(
+                ("c-blosc2-resident-", "c-blosc2-typed-resident")
+            )
             # Unlike preparation scopes are deliberately labelled. There is no
             # independent specialization operation in the specialized pilot.
             a, b = medians(prepare_pilot, prepare_adapter, args.repeat)
             print(f"{count:10d} {'prep+geom/prep':<12} {a:12.2f} {b:12.2f}")
             _, b = medians(
-                lambda: None, lambda: adapter_plan.specialize(metadata, args.tile), args.repeat
+                lambda: None, lambda p=adapter_plan, m=metadata: p.specialize(m, args.tile), args.repeat
             )
             print(f"{count:10d} {'specialize':<12} {'n/a':>12} {b:12.2f}")
             for phase, first, second in [

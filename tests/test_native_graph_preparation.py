@@ -613,7 +613,12 @@ def test_resident_min_pilot_against_graph():
         reference = expr._native_execution_report
         result = expr.compute(jit=False, _native_tile_items=tile)
         report = expr._native_execution_report
-        assert report["route"] == "c-blosc2-resident-min"
+        route = (
+            "c-blosc2-typed-resident"
+            if getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)()
+            else "c-blosc2-resident-min"
+        )
+        assert report["route"] == route
         assert result.dtype == expected.dtype
         assert result.shape == expected.shape == ()
         assert result.tobytes() == expected.tobytes()
@@ -623,11 +628,17 @@ def test_resident_min_pilot_against_graph():
         assert report["input_materialization_bytes"] == report["temporary_bytes"] == 0
     # An initial changes the graph; a strided view must not be normalized just to enter the pilot.
     assert expr.compute(jit=False, initial=-1) == values.min()
-    assert expr._native_execution_report.get("route") != "c-blosc2-resident-min"
+    assert expr._native_execution_report.get("route") not in {
+        "c-blosc2-resident-min",
+        "c-blosc2-typed-resident",
+    }
     with blosc2.expression_evaluation("safe"):
         strided = blosc2.lazyexpr("min(x)", {"x": values[::2]})
     assert strided.compute(jit=False) == values[::2].min()
-    assert strided._native_execution_report.get("route") != "c-blosc2-resident-min"
+    assert strided._native_execution_report.get("route") not in {
+        "c-blosc2-resident-min",
+        "c-blosc2-typed-resident",
+    }
 
 
 @pytest.mark.skipif(
@@ -663,7 +674,12 @@ def test_resident_map_min_pilot_against_graph():
             reference = expr._native_execution_report
             actual = expr.compute(jit=False, _native_tile_items=tile)
             report = expr._native_execution_report
-            assert report["route"] == "c-blosc2-resident-map-min"
+            route = (
+                "c-blosc2-typed-resident"
+                if getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)()
+                else "c-blosc2-resident-map-min"
+            )
+            assert report["route"] == route
             assert actual.dtype == expected.dtype == values.dtype
             assert actual.shape == expected.shape == ()
             assert actual.tobytes() == expected.tobytes()
@@ -675,7 +691,10 @@ def test_resident_map_min_pilot_against_graph():
         values[:] = np.arange(len(values))
         assert expr.compute(jit=False) == expr.compute(_require_native=True)
         assert expr.compute(jit=False, initial=-100) == -100
-        assert expr._native_execution_report.get("route") != "c-blosc2-resident-map-min"
+        assert expr._native_execution_report.get("route") not in {
+            "c-blosc2-resident-map-min",
+            "c-blosc2-typed-resident",
+        }
 
 
 @pytest.mark.skipif(
