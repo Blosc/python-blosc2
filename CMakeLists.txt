@@ -117,6 +117,23 @@ target_link_libraries(utf8_ext PRIVATE Python::NumPy)
 # Fetch and build miniexpr library
 include(FetchContent)
 
+option(B2_EXPERIMENTAL_SHARED_MINIEXPR_CORE
+  "Use a single miniexpr core target in the bundled native C-Blosc2 build" OFF)
+if(B2_EXPERIMENTAL_SHARED_MINIEXPR_CORE)
+  if(USE_SYSTEM_BLOSC2 OR DEFINED ENV{USE_SYSTEM_BLOSC2} OR EMSCRIPTEN)
+    message(FATAL_ERROR "B2_EXPERIMENTAL_SHARED_MINIEXPR_CORE requires a native bundled C-Blosc2 build")
+  endif()
+  if(BLOSC2_MINIEXPR_ROOT)
+    message(FATAL_ERROR "B2_EXPERIMENTAL_SHARED_MINIEXPR_CORE cannot use a separate BLOSC2_MINIEXPR_ROOT")
+  endif()
+  set(BLOSC2_USE_PARENT_MINIEXPR ON)
+  set(MINIEXPR_INSTALL_CORE ON)
+  set(BLOSC2_BUNDLED_VERSION 6ef7dd713d306fe04121b246e58fb009d7e532c2)
+  set(B2_MINIEXPR_REVISION e8bf228c63b10f678e08902faf68c26e1401dd66)
+else()
+  set(B2_MINIEXPR_REVISION 9eb13499adae6abd2c4655f8d0a6c3690ff3f88c)
+endif()
+
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(MINIEXPR_BUILD_SHARED OFF CACHE BOOL "Build miniexpr shared library" FORCE)
 set(MINIEXPR_BUILD_TESTS OFF CACHE BOOL "Build miniexpr tests" FORCE)
@@ -148,8 +165,7 @@ endif()
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://codeberg.org/Blosc/miniexpr.git
-    # Typed graph map/conversion preparation without an intermediate manifest.
-    GIT_TAG 9eb13499adae6abd2c4655f8d0a6c3690ff3f88c
+    GIT_TAG ${B2_MINIEXPR_REVISION}
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
