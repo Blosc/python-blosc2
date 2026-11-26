@@ -147,7 +147,7 @@ endif()
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    # miniexpr 0.4.0 release candidate; pin the commit, not the tag.
+    # miniexpr v0.4.0; pin the tagged commit.
     GIT_TAG 64e5d180904f87513cead89cbb15bff09d065cab
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
