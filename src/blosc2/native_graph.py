@@ -572,8 +572,15 @@ def _resident_min_plan(items, tile):
     return blosc2.blosc2_ext._ResidentMinI64Plan(items, tile)
 
 
+@lru_cache(maxsize=32)
+def _resident_map_min_plan(source, items, tile):
+    import blosc2
+
+    return blosc2.blosc2_ext._ResidentMapMinI64Plan(source.encode("utf-8"), items, tile)
+
+
 def compute_c_blosc2_min_if_eligible(expr, item, tile, options):
-    """Opt-in whole-domain min(input) pilot; bind current resident values on each call."""
+    """Opt-in whole-domain int64 min/map-min; bind fresh resident values each call."""
     import blosc2
 
     if (
@@ -610,11 +617,33 @@ def compute_c_blosc2_min_if_eligible(expr, item, tile, options):
         and call.func.id == "min"
         and not call.keywords
         and len(call.args) == 1
-        and isinstance(call.args[0], ast.Name)
-        and call.args[0].id == name
     ):
         return None
-    result, expr._native_execution_report = _resident_min_plan(value.size, tile).execute(value)
+    mapped = call.args[0]
+    if isinstance(mapped, ast.Name) and mapped.id == name:
+        plan = _resident_min_plan(value.size, tile)
+    else:
+        # Initial mapped slice: weak integer literal arithmetic on one input.
+        # The core, not Python, implements promotion, wrapping and evaluation.
+        if (
+            not getattr(blosc2.blosc2_ext, "_b2nd_map_min_i64_available", lambda: False)()
+            or not isinstance(mapped, ast.BinOp)
+            or type(mapped.op) not in (ast.Add, ast.Sub, ast.Mult)
+            or not isinstance(mapped.left, ast.Name)
+            or mapped.left.id != name
+            or min(value.size, tile) * 8 > 65536
+        ):
+            return None
+        try:
+            literal = ast.literal_eval(mapped.right)
+        except (ValueError, TypeError):
+            return None
+        if type(literal) is not int or not -(2**63) <= literal < 2**63:
+            return None
+        operator = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*"}[type(mapped.op)]
+        source = f"def mapped(x):\n    return x {operator} {literal}\n"
+        plan = _resident_map_min_plan(source, value.size, tile)
+    result, expr._native_execution_report = plan.execute(value)
     return result
 
 

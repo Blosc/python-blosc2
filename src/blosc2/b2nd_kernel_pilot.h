@@ -108,4 +108,29 @@ static int b2nd_min_i64_execute(const b2nd_min_i64_plan *plan, const int64_t *in
     return BLOSC2_ERROR_INVALID_PARAM;
 }
 #endif
+
+#ifdef B2ND_MAP_MIN_I64_API
+#define b2_map_min_i64_available() 1
+#else
+#define b2_map_min_i64_available() 0
+typedef struct b2nd_map_min_i64_plan b2nd_map_min_i64_plan;
+typedef struct {
+    int64_t tiles;
+    size_t scratch;
+    me_fp_status fp;
+} b2nd_map_min_i64_report;
+static int b2nd_map_min_i64_prepare(const char *source, int64_t items, int64_t tile,
+                                   size_t scratch, b2nd_map_min_i64_plan **out, me_error *error) {
+    (void)source; (void)items; (void)tile; (void)scratch; (void)error;
+    *out = NULL;
+    return ME_ERR_UNSUPPORTED;
+}
+static int b2nd_map_min_i64_execute(const b2nd_map_min_i64_plan *plan, const int64_t *input,
+                                   int64_t items, int64_t *output,
+                                   b2nd_map_min_i64_report *report, me_error *error) {
+    (void)plan; (void)input; (void)items; (void)output; (void)report; (void)error;
+    return ME_ERR_UNSUPPORTED;
+}
+static void b2nd_map_min_i64_free(b2nd_map_min_i64_plan *plan) { (void)plan; }
+#endif
 #endif

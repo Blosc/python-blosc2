@@ -649,6 +649,56 @@ def test_resident_min_pilot_binding_validation():
     assert not report["fp_supported"]  # Integer-only execution does not probe the FP environment.
 
 
+@pytest.mark.skipif(
+    not getattr(blosc2.blosc2_ext, "_b2nd_map_min_i64_available", lambda: False)(),
+    reason="requires the C-Blosc2 resident map/min pilot",
+)
+def test_resident_map_min_pilot_against_graph():
+    values = np.array([2**63 - 1, -7, 1, -(2**63), 9], dtype=np.int64)
+    for expression in ("min(x + 1)", "min(x * -2)"):
+        with blosc2.expression_evaluation("safe"):
+            expr = blosc2.lazyexpr(expression, {"x": values})
+        for tile in (2, 8):
+            expected = expr.compute(_require_native=True, _native_tile_items=tile)
+            reference = expr._native_execution_report
+            actual = expr.compute(jit=False, _native_tile_items=tile)
+            report = expr._native_execution_report
+            assert report["route"] == "c-blosc2-resident-map-min"
+            assert actual.dtype == expected.dtype == values.dtype
+            assert actual.shape == expected.shape == ()
+            assert actual.tobytes() == expected.tobytes()
+            assert report["evaluated_tiles"] == reference["evaluated_tiles"]
+            assert report["zero_copy_tiles"] == reference["zero_copy_tiles"]
+            assert report["temporary_bytes"] == reference["temporary_bytes"] == min(tile, len(values)) * 8
+            assert report["fp_flags"] == reference["fp_flags"] == 0
+            assert report["fp_supported"] == reference["fp_supported"]
+        values[:] = np.arange(len(values))
+        assert expr.compute(jit=False) == expr.compute(_require_native=True)
+        assert expr.compute(jit=False, initial=-100) == -100
+        assert expr._native_execution_report.get("route") != "c-blosc2-resident-map-min"
+
+
+@pytest.mark.skipif(
+    not getattr(blosc2.blosc2_ext, "_b2nd_map_min_i64_available", lambda: False)(),
+    reason="requires the C-Blosc2 resident map/min pilot",
+)
+def test_resident_map_min_pilot_budget_and_binding():
+    source = b"def mapped(x):\n    return x + 1\n"
+    with pytest.raises(ValueError, match="budget"):
+        blosc2.blosc2_ext._ResidentMapMinI64Plan(source, 5, 2, 15)
+    with pytest.raises(ValueError, match="int64"):
+        blosc2.blosc2_ext._ResidentMapMinI64Plan(b"def mapped(x):\n    return x / 2\n", 5, 2, 16)
+    plan = blosc2.blosc2_ext._ResidentMapMinI64Plan(source, 5, 2, 16)
+    del source
+    with pytest.raises(ValueError, match="match"):
+        plan.execute(np.arange(4, dtype=np.int64))
+    with pytest.raises(ValueError, match="contiguous"):
+        plan.execute(np.arange(10, dtype=np.int64)[::2])
+    actual, report = plan.execute(np.arange(5, dtype=np.int64))
+    assert actual == 1
+    assert report["temporary_bytes"] == 16
+
+
 def test_explicit_conversion_budget_preflight():
     plan = NativeGraph.from_json(graph([{"op": "input", "name": "x", "dtype": "float32"}], output="float64"))
     with pytest.raises(blosc2.MenudetError, match="budget"):

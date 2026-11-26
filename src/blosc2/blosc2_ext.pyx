@@ -1162,6 +1162,18 @@ cdef extern from "b2nd_kernel_pilot.h":
     int b2nd_min_i64_prepare(int64_t, int64_t, b2nd_min_i64_plan *)
     int b2nd_min_i64_execute(const b2nd_min_i64_plan *, const int64_t *, int64_t,
                              int64_t *, int64_t *, size_t *) noexcept nogil
+    ctypedef struct b2nd_map_min_i64_plan:
+        pass
+    ctypedef struct b2nd_map_min_i64_report:
+        int64_t tiles
+        size_t scratch
+        me_fp_status fp
+    int b2_map_min_i64_available()
+    int b2nd_map_min_i64_prepare(const char *, int64_t, int64_t, size_t,
+                                 b2nd_map_min_i64_plan **, me_error *)
+    int b2nd_map_min_i64_execute(const b2nd_map_min_i64_plan *, const int64_t *, int64_t,
+                                 int64_t *, b2nd_map_min_i64_report *, me_error *) noexcept nogil
+    void b2nd_map_min_i64_free(b2nd_map_min_i64_plan *)
     int b2_pilot_scalar_eligible(const void *)
     int b2_pilot_map(b2nd_array_t *, const void *, double *, int32_t, c_bool, size_t,
                      me_fp_status *, me_error *) noexcept nogil
@@ -2570,6 +2582,51 @@ cdef class _ResidentMinI64Plan:
                         "temporary_bytes": 0, "intermediate_bytes": 0, "gathered_bytes": 0,
                         "input_materialization_bytes": 0, "output_copy_bytes": 0, "fp_flags": 0,
                         "fp_supported": False}
+
+
+def _b2nd_map_min_i64_available():
+    return bool(b2_map_min_i64_available())
+
+
+cdef class _ResidentMapMinI64Plan:
+    cdef b2nd_map_min_i64_plan *plan
+
+    def __cinit__(self, bytes source, int64_t items, int64_t tile, size_t max_scratch=65536):
+        cdef me_error error
+        if not b2_map_min_i64_available():
+            raise NotImplementedError("Build with the C-Blosc2 resident map/min pilot")
+        if b'\x00' in source:
+            raise ValueError("Map source cannot contain NUL")
+        if b2nd_map_min_i64_prepare(source, items, tile, max_scratch, &self.plan, &error):
+            raise ValueError((<bytes>error.message).decode("utf-8", "replace") or
+                             "Cannot prepare resident map/min plan")
+
+    def __dealloc__(self):
+        b2nd_map_min_i64_free(self.plan)
+
+    def execute(self, np.ndarray value not None):
+        cdef np.ndarray result = np.empty((), dtype=np.int64)
+        cdef b2nd_map_min_i64_report report
+        cdef me_error error
+        cdef int64_t items = np.PyArray_SIZE(value)
+        cdef int rc
+        if (value.ndim != 1 or value.dtype != np.dtype(np.int64)
+                or not value.flags.aligned or not value.flags.c_contiguous):
+            raise ValueError("Expected a contiguous native int64 vector")
+        with nogil:
+            rc = b2nd_map_min_i64_execute(self.plan, <const int64_t *>np.PyArray_DATA(value), items,
+                                         <int64_t *>np.PyArray_DATA(result), &report, &error)
+        if rc:
+            raise ValueError((<bytes>error.message).decode("utf-8", "replace") or
+                             "Resident map/min execution failed")
+        return result, {"route": "c-blosc2-resident-map-min", "backend": "menudet-interpreter",
+                        "semantic_revision": "menudet-numpy-0.1", "tasks": 1,
+                        "stages": 1, "jit_stages": 0, "interpreter_stages": 1,
+                        "evaluated_tiles": report.tiles, "zero_copy_tiles": report.tiles,
+                        "reducer_state_bytes": sizeof(uint64_t), "temporary_bytes": report.scratch,
+                        "intermediate_bytes": 0, "gathered_bytes": 0,
+                        "input_materialization_bytes": 0, "output_copy_bytes": 0,
+                        "fp_flags": report.fp.flags, "fp_supported": bool(report.fp.supported)}
 
 
 def menudet_auto_jit_mode():

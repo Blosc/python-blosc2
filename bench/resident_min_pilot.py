@@ -3,7 +3,7 @@
 Run with the shared-core build and a local C-Blosc2 exposing the resident pilot.
 Preparation is uncached; warmed execution and ordinary compute are measured
 separately. Timings are microsecond medians from interleaved runs on one thread.
-This deliberately covers only contiguous int64 min(input), not mapped graphs.
+This covers contiguous int64 min(input) and two simple mapped reductions.
 """
 
 import argparse
@@ -35,6 +35,7 @@ def main():
     parser.add_argument("--items", type=int, nargs="+", default=[4097, 1000003])
     parser.add_argument("--tile", type=int, default=1024)
     parser.add_argument("--repeat", type=int, default=51)
+    parser.add_argument("--expression", choices=["min(x)", "min(x + 1)", "min(x * 2)"], default="min(x)")
     args = parser.parse_args()
     if min(*args.items, args.tile, args.repeat) <= 0:
         parser.error("items, tile and repeat must be positive")
@@ -49,10 +50,15 @@ def main():
             metadata = {"x": (values.dtype, values.shape)}
 
             def prepare_pilot(count=count):
-                return blosc2.blosc2_ext._ResidentMinI64Plan(count, args.tile)
+                if args.expression == "min(x)":
+                    return blosc2.blosc2_ext._ResidentMinI64Plan(count, args.tile)
+                source = b"def mapped(x):\n    return x + 1\n"
+                if args.expression == "min(x * 2)":
+                    source = b"def mapped(x):\n    return x * 2\n"
+                return blosc2.blosc2_ext._ResidentMapMinI64Plan(source, count, args.tile)
 
             def prepare_adapter(metadata=metadata):
-                return NativeGraph.from_expression("min(x)", {"x": "int64"}, jit=False).specialize(
+                return NativeGraph.from_expression(args.expression, {"x": "int64"}, jit=False).specialize(
                     metadata, args.tile
                 )
 
@@ -63,12 +69,17 @@ def main():
             assert actual.dtype == expected.dtype
             assert actual.shape == expected.shape
             assert actual.tobytes() == expected.tobytes()
-            assert actual == values.min()
+            numpy_values = values
+            if args.expression == "min(x + 1)":
+                numpy_values = values + 1
+            elif args.expression == "min(x * 2)":
+                numpy_values = values * 2
+            assert actual == numpy_values.min()
             assert report["fp_flags"] == reference["fp_flags"] == 0
             assert report["zero_copy_tiles"] == reference["zero_copy_tiles"]
-            assert report["temporary_bytes"] == reference["temporary_bytes"] == 0
+            assert report["temporary_bytes"] == reference["temporary_bytes"]
             with blosc2.expression_evaluation("safe"):
-                expr = blosc2.lazyexpr("min(x)", inputs)
+                expr = blosc2.lazyexpr(args.expression, inputs)
 
             def compute_pilot(expr=expr):
                 return expr.compute(jit=False, _native_tile_items=args.tile)
@@ -77,7 +88,7 @@ def main():
                 return expr.compute(jit=False, _native_tile_items=args.tile, _require_native=True)
 
             compute_pilot()
-            assert expr._native_execution_report["route"] == "c-blosc2-resident-min"
+            assert expr._native_execution_report["route"].startswith("c-blosc2-resident-")
             for phase, first, second in [
                 ("prepare", prepare_pilot, prepare_adapter),
                 (
