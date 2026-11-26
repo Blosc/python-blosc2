@@ -869,6 +869,19 @@ well as import/export paths for CSV, Arrow, and Parquet data.
     CTable.from_csv
     ctable_from_cframe
 
+.. note::
+
+   Starting in Python-Blosc2 4.17, new Menudet computed and generated columns
+   store their kernel metadata as v2 recipes. Opening an older table or
+   updating its schema does not convert existing legacy JSON entries. If you
+   add a new Menudet column, the table can contain both formats.
+
+   To migrate the legacy entries, use :meth:`~blosc2.CTable.save` to save the
+   table to a new destination. Only the copy is upgraded; the source table is
+   unchanged. Older readers may not be able to open tables containing v2
+   Menudet entries. For shared stores, upgrade all readers before adding new
+   Menudet columns or replacing the shared table with a migrated copy.
+
 CTable also implements the `Arrow PyCapsule interchange protocol
 <https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html>`_
 via :meth:`~blosc2.CTable.__arrow_c_stream__`, so pyarrow, DuckDB, and Polars
