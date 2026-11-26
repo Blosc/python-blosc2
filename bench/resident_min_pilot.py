@@ -1,8 +1,11 @@
 """Compare the opt-in C-Blosc2 resident minimum with the graph adapter.
 
 Run with the shared-core build and a local C-Blosc2 exposing the resident pilot.
-Preparation is uncached; warmed execution and ordinary compute are measured
-separately. Timings are microsecond medians from interleaved runs on one thread.
+Preparation is uncached; adapter specialization, warmed execution and ordinary
+compute are measured separately. Pilot preparation includes geometry while
+adapter preparation does not. Timings are microsecond medians from interleaved
+runs on one thread. Direct handles explicitly select pilot and adapter; automatic
+compute dispatch is not an enduring old/new implementation selector.
 This covers contiguous int64 min(input) and two simple mapped reductions.
 """
 
@@ -58,12 +61,11 @@ def main():
                 return blosc2.blosc2_ext._ResidentMapMinI64Plan(source, count, args.tile)
 
             def prepare_adapter(metadata=metadata):
-                return NativeGraph.from_expression(args.expression, {"x": "int64"}, jit=False).specialize(
-                    metadata, args.tile
-                )
+                return NativeGraph.from_expression(args.expression, {"x": "int64"}, jit=False)
 
             pilot = prepare_pilot()
-            adapter = prepare_adapter()
+            adapter_plan = prepare_adapter()
+            adapter = adapter_plan.specialize(metadata, args.tile)
             actual, report = pilot.execute(values)
             expected, reference = adapter.execute(inputs)
             assert actual.dtype == expected.dtype
@@ -89,8 +91,15 @@ def main():
 
             compute_pilot()
             assert expr._native_execution_report["route"].startswith("c-blosc2-resident-")
+            # Unlike preparation scopes are deliberately labelled. There is no
+            # independent specialization operation in the specialized pilot.
+            a, b = medians(prepare_pilot, prepare_adapter, args.repeat)
+            print(f"{count:10d} {'prep+geom/prep':<12} {a:12.2f} {b:12.2f}")
+            _, b = medians(
+                lambda: None, lambda: adapter_plan.specialize(metadata, args.tile), args.repeat
+            )
+            print(f"{count:10d} {'specialize':<12} {'n/a':>12} {b:12.2f}")
             for phase, first, second in [
-                ("prepare", prepare_pilot, prepare_adapter),
                 (
                     "execute",
                     lambda p=pilot, v=values: p.execute(v),
