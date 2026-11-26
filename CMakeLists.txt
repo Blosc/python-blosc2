@@ -148,8 +148,8 @@ endif()
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://codeberg.org/Blosc/miniexpr.git
-    # Qualified 1.0 core boundary, Menudet 0.2, shared grids and recipe fixtures.
-    GIT_TAG 41aad03c9146a273775c3d50cd28fcd9f099f257
+    # Typed graph map/conversion preparation without an intermediate manifest.
+    GIT_TAG 9eb13499adae6abd2c4655f8d0a6c3690ff3f88c
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
