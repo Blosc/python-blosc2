@@ -2,13 +2,15 @@
 
 import copy
 import json
+import shutil
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 import blosc2
-from blosc2.b2objects import decode_b2object_payload, encode_b2object_payload
+from blosc2.b2objects import decode_b2object_payload, encode_b2object_payload, open_b2object
 from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
 
 
@@ -64,6 +66,10 @@ def test_v2_roundtrip_without_json(tmp_path, monkeypatch):
     restored = blosc2.open(path)
     np.testing.assert_array_equal(restored[:], [0, 1, 2])
     assert restored.attrs["note"] == "portable"
+    rebound = blosc2.MenudetKernel.from_recipe(
+        restored.kernel.to_recipe(), {"word": "uint16", "reading": "float64"}, jit=False
+    )
+    assert rebound.output_dtype == np.dtype("float64")
     np.testing.assert_array_equal(blosc2.from_cframe(lazy.to_cframe())[:], [0, 1, 2])
     encoded = msgpack_packb({"nested": lazy})
     np.testing.assert_array_equal(msgpack_unpackb(encoded)["nested"][:], [0, 1, 2])
@@ -99,6 +105,41 @@ def test_captures_and_fixed_v1_contract(tmp_path):
     np.testing.assert_array_equal(decode_b2object_payload(v1)[:], x * 2)
 
 
+def test_released_v1_carrier_resaves_as_fixed_v2(tmp_path):
+    fixture = Path(__file__).parent / "data" / "legacy_menudet_v1"
+    for name in ("kernel.b2nd", "x.b2nd"):
+        shutil.copyfile(fixture / name, tmp_path / name)
+    source = tmp_path / "kernel.b2nd"
+    original = source.read_bytes()
+    legacy = blosc2.open(source, mode="r")
+    assert legacy.schunk.meta["b2o"] == {"kind": "menudet", "version": 1}
+    expected = np.array([1, 27, 125, 343], dtype="float64")
+    np.testing.assert_array_equal(legacy[:], expected, strict=True)
+    assert source.read_bytes() == original
+
+    dest = tmp_path / "resaved.b2nd"
+    legacy.save(dest, mode="w")
+    restored = blosc2.open(dest, mode="r")
+    assert restored.schunk.meta["b2o"] == {"kind": "menudet", "version": 2}
+    payload = restored.schunk.vlmeta["b2o"]
+    assert "artifact" not in payload
+    assert list(payload["operands"]) == ["x"]
+    assert payload["shape"] == [4]
+    assert payload["partitions"] == [2]
+    recipe = payload["recipe"]
+    assert recipe["version"] == 1
+    assert recipe["language_version"] == "0.1"
+    assert recipe["inputs"] == ["x"]
+    assert recipe["input_constraints"] == {"x": {"dtype": "float32"}}
+    assert recipe["output"] == {"dtype": "float64"}
+    assert recipe["cardinality"] == "elementwise"
+    assert [item["category"] for item in recipe["constants"]] == ["weak", "typed_scalar"]
+    with pytest.raises(blosc2.MenudetError, match="constraint"):
+        blosc2.MenudetKernel.from_recipe(recipe, {"x": "float64"}, jit=False)
+    np.testing.assert_array_equal(restored[:], expected, strict=True)
+    assert source.read_bytes() == original
+
+
 def test_v2_version_and_preflight(tmp_path):
     x = blosc2.asarray(np.arange(3, dtype="float32"), urlpath=str(tmp_path / "x.b2nd"), mode="w")
 
@@ -116,6 +157,52 @@ def test_v2_version_and_preflight(tmp_path):
     invalid["version"] = 3
     with pytest.raises(ValueError, match="version"):
         decode_b2object_payload(invalid)
+
+
+@pytest.mark.parametrize(
+    ("marker_version", "payload_version", "message"),
+    [
+        (True, 1, "Unsupported.*version"),
+        (2.0, 2, "Unsupported.*version"),
+        (1, True, "Unsupported.*version"),
+        (2, 2.0, "Unsupported.*version"),
+        (1, 2, "version mismatch"),
+    ],
+)
+def test_menudet_carrier_rejects_invalid_versions(monkeypatch, marker_version, payload_version, message):
+    import blosc2.b2objects as objects
+
+    marker = {"kind": "menudet", "version": marker_version}
+    carrier = blosc2.empty((1,), dtype="float64", meta={"b2o": marker})
+    carrier.schunk.vlmeta["b2o"] = {"kind": "menudet", "version": payload_version}
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Dispatched the payload before rejecting the carrier")
+
+    monkeypatch.setattr(objects, "decode_b2object_payload", forbidden)
+    with pytest.raises(ValueError, match=message):
+        open_b2object(carrier)
+
+
+@pytest.mark.parametrize("version", [True, 2.0, 3])
+def test_nested_menudet_version_rejected_before_sibling_io(monkeypatch, version):
+    import blosc2.b2objects as objects
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Resolved a sibling reference before rejecting the nested version")
+
+    monkeypatch.setattr(objects, "decode_operand_reference", forbidden)
+    payload = {
+        "kind": "lazyexpr",
+        "version": 1,
+        "expression": "x + y",
+        "operands": {
+            "x": {"kind": "urlpath", "version": 1, "urlpath": "missing.b2nd"},
+            "y": {"kind": "menudet", "version": version, "operands": {}},
+        },
+    }
+    with pytest.raises(ValueError, match=r"Unsupported.*version"):
+        decode_b2object_payload(payload)
 
 
 def test_core_recipe_provenance():
@@ -297,18 +384,39 @@ def test_table_legacy_metadata_still_reads(tmp_path):
     table = blosc2.CTable(Row, new_data={"x": values}, create_summary_index=False)
     table.add_computed_column("virtual", kernel, inputs={"x": "x"})
     table.add_generated_column("stored", values=kernel, inputs={"x": "x"})
-    # Reproduce the unversioned fixed-contract metadata written before v2.
-    for columns, name in ((table._computed_cols, "virtual"), (table._materialized_cols, "stored")):
-        meta = columns[name]
-        meta.pop("version")
-        meta.pop("recipe")
-        meta["artifact"] = kernel.to_json()
     path = tmp_path / "legacy-table.b2d"
     table.save(str(path))
-    reopened = blosc2.CTable.open(str(path), mode="a")
-    np.testing.assert_array_equal(reopened["virtual"][:], [3, 5])
-    reopened.append({"x": 8})
-    np.testing.assert_array_equal(reopened["stored"][:], [3, 5, 9])
+    with blosc2.CTable.open(str(path), mode="a") as seed:
+        schema = seed._storage.load_schema()
+        for key in ("computed_columns", "materialized_columns"):
+            # Reproduce the unversioned fixed-contract metadata written before v2.
+            meta = schema[key][0]
+            meta.pop("version")
+            meta.pop("recipe")
+            meta["artifact"] = kernel.to_json()
+        seed._storage.save_schema(schema)
+
+    path_v2 = tmp_path / "resaved-table.b2d"
+    with blosc2.CTable.open(str(path), mode="a") as reopened:
+        np.testing.assert_array_equal(reopened["virtual"][:], [3, 5])
+        reopened.append({"x": 8})
+        np.testing.assert_array_equal(reopened["stored"][:], [3, 5, 9])
+        reopened.add_computed_column("ordinary", reopened["x"] + 1)
+        reopened.save(str(path_v2))
+        source = reopened._storage.load_schema()
+        for key in ("computed_columns", "materialized_columns"):
+            assert source[key][0] == schema[key][0]
+
+    with blosc2.CTable.open(str(path_v2), mode="r") as migrated:
+        dest = migrated._storage.load_schema()
+        for key in ("computed_columns", "materialized_columns"):
+            meta = dest[key][0]
+            assert meta["version"] == 2
+            assert "artifact" not in meta
+            assert meta["recipe"]["language_version"] == "0.1"
+            assert meta["recipe"]["input_constraints"] == {"x": {"dtype": "int64"}}
+        np.testing.assert_array_equal(migrated["virtual"][:], [3, 5, 9])
+        np.testing.assert_array_equal(migrated["stored"][:], [3, 5, 9])
 
 
 def test_table_recipe_version_never_invokes_foreign_equality():

@@ -7212,6 +7212,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         chunks_override: tuple[int, ...] | None = None,
         blocks_override: tuple[int, ...] | None = None,
         cparams_override: dict[str, Any] | None = None,
+        upgrade_menudet: bool = False,
     ) -> None:
         """Write all live rows and columns into *storage*.
 
@@ -7376,7 +7377,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             if n_live > 0:
                 disk_mask[:n_live] = mask[:n_live] if no_deletions else mask[live_pos]
 
-        schema_dict = self._schema_dict_with_computed()
+        schema_dict = self._schema_dict_with_computed(upgrade_menudet=upgrade_menudet)
         schema_dict.pop("source_bindings_version", None)
         schema_dict.pop("source_columns", None)
         storage.save_schema(schema_dict)
@@ -7387,7 +7388,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 vlmeta.vlmeta[key] = value
             storage.save_vlmeta(vlmeta)
 
-    def _save_sources_to_storage(self, storage: TableStorage) -> None:
+    def _save_sources_to_storage(self, storage: TableStorage, *, upgrade_menudet: bool = False) -> None:
         """Persist identity-mapped source bindings without reading remote payloads."""
         if self.base is not None:
             raise ValueError("preserve_sources requires an unfiltered root table")
@@ -7399,7 +7400,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             valid[:n_rows] = True
         for name in self.col_names:
             storage.install_column(name, self._cols[name])
-        storage.save_schema(self._schema_dict_with_computed())
+        storage.save_schema(self._schema_dict_with_computed(upgrade_menudet=upgrade_menudet))
         attrs = self.attrs[:]
         if attrs:
             vlmeta = blosc2.SChunk()
@@ -7412,6 +7413,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
 
         This writes a standalone copy and returns ``None``; use :meth:`copy`
         directly when the copied :class:`CTable` object is needed.
+        Legacy Menudet column metadata is upgraded in the destination only.
 
         Only live rows are written — the on-disk table is always compacted.
         A ``.b2z`` suffix selects the compact zip-backed format; any other
@@ -7439,7 +7441,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         """
         if preserve_sources and self.base is not None:
             raise ValueError("preserve_sources requires an unfiltered root table")
-        self._preflight_menudet_persistence()
+        self._preflight_menudet_persistence(upgrade_menudet=True)
         if self.base is not None:
             materialized = self.copy(compact=True)
             materialized.save(urlpath, overwrite=overwrite)
@@ -7458,9 +7460,9 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if preserve_sources:
             if not self._source_bound:
                 raise ValueError("preserve_sources requires a source-bound CTable")
-            self._save_sources_to_storage(file_storage)
+            self._save_sources_to_storage(file_storage, upgrade_menudet=True)
         else:
-            self._save_to_storage(file_storage)
+            self._save_to_storage(file_storage, upgrade_menudet=True)
         file_storage.close()
 
     @classmethod
@@ -12267,7 +12269,20 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             out[i] = None
         return out
 
-    def _schema_dict_with_computed(self) -> dict:
+    @staticmethod
+    def _menudet_storage_fields(meta, upgrade):
+        if "recipe" in meta:
+            return {"version": 2, "recipe": meta["recipe"]}
+        if upgrade:
+            from .menudet_recipe import validate_menudet_recipe
+
+            return {"version": 2, "recipe": validate_menudet_recipe(meta["kernel"].to_recipe())}
+        fields = {"artifact": meta["artifact"]}
+        if "version" in meta:
+            fields["version"] = meta["version"]
+        return fields
+
+    def _schema_dict_with_computed(self, *, upgrade_menudet: bool = False) -> dict:
         """Return the schema dict extended with computed/materialized metadata."""
         d = schema_to_dict(self._schema)
         if getattr(self, "_source_bound", False):
@@ -12286,8 +12301,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                         {
                             "name": name,
                             "kind": "menudet",
-                            "version": cc.get("version", 1),
-                            **({"recipe": cc["recipe"]} if "recipe" in cc else {"artifact": cc["artifact"]}),
+                            **self._menudet_storage_fields(cc, upgrade_menudet),
                             "bindings": cc["bindings"],
                             "row_shape": list(cc["row_shape"]),
                             "col_deps": cc["col_deps"],
@@ -12332,10 +12346,7 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                     entry["transformer"] = meta["transformer"]
                 if meta.get("transformer_kind") == "menudet":
                     entry.update({key: meta[key] for key in ("bindings", "row_shape")})
-                    entry["version"] = meta.get("version", 1)
-                    entry.update(
-                        {"recipe": meta["recipe"]} if "recipe" in meta else {"artifact": meta["artifact"]}
-                    )
+                    entry.update(self._menudet_storage_fields(meta, upgrade_menudet))
                 if meta.get("dsl_source") is not None:
                     entry["dsl_source"] = meta["dsl_source"]
                 if meta.get("jit_backend") is not None:
@@ -12577,9 +12588,8 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
                 desc = self._validate_menudet_table_metadata(meta)
                 if self._cols[meta["name"]].dtype != desc["dtype"]:
                     raise ValueError("Stored Menudet output dtype disagrees with native signature")
-                loaded.update(
-                    {key: desc[key] for key in ("version", "recipe", "bindings", "row_shape", "kernel")}
-                )
+                loaded.update({key: desc[key] for key in ("bindings", "row_shape", "kernel")})
+                loaded.update(self._menudet_storage_fields(desc, False))
             if meta.get("jit_backend") is not None:
                 loaded["jit_backend"] = meta["jit_backend"]
             self._materialized_cols[meta["name"]] = loaded
@@ -12617,10 +12627,12 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
         if legacy:
             raise blosc2.UnsupportedLegacyRecipeError("legacy DSL table columns")
 
-    def _preflight_menudet_persistence(self):
+    def _preflight_menudet_persistence(self, *, upgrade_menudet=False):
         for meta in [*self._computed_cols.values(), *self._materialized_cols.values()]:
             if meta.get("kind") == "menudet" or meta.get("transformer_kind") == "menudet":
-                self._validate_menudet_table_metadata(meta)
+                desc = self._validate_menudet_table_metadata(meta)
+                if upgrade_menudet:
+                    self._menudet_storage_fields(desc, True)
         if any(cc.get("kind") == "dsl" for cc in self._computed_cols.values()) or any(
             meta.get("dsl_source") is not None or meta.get("transformer_kind") == "dsl"
             for meta in self._materialized_cols.values()
@@ -13235,6 +13247,11 @@ class CTable(_CTableIndexingMixin, Generic[RowT]):
             or desc["row_shape"] != tuple(meta.get("row_shape", (1,)))
         ):
             raise ValueError("Menudet table metadata disagrees with native signature/bindings")
+        # Loading and ordinary schema writes do not opt in to a format upgrade.
+        if meta.get("version", 1) == 1:
+            desc.pop("recipe")
+            desc.pop("version")
+            desc.update(self._menudet_storage_fields(meta, False))
         return desc
 
     def _evaluate_menudet_rows(self, meta, raw_columns, *, count=None):

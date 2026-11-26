@@ -147,6 +147,12 @@ def encode_b2object_payload(obj) -> dict[str, Any] | None:
     return None
 
 
+def _validate_b2object_version(kind, version):
+    versions = (_B2OBJECT_VERSION, _MENUDET_OBJECT_VERSION) if kind == "menudet" else (_B2OBJECT_VERSION,)
+    if type(version) is not int or version not in versions:
+        raise ValueError(f"Unsupported persisted Blosc2 object version: {version!r}")
+
+
 @bounded_recipe
 def decode_b2object_payload(payload: dict[str, Any], *, carrier_path=None, carrier=None, deserialize="safe"):
     deserialize = normalize_deserialize(deserialize)
@@ -154,8 +160,7 @@ def decode_b2object_payload(payload: dict[str, Any], *, carrier_path=None, carri
     version = payload.get("version")
     if kind not in {"c2array", "menudet", "remote_array", "lazyexpr", "lazyudf"}:
         raise ValueError(f"Unsupported persisted Blosc2 object kind: {kind!r}")
-    if version != _B2OBJECT_VERSION and not (kind == "menudet" and version == _MENUDET_OBJECT_VERSION):
-        raise ValueError(f"Unsupported persisted Blosc2 object version: {version!r}")
+    _validate_b2object_version(kind, version)
     if kind == "c2array":
         ref = blosc2.Ref.from_dict(payload)
         return ref.open(deserialize=deserialize)
@@ -263,10 +268,13 @@ def _preflight_operand_recipes(mapping, active=(), *, validate_expressions=True)
             raise TypeError("Structured operand recipe requires a string kind")
         if kind == "lazyudf":
             raise UnsupportedLegacyRecipeError()
-        if kind == "menudet" and payload.get("version") == _MENUDET_OBJECT_VERSION:
-            from blosc2.menudet_recipe import validate_menudet_recipe
+        if kind == "menudet":
+            version = payload.get("version")
+            _validate_b2object_version(kind, version)
+            if version == _MENUDET_OBJECT_VERSION:
+                from blosc2.menudet_recipe import validate_menudet_recipe
 
-            validate_menudet_recipe(payload.get("recipe"))
+                validate_menudet_recipe(payload.get("recipe"))
         if kind == "lazyexpr" and validate_expressions:
             expression = payload.get("expression")
             if type(expression) is not str:
@@ -302,13 +310,11 @@ def open_b2object(obj):
     if isinstance(marker, dict) and marker.get("kind") == "lazyudf":
         raise UnsupportedLegacyRecipeError()
 
+    _validate_b2object_version(marker.get("kind"), marker.get("version"))
     payload = read_b2object_payload(obj)
-    if marker.get("version") != _B2OBJECT_VERSION and not (
-        marker.get("kind") == "menudet" and marker.get("version") == _MENUDET_OBJECT_VERSION
-    ):
-        raise ValueError(f"Unsupported persisted Blosc2 object version: {marker.get('version')!r}")
     if marker.get("kind") != payload.get("kind"):
         raise ValueError("Persisted Blosc2 object marker/payload kind mismatch")
+    _validate_b2object_version(payload.get("kind"), payload.get("version"))
     if marker.get("version") != payload.get("version"):
         raise ValueError("Persisted Blosc2 object marker/payload version mismatch")
     carrier_path = None
