@@ -39,6 +39,20 @@ static int b2_pilot_write_scalar(void *context, int64_t chunk, int64_t block,
     return 0;
 }
 
+static int b2_pilot_signature(const void *artifact, const me_kernel *kernel, bool scalar) {
+    const size_t width = sizeof(double);
+    me_kernel_info info = ME_KERNEL_INFO_INITIALIZER;
+    return kernel && me_describe(kernel, &info) == ME_SUCCESS &&
+        info.cardinality == (scalar ? ME_BLOCK_SCALAR : ME_ELEMENTWISE) &&
+        !info.context_ndim && info.output_dtype == ME_FLOAT64 && info.output_itemsize == width &&
+        me_artifact_ninputs(artifact) == 1 && me_artifact_input_dtype(artifact, 0) == ME_FLOAT64 &&
+        me_artifact_input_itemsize(artifact, 0) == width;
+}
+
+static int b2_pilot_scalar_eligible(const void *artifact) {
+    return b2_pilot_signature(artifact, me_artifact_borrow_core(artifact), true);
+}
+
 static int b2_pilot_map(b2nd_array_t *input, const void *artifact, double *output, int32_t partition,
                        bool scalar, size_t scratch, me_error *error) {
     const size_t width = sizeof(double);
@@ -50,11 +64,7 @@ static int b2_pilot_map(b2nd_array_t *input, const void *artifact, double *outpu
         snprintf(error->message, sizeof(error->message), "The pilot requires a directly prepared Menudet kernel");
         return BLOSC2_ERROR_INVALID_PARAM;
     }
-    me_kernel_info info = ME_KERNEL_INFO_INITIALIZER;
-    if (me_describe(kernel, &info) != ME_SUCCESS || info.cardinality != (scalar ? ME_BLOCK_SCALAR : ME_ELEMENTWISE) ||
-        info.context_ndim || info.output_dtype != ME_FLOAT64 || info.output_itemsize != width ||
-        me_artifact_ninputs(artifact) != 1 || me_artifact_input_dtype(artifact, 0) != ME_FLOAT64 ||
-        me_artifact_input_itemsize(artifact, 0) != width) {
+    if (!b2_pilot_signature(artifact, kernel, scalar)) {
         snprintf(error->message, sizeof(error->message), "The pilot requires a context-free float64 input and output");
         return BLOSC2_ERROR_INVALID_PARAM;
     }
@@ -72,6 +82,7 @@ static int b2_pilot_map(b2nd_array_t *input, const void *artifact, double *outpu
 static int b2_pilot_available(void) { return 1; }
 #else
 static int b2_pilot_available(void) { return 0; }
+static int b2_pilot_scalar_eligible(const void *artifact) { (void)artifact; return 0; }
 static int b2_pilot_map(b2nd_array_t *input, const void *artifact, double *output, int32_t partition,
                        bool scalar, size_t scratch, me_error *error) {
     (void)input; (void)artifact; (void)output; (void)partition; (void)scalar; (void)scratch; (void)error;

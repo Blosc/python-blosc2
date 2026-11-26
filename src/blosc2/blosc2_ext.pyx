@@ -1153,6 +1153,7 @@ cdef extern from "b2nd_kernel_pilot.h":
     ctypedef struct me_error:
         char message[256]
     int b2_pilot_available()
+    int b2_pilot_scalar_eligible(const void *)
     int b2_pilot_map(b2nd_array_t *, const void *, double *, int32_t, c_bool, size_t, me_error *) noexcept nogil
 
 cdef extern from "dsl_artifact_bridge.h":
@@ -2562,6 +2563,9 @@ cdef class MenudetArtifactHandle:
     cdef object _attested_graph
     cdef object _resident_meta
     cdef object _identity_input
+
+    def _b2nd_scalar_pilot_eligible(self):
+        return bool(b2_pilot_scalar_eligible(self._handle))
 
     def __cinit__(self, bytes artifact=None, int jit_mode=0, bint infer_output=False):
         cdef b2_artifact_error error

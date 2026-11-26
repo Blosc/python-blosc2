@@ -23,6 +23,38 @@ def partition_sum(x):
     return block_sum(x)  # noqa: F821
 
 
+@blosc2.menudet(jit=False, partitions=(3,), cardinality="block_scalar")
+def group_sum(x):
+    return block_sum(x)  # noqa: F821
+
+
+@pytest.mark.parametrize("with_pilot", [False, True])
+def test_block_scalar_public_syntax(with_pilot, monkeypatch):
+    if with_pilot and not AVAILABLE:
+        pytest.skip("requires the C-Blosc2 scheduler pilot build")
+    monkeypatch.setattr(blosc2_ext, "_b2nd_kernel_pilot_available", lambda: with_pilot)
+    calls = []
+    run = blosc2.NDArray._evaluate_b2nd_kernel_pilot
+
+    def track(source, kernel, **kwargs):
+        calls.append((kernel, kwargs))
+        return run(source, kernel, **kwargs)
+
+    monkeypatch.setattr(blosc2.NDArray, "_evaluate_b2nd_kernel_pilot", track)
+    x = blosc2.asarray(np.arange(7, dtype=np.float64), chunks=(5,), blocks=(2,))
+    sums = group_sum(x)
+    np.testing.assert_array_equal(sums[1:], [12.0, 6.0])
+    assert calls == []
+    np.testing.assert_array_equal(sums[:], [3.0, 12.0, 6.0])
+    assert calls == ([(sums.kernel, {"max_scratch": 32, "partition": 3})] if with_pilot else [])
+
+    wide = group_sum.specialize(x).lazy({"x": x}, partitions=(10000,))
+    np.testing.assert_array_equal(wide[:], [21.0])
+    legacy = blosc2.MenudetKernel.from_json(sums.kernel.to_json(), jit=False)
+    np.testing.assert_array_equal(legacy.lazy({"x": x}, partitions=(3,))[:], [3.0, 12.0, 6.0])
+    assert len(calls) == int(with_pilot)
+
+
 @pytest.mark.skipif(not AVAILABLE, reason="requires the C-Blosc2 scheduler pilot build")
 @pytest.mark.parametrize(("size", "chunk", "block"), [(12, 6, 3), (7, 5, 2), (1, 1, 1)])
 def test_b2nd_kernel_pilot_matches_adapter(size, chunk, block, tmp_path):
@@ -60,7 +92,7 @@ def test_b2nd_kernel_pilot_rejects_unsupported_contracts():
 
 @pytest.mark.skipif(not AVAILABLE, reason="requires the C-Blosc2 scheduler pilot build")
 @pytest.mark.parametrize(("chunk", "block"), [(5, 2), (4, 4)])
-def test_b2nd_kernel_pilot_preserves_persisted_partitions(chunk, block, tmp_path):
+def test_b2nd_kernel_pilot_preserves_persisted_partitions(chunk, block, tmp_path, monkeypatch):
     values = np.array([1e16, 1, -1e16, 3, 4, 5, 6], dtype=np.float64)
     source = blosc2.asarray(values, chunks=(chunk,), blocks=(block,), urlpath=tmp_path / "input.b2nd")
     operation = partition_sum.specialize(source).lazy({"x": source}, partitions=(3,))
@@ -69,12 +101,15 @@ def test_b2nd_kernel_pilot_preserves_persisted_partitions(chunk, block, tmp_path
     restored = blosc2.open(path, mode="r")
     assert restored.partitions == (3,)
     stored = restored.inputs["x"]
-    expected = restored[:]
+    with monkeypatch.context() as adapter:
+        adapter.setattr(blosc2_ext, "_b2nd_kernel_pilot_available", lambda: False)
+        expected = restored[:]
     budget = (restored.partitions[0] + 1) * values.itemsize
     actual = stored._evaluate_b2nd_kernel_pilot(
         restored.kernel, max_scratch=budget, partition=restored.partitions[0]
     )
     np.testing.assert_array_equal(actual, expected, strict=True)
+    np.testing.assert_array_equal(restored[:], expected, strict=True)
     np.testing.assert_array_equal(actual, np.array([0.0, 12.0, 6.0]), strict=True)
     with pytest.raises(ValueError, match="scratch budget"):
         stored._evaluate_b2nd_kernel_pilot(restored.kernel, max_scratch=budget - 1, partition=3)

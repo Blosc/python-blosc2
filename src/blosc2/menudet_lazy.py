@@ -117,6 +117,34 @@ class MenudetLazyArray(LazyArray):
     def blocks(self):
         return self.chunks
 
+    def _scalar_pilot_values(self, selection):
+        # Opt-in full reads only. Do not resize a logical partition to fit
+        # scratch or retry on execution errors after a native read has started.
+        from . import blosc2_ext
+
+        if (
+            not blosc2_ext._b2nd_kernel_pilot_available()
+            or self.kernel.result_cardinality != "block_scalar"
+            or self.kernel.has_jit
+            or len(self._domain) != 1
+            or len(self.inputs) != 1
+            or not isinstance(selection[0], slice)
+            or selection[0].indices(self.shape[0]) != (0, self.shape[0], 1)
+        ):
+            return None
+        source = next(iter(self.inputs.values()))
+        partition = self._partitions[0]
+        scratch = (partition + 1) * 8
+        if (
+            type(source) is not blosc2.NDArray
+            or source.shape != self._domain
+            or source.dtype != np.dtype("float64")
+            or scratch > 65536
+            or not getattr(self.kernel._handle, "_b2nd_scalar_pilot_eligible", lambda: False)()
+        ):
+            return None
+        return source._evaluate_b2nd_kernel_pilot(self.kernel, max_scratch=scratch, partition=partition)
+
     def _values(self, selection=None):  # noqa: C901 -- bounded readers plus original partition/context paths
         if selection is None:
             selection = tuple(slice(None) for _ in self.shape)
@@ -139,6 +167,9 @@ class MenudetLazyArray(LazyArray):
         selection += (slice(None),) * (len(self.shape) - len(selection))
         if len(selection) != len(self.shape):
             raise IndexError("Too many indices")
+        pilot = self._scalar_pilot_values(selection)
+        if pilot is not None:
+            return pilot
         plan = getattr(self.kernel, "_resident_plan", None)
         if (
             plan is not None
