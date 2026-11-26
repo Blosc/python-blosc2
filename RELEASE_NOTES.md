@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.17.0 to 4.17.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.16.1 to 4.17.0
 
 - New Menudet source uses language 0.2, with optional dtype annotations.
