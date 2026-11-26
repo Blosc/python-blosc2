@@ -23,6 +23,7 @@ env:
     {project}/tests/test_menudet_descriptor.py
     {project}/tests/test_menudet_descriptor_host.py
     {project}/tests/test_menudet_lazy.py
+    {project}/tests/test_menudet_recipe.py
     {project}/tests/test_menudet_jit_integration.py
     {project}/tests/test_menudet_policy.py
     {project}/tests/test_menudet_table_export.py

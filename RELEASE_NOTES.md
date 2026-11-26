@@ -1,8 +1,14 @@
 # Release notes
 
-## Changes from 4.16.1 to 4.16.2
+## Changes from 4.16.1 to 4.17.0
 
-XXX version-specific blurb XXX
+- New Menudet source uses language 0.2, with optional dtype annotations.
+  Menudet saves write structured MessagePack recipes. Existing v1 JSON records
+  remain readable and are not modified on open. Explicitly saving a legacy
+  kernel or saving a CTable copy preserves the fixed legacy contract in v2.
+- Upgrade all readers of shared stores before writers start saving with 4.17.
+  Older 4.x readers cannot be relied on to open new Menudet records. Explicit
+  Menudet JSON interchange remains supported.
 
 ## Changes from 4.16.0 to 4.16.1
 

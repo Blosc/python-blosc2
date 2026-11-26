@@ -15,9 +15,8 @@ endif()
 project(python-blosc2)
 
 # Update to the latest minimum C-Blosc2 version, and to the actual bundled one
-set(BLOSC2_MIN_VERSION 4.0.0)
-# Paired next-major constructor branch; C/Cython consumers rebuild together.
-set(BLOSC2_BUNDLED_VERSION b6f58e920e0bc8e1f7d5bffba8832f2e148b3641)
+set(BLOSC2_MIN_VERSION 3.8.0)
+set(BLOSC2_BUNDLED_VERSION 365a4030f8b1aa684b5fd922d3b8c1feeef480f2)
 
 if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     message(FATAL_ERROR "Windows builds require clang-cl. Set CC/CXX to clang-cl or configure CMake with -T ClangCL.")
@@ -147,9 +146,9 @@ elseif(WIN32 AND (CMAKE_VS_PLATFORM_NAME STREQUAL "ARM64"
 endif()
 
 FetchContent_Declare(miniexpr
-    GIT_REPOSITORY https://codeberg.org/Blosc/miniexpr.git
-    # Qualified 1.0 core boundary, Menudet 0.2, shared grids and recipe fixtures.
-    GIT_TAG 41aad03c9146a273775c3d50cd28fcd9f099f257
+    GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
+    # miniexpr 0.4.0 release candidate; pin the commit, not the tag.
+    GIT_TAG 64e5d180904f87513cead89cbb15bff09d065cab
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
@@ -157,19 +156,19 @@ FetchContent_MakeAvailable(miniexpr)
 # Reject an old source override instead of mixing beta Python bindings with a
 # different native ABI.
 file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr.h" B2_MENUDET_VERSION
-  REGEX "^#define ME_MENUDET_DSL_VERSION \"0\\.1\"")
+  REGEX "^#define ME_MENUDET_DSL_ANNOTATED_VERSION \"0\\.2\"")
 if(NOT B2_MENUDET_VERSION)
-  message(FATAL_ERROR "Python-Blosc2 requires Menudet 0.1 beta native sources. Update FETCHCONTENT_SOURCE_DIR_MINIEXPR or use the bundled pin.")
+  message(FATAL_ERROR "Python-Blosc2 4.17 requires native Menudet 0.2 support. Update FETCHCONTENT_SOURCE_DIR_MINIEXPR or use the bundled pin.")
 endif()
 file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr_artifact.h" B2_CORE_PREPARE_API
   REGEX "^#define ME_ARTIFACT_DIRECT_PREPARE_VERSION 1")
 if(NOT B2_CORE_PREPARE_API)
-  message(FATAL_ERROR "Python-Blosc2 5.0 requires the miniexpr 1.0 direct preparation API. Update FETCHCONTENT_SOURCE_DIR_MINIEXPR or use the bundled pin.")
+  message(FATAL_ERROR "Python-Blosc2 4.17 requires the miniexpr 0.4 direct preparation API. Update FETCHCONTENT_SOURCE_DIR_MINIEXPR or use the bundled pin.")
 endif()
 file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr_kernel.h" B2_CORE_API_VERSION
   REGEX "^#define ME_KERNEL_API_VERSION 1")
 if(NOT B2_CORE_API_VERSION)
-  message(FATAL_ERROR "Python-Blosc2 5.0 requires the qualified miniexpr 1.0 core contract. Update FETCHCONTENT_SOURCE_DIR_MINIEXPR or use the bundled pin.")
+  message(FATAL_ERROR "Python-Blosc2 4.17 requires the miniexpr 0.4 core contract. Update FETCHCONTENT_SOURCE_DIR_MINIEXPR or use the bundled pin.")
 endif()
 
 # The adapter links the core transitively; avoid duplicate static archives.
@@ -267,7 +266,7 @@ else()
     set(BLOSC_INSTALL ON)
     include(FetchContent)
     FetchContent_Declare(blosc2
-        GIT_REPOSITORY https://codeberg.org/Blosc/c-blosc2.git
+        GIT_REPOSITORY https://github.com/Blosc/c-blosc2
         GIT_TAG ${BLOSC2_BUNDLED_VERSION}
         # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../c-blosc2
     )
