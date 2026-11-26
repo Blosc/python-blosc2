@@ -249,7 +249,7 @@ def capture_analysis(source, names):
     return function, nodes, local, calls, loads
 
 
-def _export_captures(func, source, names, capture_dtypes, version="0.1", *, analysis=None):
+def _export_captures(func, source, names, capture_dtypes, *, analysis=None):
     scope = _capture_scope(func)
     function, nodes, local, calls, loads = capture_analysis(source, names) if analysis is None else analysis
     # Native compilation owns builtin membership. Never export external callbacks.
@@ -284,7 +284,7 @@ def _export_captures(func, source, names, capture_dtypes, version="0.1", *, anal
             candidate = f"_capture_{index}"
         occupied.add(candidate)
         scalar = menudet_scalar_descriptor(name, scope[name], capture_dtypes.get(name))
-        if version in {"0.1", "0.2"} and scalar["dtype"] not in {"bytes", "unicode32"}:
+        if scalar["dtype"] not in {"bytes", "unicode32"}:
             scalar["category"] = (
                 "weak"
                 if type(scope[name]) in (bool, int, float) and name not in capture_dtypes
@@ -338,9 +338,9 @@ def menudet_semantics(source, version, casting):
     return semantics, requires
 
 
-def export_menudet_kernel(kernel, input_dtypes, output_dtype, **options):
+def export_menudet_kernel(kernel, input_dtypes, output_dtype, *, version="0.1", **options):
     """Export an internally normalized source kernel without calling its Python body."""
-    return prepare_menudet_kernel(kernel, input_dtypes, output_dtype, **options).to_json()
+    return _prepare_menudet_kernel(kernel, input_dtypes, output_dtype, version=version, **options).to_json()
 
 
 def prepare_menudet_generator(source, entry_point, output_dtype, *, constants, ndim, jit):
@@ -351,7 +351,18 @@ def prepare_menudet_generator(source, entry_point, output_dtype, *, constants, n
     return prepare_menudet_kernel(kernel, {}, output_dtype, constants=constants, ndim=ndim, jit=jit)
 
 
-def prepare_menudet_kernel(
+def prepare_menudet_kernel(kernel, input_dtypes, output_dtype=None, *, version="0.2", **options):
+    """Prepare newly authored Menudet source as a reusable 0.2 recipe."""
+    if version == "0.1":
+        raise MenudetError(
+            'New Menudet source uses version "0.2"; omit version or pass "0.2". '
+            "Use MenudetKernel.from_json() to load a legacy 0.1 artifact.",
+            status="unsupported_version",
+        )
+    return _prepare_menudet_kernel(kernel, input_dtypes, output_dtype, version=version, **options)
+
+
+def _prepare_menudet_kernel(
     kernel,
     input_dtypes,
     output_dtype=None,
@@ -359,7 +370,7 @@ def prepare_menudet_kernel(
     capture_dtypes=None,
     constants=None,
     metadata=None,
-    version="0.1",
+    version,
     casting="unsafe",
     cardinality="elementwise",
     ndim=0,
@@ -401,7 +412,6 @@ def prepare_menudet_kernel(
             source,
             names,
             captures,
-            version,
             analysis=getattr(kernel, "_capture_analysis", None),
         )
         encoded.extend(captured)

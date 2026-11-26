@@ -191,6 +191,7 @@ def test_lazyudf_open_roundtrip(tmp_path):
 
     expr.save(urlpath)
     restored = blosc2.open(urlpath, mode="r")
+    assert restored.kernel.to_recipe()["language_version"] == "0.2"
     np.testing.assert_allclose(restored[:], (np.arange(5, dtype=np.float64) * 3) ** 2)
     nested = expr + 1
     nested.save(tmp_path / "nested.b2nd")

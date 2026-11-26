@@ -43,7 +43,6 @@ def menudet_from_lazyudf(obj):
             obj.func,
             {name: value.dtype for name, value in inputs.items()},
             obj.dtype,
-            version="0.1",
             constants=constants,
             ndim=len(shape),
             cardinality="elementwise",
