@@ -1,41 +1,23 @@
-Announcing Python-Blosc2 4.16.1
+Announcing Python-Blosc2 4.17.0
 ===============================
 
-This maintenance and *performance* release bundles **C-Blosc2 3.8.0** and
-updates **miniexpr**, delivering major speedups for array generation,
-compression/decompression, expression evaluation, and reductions.
+Python-Blosc2 4.17.0 introduces a new storage format for saved Menudet
+expressions, giving users a way to adopt the format ahead of Python-Blosc2 5
+without changing execution engines.
 
-- **C-Blosc2 3.8.0: BloscLZ 2.7.0 and faster fused SHUFFLE+BYTEDELTA.**
-  BloscLZ 2.7.0 brings substantial compression and decompression speedups on
-  both x86-64 and ARM64, alongside faster fused SHUFFLE+BYTEDELTA paths
-  (including new AVX2 support and NEON backward decoding), lower threading
-  overhead, and ZFP/portability fixes.
+- **Menudet 0.2 for new kernels.** New source supports optional dtype
+  annotations. Saved Menudet expressions and new Menudet columns in a
+  ``CTable`` use structured MessagePack recipes (v2).
 
-- **Much faster arange() and linspace(), plus cparams inheritance.** Eager
-  ``arange()`` and ``linspace()`` now default to ``BLOSCLZ`` with
-  ``SHUFFLE`` + ``BYTEDELTA`` and direct AOT SIMD interpreter ramp kernels.
-  ``compute()`` on lazy expressions also inherits a uniform lossless
-  ``(codec, clevel, filters)`` setting from numeric ``NDArray`` operands when
-  ``cparams`` is omitted.
+- **Existing data stays readable.** Opening a legacy v1 JSON record doesn't
+  rewrite it. Explicitly resaving a legacy Menudet expression, or using
+  ``CTable.save()`` to save a table copy, writes v2 while preserving the
+  legacy kernel's language version and binding contract. Explicit Menudet
+  JSON interchange remains supported.
 
-- **Faster reductions and Menudet improvements.** Compressed pairwise-sum
-  reductions batch contiguous leaves per chunk with lightweight FP guards and
-  SIMD loops, while bundled miniexpr adds in-process ``libtcc`` JIT kernel
-  caching. Safe lazy expressions and shape inference also support constant
-  ``int()`` calls and bounded ``**``.
-
-Look at this performance snapshot using a Apple M4 Pro, 12 threads::
-
-  Operation                                            4.16.0                   4.16.1
-  -----------------------------------------------------------------------------------------
-  a = blosc2.linspace(0, 1, int(1e8))                  111 ms (cratio 41.0)     11.1 ms (cratio 45.1)
-  a = blosc2.linspace(0, 1, int(1e9))                  1.08 s (cratio 45.3)     79.1 ms (cratio 87.1)
-  blosc2.sin(a).compute()                              1.19 s (cratio 5.50)     549 ms  (cratio 11.3)
-  blosc2.lazyexpr('sin(a)**2 + cos(a)**2').std()       1.97 s                   1.17 s
-
-Essentially what is happening here is the new ramp constructors (arange() and linspace())
-are using more effective generation and compression, and ``.compute()`` inherits this too,
-providing much improved performance.  As you can see, reductions have been optimized too.
+**For shared stores, upgrade all readers before writers start saving Menudet
+entries with 4.17.** Older readers may not be able to open v2 entries. Plain
+arrays are unaffected by this storage change.
 
 Install it with::
 
@@ -44,7 +26,7 @@ Install it with::
 
 For more info, see the release notes at:
 
-https://github.com/Blosc/python-blosc2/releases
+https://github.com/Blosc/python-blosc2/releases/tag/v4.17.0
 
 What is Python-Blosc2?
 ----------------------
