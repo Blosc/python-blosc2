@@ -69,6 +69,7 @@ add_custom_command(
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/pairwise_sum_bridge.h"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_array_bridge.h"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_artifact_bridge.h"
+          "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/b2nd_kernel_pilot.h"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_graph_bridge.h"
   VERBATIM)
 
@@ -288,6 +289,10 @@ else()
         # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../c-blosc2
     )
     FetchContent_MakeAvailable(blosc2)
+    if(B2_EXPERIMENTAL_SHARED_MINIEXPR_CORE)
+        target_include_directories(blosc2_ext PRIVATE "${blosc2_SOURCE_DIR}/blosc")
+        target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_B2ND_KERNEL_PILOT)
+    endif()
     file(STRINGS "${blosc2_SOURCE_DIR}/include/blosc2.h" _blosc2_version_line
          REGEX "^#define[ \t]+BLOSC2_VERSION_STRING")
     string(REGEX REPLACE ".*\"([^\"]+)\".*" "\\1" BLOSC2_PC_VERSION "${_blosc2_version_line}")

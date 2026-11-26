@@ -1149,6 +1149,12 @@ cdef extern from "miniexpr_kernel.h":
         me_casting casting
         bint integer_powers
 
+cdef extern from "b2nd_kernel_pilot.h":
+    ctypedef struct me_error:
+        char message[256]
+    int b2_pilot_available()
+    int b2_pilot_map(b2nd_array_t *, const char *, double *, size_t, me_error *) noexcept nogil
+
 cdef extern from "dsl_artifact_bridge.h":
     ctypedef struct b2_artifact_input:
         const char *name
@@ -2517,6 +2523,10 @@ def menudet_core_available():
 
 def menudet_artifact_available():
     return bool(b2_artifact_available())
+
+
+def _b2nd_kernel_pilot_available():
+    return bool(b2_pilot_available())
 
 
 def menudet_auto_jit_mode():
@@ -7136,6 +7146,33 @@ cdef class NDArray:
     @property
     def c_array(self):
         return <uintptr_t> self.array
+
+    @_handle_locked
+    def _evaluate_b2nd_kernel_pilot(self, str source, size_t max_scratch=65536):
+        """Exercise the experimental C-Blosc2 scheduler on a 1-D float64 map."""
+        cdef np.ndarray output
+        cdef bytes encoded
+        cdef const char *text
+        cdef double *data
+        cdef me_error error
+        cdef int rc
+        if not b2_pilot_available():
+            raise NotImplementedError("Build with B2_EXPERIMENTAL_SHARED_MINIEXPR_CORE")
+        if self.array.ndim != 1 or self.dtype != np.dtype("float64"):
+            raise ValueError("The b2nd kernel pilot requires a native float64 vector")
+        encoded = source.encode("utf-8")
+        if not encoded or b"\0" in encoded:
+            raise ValueError("Invalid Menudet source for the b2nd kernel pilot")
+        output = np.empty(self.array.shape[0], dtype=np.float64)
+        text = encoded
+        data = <double *> output.data
+        memset(&error, 0, sizeof(error))
+        with nogil:
+            rc = b2_pilot_map(self.array, text, data, max_scratch, &error)
+        if rc < 0:
+            message = (<bytes>error.message).decode("utf-8", "replace")
+            raise ValueError(message or f"b2nd kernel pilot failed (status {rc}); check the kernel and scratch budget")
+        return output
 
     @property
     def shape(self) -> tuple[int]:
