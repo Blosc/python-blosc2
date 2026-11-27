@@ -162,10 +162,11 @@ class NativeGraph:
         Native traversal owns broadcasting, axes and reduction order.
         Compressed operands are decoded only for requested tiles, never materialized.
         Staged graphs and compressed participation masks remain unsupported.
-        The explicit C-Blosc2 selector currently admits same-shape in-memory
-        non-contiguous Blosc2 inputs (or mixed Blosc2 + native NumPy inputs)
-        for native numeric dtypes; unsupported bindings raise before numerical
-        reads, without adapter replay.
+        The explicit C-Blosc2 selector admits in-memory non-contiguous Blosc2
+        inputs (with right-aligned N-D broadcasting, partial-axis reductions,
+        and mixed Blosc2 + native NumPy inputs) and optional compressed Blosc2
+        sinks (`out=NDArray`); unsupported bindings raise before numerical reads,
+        without adapter replay.
         """
         if getattr(self._handle, "_executor", None) == "c-blosc2":
             if any(not isinstance(value, (blosc2_ext.NDArray, np.ndarray)) for value in inputs.values()):

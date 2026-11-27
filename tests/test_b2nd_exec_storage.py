@@ -128,17 +128,6 @@ def test_storage_unsupported_bindings_do_not_replay(monkeypatch):
     f64_sched = graph.specialize({"x": ("float64", (17,))}, 8)
     with pytest.raises(NotImplementedError, match="storage binding"):
         f64_sched.execute_arrays({"x": non_native_b2})
-    # A partial-axis reduction remains unadmitted even when its result has
-    # one item (an unreduced unit dimension does not close the axis gate).
-    plan = blosc2_ext._TypedExecPlan(
-        [{"op": 0, "dtype": "float64", "slot": 0}, {"op": 7, "args": [0], "axes": [1]}], 1, 1
-    )
-    schedule = plan.specialize([("float64", (1, 7))], 4)
-    values = blosc2.asarray(np.ones((1, 7)), chunks=(1, 5), blocks=(1, 3), contiguous=False)
-    output = np.array([-77.0])
-    with pytest.raises(NotImplementedError, match="whole-domain"):
-        schedule.execute_arrays((values,), out=output)
-    assert output[0] == -77
 
 
 @pytest.mark.parametrize(
@@ -294,3 +283,74 @@ def test_storage_compressed_sink_mixed_and_rejections(monkeypatch):
     with pytest.raises(MenudetError) as err:
         f64_graph.evaluate_sources({"x": x_snan_b2}, tile_items=8, raise_mask=1, out=out_snan)
     assert err.value.fp_status["flags"] & 1
+
+
+def test_storage_broadcast_and_partial_axis_reductions(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("broadcast/partial-axis storage execution reached Python reader or adapter")
+
+    x_np = np.arange(35, dtype=np.float64).reshape(5, 7) + 10
+    row_np = np.arange(7, dtype=np.float64) * 10.0 + 1.0
+    col_np = np.arange(5, dtype=np.float64).reshape(5, 1) * 100.0 + 2.0
+    y_np = np.arange(35, dtype=np.float64).reshape(5, 7) + 100
+    x_b2 = blosc2.asarray(x_np, chunks=(3, 4), blocks=(2, 3), contiguous=False)
+    y_b2 = blosc2.asarray(y_np, chunks=(4, 3), blocks=(3, 2), contiguous=False)
+    row_b2 = blosc2.asarray(row_np, chunks=(4,), blocks=(3,), contiguous=False)
+    col_b2 = blosc2.asarray(col_np, chunks=(3, 1), blocks=(2, 1), contiguous=False)
+
+    bcast_graph = NativeGraph.from_expression(
+        "x + r", {"x": "float64", "r": "float64"}, jit=False, _executor="c-blosc2"
+    )
+    out_sink = blosc2.uninit((5, 7), dtype="float64", chunks=(2, 5), blocks=(2, 2), contiguous=False)
+
+    with monkeypatch.context() as m:
+        m.setattr(blosc2.NDArray, "__getitem__", forbidden)
+        m.setattr(blosc2.NDArray, "__setitem__", forbidden)
+        m.setattr("blosc2.native_graph.evaluate_graph_sources", forbidden)
+        out_res = bcast_graph.evaluate_sources({"x": x_b2, "r": row_b2}, tile_items=8, workers=3)
+        res_sink, rep_sink = bcast_graph.evaluate_sources(
+            {"x": x_b2, "r": col_b2}, tile_items=8, out=out_sink, workers=3, return_report=True
+        )
+    np.testing.assert_array_equal(out_res, x_np + row_np)
+    assert res_sink is out_sink
+    assert rep_sink["route"] == "c-blosc2-typed-storage-sink"
+    np.testing.assert_array_equal(out_sink[...], x_np + col_np)
+
+    # Partial-axis reductions (including (1, 7) axis=1, axis=0/1, keepdims, initial, pairwise, parallel min)
+    plan = blosc2_ext._TypedExecPlan(
+        [{"op": 0, "dtype": "float64", "slot": 0}, {"op": 7, "args": [0], "axes": [1]}], 1, 1
+    )
+    unit_sched = plan.specialize([("float64", (1, 7))], 4)
+    unit_b2 = blosc2.asarray(np.ones((1, 7)), chunks=(1, 5), blocks=(1, 3), contiguous=False)
+    with monkeypatch.context() as m:
+        m.setattr(blosc2.NDArray, "__getitem__", forbidden)
+        m.setattr("blosc2.native_graph.evaluate_graph_sources", forbidden)
+        unit_out, _ = unit_sched.execute_arrays((unit_b2,))
+        np.testing.assert_array_equal(unit_out, np.array([7.0]))
+
+        sum0 = NativeGraph.from_expression(
+            "sum(x, axis=0)", {"x": "float64"}, jit=False, _executor="c-blosc2"
+        )
+        np.testing.assert_array_equal(sum0.evaluate_sources({"x": x_b2}, tile_items=4), x_np.sum(axis=0))
+
+        sum1_kd = NativeGraph.from_expression(
+            "sum(x, axis=1, keepdims=True)", {"x": "float64"}, jit=False, _executor="c-blosc2"
+        )
+        np.testing.assert_array_equal(
+            sum1_kd.evaluate_sources({"x": x_b2}, tile_items=4), x_np.sum(axis=1, keepdims=True)
+        )
+
+        sum_init_pw = NativeGraph.from_expression(
+            "sum(x, axis=0, initial=1.5)", {"x": "float64"}, jit=False, _executor="c-blosc2"
+        ).specialize({"x": ("float64", (5, 7))}, tile_items=4, pairwise_sum=True)
+        pw_out, _ = sum_init_pw.execute_arrays({"x": x_b2})
+        np.testing.assert_allclose(pw_out, 1.5 + x_np.sum(axis=0))
+
+        min0 = NativeGraph.from_expression(
+            "min(x + y, axis=0)", {"x": "float64", "y": "float64"}, jit=False, _executor="c-blosc2"
+        )
+        min_out, min_rep = min0.evaluate_sources(
+            {"x": x_b2, "y": y_b2}, tile_items=3, workers=3, return_report=True
+        )
+        np.testing.assert_array_equal(min_out, (x_np + y_np).min(axis=0))
+        assert min_rep["tasks"] == 3
