@@ -10,7 +10,7 @@ cdef extern from "b2nd_exec_bridge.h":
         size_t itemsize
         int64_t shape[16]
     ctypedef struct b2_exec_info:
-        int dtype, reduction, identity
+        int dtype, reduction, identity, map_dtype
         size_t itemsize, ninputs, nitems, tile_items, mapped_bytes, reducer_bytes, output_items
     ctypedef struct me_buffer:
         const void *data
@@ -138,6 +138,7 @@ cdef class _TypedExecPlan:
 
     def info(self):
         return {"inferred_dtype": _numpy_dtype_from_me_dtype(<me_dtype>self._info.dtype),
+                "map_dtype": _numpy_dtype_from_me_dtype(<me_dtype>self._info.map_dtype),
                 "ninputs": self._info.ninputs, "reduction": bool(self._info.reduction),
                 "identity": bool(self._info.identity)}
 

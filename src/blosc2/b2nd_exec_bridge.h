@@ -19,7 +19,7 @@ typedef struct {
 } b2_exec_meta;
 
 typedef struct {
-    int dtype, reduction, identity;
+    int dtype, reduction, identity, map_dtype;
     size_t itemsize, ninputs, nitems, tile_items, mapped_bytes, reducer_bytes, output_items;
 } b2_exec_info;
 
@@ -73,6 +73,7 @@ static int b2_exec_describe(const void *plan, b2_exec_info *out) {
     if (!rc) {
         memset(out, 0, sizeof(*out));
         out->dtype = info.dtype;
+        out->map_dtype = info.map_dtype;
         out->itemsize = info.itemsize;
         out->ninputs = info.ninputs;
         out->identity = info.identity;

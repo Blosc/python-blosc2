@@ -28,7 +28,19 @@ _DTYPES = {
     "float32",
     "float64",
 }
-_OPS = {"input": 0, "constant": 1, "add": 2, "sub": 3, "mul": 4, "neg": 5, "min": 6}
+_OPS = {
+    "input": 0,
+    "constant": 1,
+    "add": 2,
+    "sub": 3,
+    "mul": 4,
+    "neg": 5,
+    "min": 6,
+    "sum": 7,
+    "prod": 8,
+    "max": 9,
+}
+_REDUCERS = {"min", "sum", "prod", "max"}
 
 
 class _NotAdmitted(Exception):
@@ -55,7 +67,7 @@ def _lower(expression, operands):
         op = node["op"]
         if op not in _OPS:
             raise _NotAdmitted
-        if op == "min" and (
+        if op in _REDUCERS and (
             index != root
             or node["axes"] is not None
             or node["keepdims"]
@@ -89,7 +101,7 @@ def _lower(expression, operands):
         )
     if len(nodes) > 1024 or sum(n[0] == 1 for n in nodes) > 128:
         raise _NotAdmitted
-    return tuple(nodes), names, root, adapter.nodes[root]["op"] == "min"
+    return tuple(nodes), names, root, adapter.nodes[root]["op"] in _REDUCERS
 
 
 @lru_cache(maxsize=32)
@@ -151,8 +163,10 @@ def compute_typed_resident_if_eligible(expr, item, tile, options):
     except (_NotAdmitted, SyntaxError, RecursionError):
         return None
     items = math.prod(shape)
-    if (reduction and (selection or not items)) or (
-        not reduction and not options.get("_getitem") and output is None
+    if (
+        (reduction and selection)
+        or (not items and nodes[root][0] in {6, 9})
+        or (not reduction and not options.get("_getitem") and output is None)
     ):
         return None
     plan = _prepare(nodes, len(names), root)
@@ -168,11 +182,7 @@ def compute_typed_resident_if_eligible(expr, item, tile, options):
         or any(np.may_share_memory(output, expr.operands[name]) for name in names)
     ):
         return None
-    if (
-        info["reduction"]
-        and not info["identity"]
-        and min(items, tile) * info["inferred_dtype"].itemsize > 65536
-    ):
+    if info["reduction"] and not info["identity"] and min(items, tile) * info["map_dtype"].itemsize > 65536:
         return None
     arrays = tuple(expr.operands[name] for name in names)
     schedule = plan.specialize(tuple((value.dtype, value.shape) for value in arrays), tile, 65536)

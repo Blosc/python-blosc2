@@ -133,7 +133,12 @@ def test_typed_failure_never_replays_adapter(monkeypatch):
 
     class Prepared:
         def info(self):
-            return {"reduction": True, "identity": False, "inferred_dtype": np.dtype("int64")}
+            return {
+                "reduction": True,
+                "identity": False,
+                "inferred_dtype": np.dtype("int64"),
+                "map_dtype": np.dtype("int64"),
+            }
 
         def specialize(self, *args):
             return FailedSchedule()
@@ -266,3 +271,36 @@ def test_typed_public_disjoint_output():
     np.testing.assert_array_equal(output, values * 2 + 1)
     assert expr._native_execution_report["route"] == "c-blosc2-typed-resident"
     assert expr._native_execution_report["temporary_bytes"] == 0
+
+
+@pytest.mark.parametrize("reducer", ["sum", "prod", "max"])
+def test_typed_serial_reducers_and_accumulator_dtype(reducer):
+    x = np.array([-2, 5, 7], dtype="int16")
+    expression = f"{reducer}(x + 1)"
+    expected = NativeGraph.from_expression(expression, {"x": "int16"}, jit=False).evaluate({"x": x})
+    with blosc2.expression_evaluation("safe"):
+        expr = blosc2.lazyexpr(expression, {"x": x})
+    actual = expr.compute(jit=False, _native_tile_items=2)
+    assert actual.dtype == expected.dtype
+    assert actual.tobytes() == expected.tobytes()
+    report = expr._native_execution_report
+    assert report["route"] == "c-blosc2-typed-resident"
+    assert report["temporary_bytes"] == 4  # Map int16, even when the accumulator is int64.
+
+
+def test_typed_sum_order_and_empty_identities():
+    x = np.array([2**24, 1, -(2**24), 3], dtype="float32")
+    with blosc2.expression_evaluation("safe"):
+        expr = blosc2.lazyexpr("sum(x)", {"x": x})
+    for tile in (1, 2, 128):
+        result = expr.compute(jit=False, _native_tile_items=tile)
+        assert result.dtype == np.dtype("float32")
+        assert result == 3
+        assert expr._native_execution_report["temporary_bytes"] == 0
+    for reducer, identity in (("sum", 0), ("prod", 1)):
+        with blosc2.expression_evaluation("safe"):
+            empty = blosc2.lazyexpr(f"{reducer}(x)", {"x": np.empty((2, 0, 3), dtype="float32")})
+        result = empty.compute(jit=False)
+        assert result.dtype == np.dtype("float32")
+        assert result == identity
+        assert empty._native_execution_report["map_calls"] == 0
