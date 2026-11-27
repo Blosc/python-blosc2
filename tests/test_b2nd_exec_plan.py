@@ -68,6 +68,39 @@ def test_typed_errors_and_metadata_only_specialization():
         plan.specialize([("int64", (1,) * 17), ("int64", (1,) * 17)])
 
 
+def test_typed_backend_reports_and_concurrent_schedule():
+    from concurrent.futures import ThreadPoolExecutor
+
+    for execution in (0, 1):
+        plan = blosc2_ext._TypedExecPlan(descriptor("float64"), 2, 5, execution=execution)
+        prepared_jit = plan.info()["has_jit"]
+        if execution == 0:
+            assert not prepared_jit
+        schedule = plan.specialize([("float64", (37,)), ("float64", (37,))], 8, 64)
+
+        def evaluate(offset, schedule=schedule, prepared_jit=prepared_jit):
+            x = np.arange(37, dtype=np.float64) + offset
+            result, report = schedule.execute((x, -x), workers=2, max_worker_scratch=128)
+            assert result == -2 * (36 + offset)
+            assert report["map_calls"] == 5
+            assert report["jit_calls"] == (5 if prepared_jit else 0)
+            assert report["interpreter_calls"] == (0 if prepared_jit else 5)
+            assert report["has_jit"] == prepared_jit
+            assert report["fp_flags"] == 0
+            return result
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            assert list(pool.map(evaluate, range(6))) == [-2 * (36 + offset) for offset in range(6)]
+
+    identity = blosc2_ext._TypedExecPlan([{"op": 0, "dtype": "float64", "slot": 0}], 1, 0, execution=1)
+    x = np.arange(17, dtype=np.float64)
+    result, report = identity.specialize([("float64", x.shape)], 8, 0).execute((x,))
+    np.testing.assert_array_equal(result, x)
+    assert not report["has_jit"]
+    assert report["jit_calls"] == report["interpreter_calls"] == 0
+    assert report["direct_tiles"] == 3
+
+
 def test_typed_multiple_inputs_map_min_and_no_old_executor(monkeypatch):
     inputs = {"x": np.arange(37, dtype=np.int64), "y": np.arange(37, dtype=np.int64)[::-1].copy()}
     expected = {}

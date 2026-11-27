@@ -18,7 +18,7 @@ cdef extern from "b2nd_exec_bridge.h":
         size_t itemsize
         int64_t shape[16]
     ctypedef struct b2_exec_info:
-        int dtype, reduction, identity, map_dtype, reducer, partitionable
+        int dtype, reduction, identity, map_dtype, reducer, partitionable, has_jit
         size_t itemsize, ninputs, nitems, tile_items, mapped_bytes, reducer_bytes, output_items
         size_t plan_metadata_bytes, schedule_metadata_bytes
         size_t ndim, broadcast_gather_bytes
@@ -38,6 +38,7 @@ cdef extern from "b2nd_exec_bridge.h":
         me_fp_status fp
         size_t tasks, worker_bytes, gather_bytes, gathered_bytes
         size_t staging_bytes
+        size_t interpreter_calls, jit_calls
     ctypedef struct b2_exec_view:
         const void *base
         size_t capacity, offset
@@ -316,6 +317,7 @@ cdef class _TypedExecPlan:
                 "ninputs": self._info.ninputs, "reduction": bool(self._info.reduction),
                 "identity": bool(self._info.identity),
                 "partitionable": bool(self._info.partitionable),
+                "has_jit": bool(self._info.has_jit),
                 "axes": axes, "keepdims": bool(self._info.keepdims),
                 "initial": bool(self._info.has_initial),
                 "reducer": {0: None, 1: "sum", 2: "prod", 3: "min", 4: "max", 5: "any",
@@ -431,7 +433,9 @@ cdef class _TypedExecSchedule:
                 report.fp.flags, report.fp.supported, 0, 0)
         return output, {"route": "c-blosc2-typed-resident", "tiles": report.tiles,
                         "map_calls": report.map_calls, "direct_tiles": report.direct_tiles,
-                        "evaluated_tiles": report.map_calls,
+                         "evaluated_tiles": report.map_calls,
+                         "interpreter_calls": report.interpreter_calls, "jit_calls": report.jit_calls,
+                         "has_jit": bool(report.jit_calls),
                         "zero_copy_tiles": report.tiles if report.gathered_bytes == 0 else 0,
                         "input_materialization_bytes": 0,
                         "temporary_bytes": report.mapped_bytes, "reducer_bytes": self._info.reducer_bytes,

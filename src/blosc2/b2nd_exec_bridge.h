@@ -23,7 +23,7 @@ typedef struct {
 } b2_exec_meta;
 
 typedef struct {
-    int dtype, reduction, identity, map_dtype, reducer, partitionable;
+    int dtype, reduction, identity, map_dtype, reducer, partitionable, has_jit;
     size_t itemsize, ninputs, nitems, tile_items, mapped_bytes, reducer_bytes, output_items;
     size_t plan_metadata_bytes, schedule_metadata_bytes;
     size_t ndim, broadcast_gather_bytes;
@@ -39,6 +39,7 @@ typedef struct {
     me_fp_status fp;
     size_t tasks, worker_bytes, gather_bytes, gathered_bytes;
     size_t staging_bytes;
+    size_t interpreter_calls, jit_calls;
 } b2_exec_report;
 
 typedef struct {
@@ -125,6 +126,7 @@ static int b2_exec_describe(const void *plan, b2_exec_info *out) {
         out->reduction = info.reduction;
         out->reducer = (int)info.reducer;
         out->partitionable = info.partitionable;
+        out->has_jit = info.has_jit;
         out->plan_metadata_bytes = info.plan_metadata_bytes;
         out->has_axes = info.has_axes;
         out->naxes = info.naxes;
@@ -204,6 +206,8 @@ static void b2_exec_fill_report(b2_exec_report *report, const b2nd_exec_report *
     report->gather_bytes = native->gather_bytes;
     report->gathered_bytes = native->gathered_bytes;
     report->staging_bytes = native->staging_bytes;
+    report->interpreter_calls = native->interpreter_calls;
+    report->jit_calls = native->jit_calls;
 }
 static int b2_exec_execute_into(const void *schedule, const b2_exec_view *inputs, size_t ninputs,
                                 const b2_exec_output_view *output, unsigned raise_mask,
