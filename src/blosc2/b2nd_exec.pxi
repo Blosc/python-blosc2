@@ -57,9 +57,9 @@ cdef extern from "b2nd_exec_bridge.h":
                           void **, me_error *) nogil
     int b2_exec_schedule_describe(const void *, b2_exec_info *)
     int b2_exec_execute_into(const void *, const b2_exec_view *, size_t, const b2_exec_output_view *,
-                             unsigned, size_t, size_t, size_t, b2_exec_report *, me_error *) nogil
+                             unsigned, size_t, size_t, int, size_t, b2_exec_report *, me_error *) nogil
     int b2_exec_execute_alias(const void *, const b2_exec_view *, size_t, const b2_exec_output_view *,
-                              size_t, unsigned, size_t, size_t, size_t, b2_exec_report *,
+                              size_t, unsigned, size_t, size_t, int, size_t, b2_exec_report *,
                               me_error *) nogil
 
 
@@ -384,18 +384,29 @@ cdef class _TypedExecSchedule:
 
     cdef object _run_into(self, object inputs, object out, bint use_alias,
                           size_t staging_budget, unsigned raise_mask, size_t workers,
-                          size_t max_worker_scratch, size_t max_gather_bytes):
+                          object max_worker_scratch, size_t max_gather_bytes):
         cdef b2_exec_view views[128]
         cdef b2_exec_output_view out_view
         cdef me_error error
         cdef b2_exec_report report
         cdef np.ndarray value, output
         cdef size_t count = len(inputs)
+        cdef size_t budget = 0
+        cdef int has_budget = 0
         cdef int i, rc
         if self._schedule == NULL:
             raise ValueError("Uninitialized typed schedule")
         if count != self._info.ninputs:
             raise ValueError("Typed input count mismatch")
+        if max_worker_scratch is None:
+            if workers > 1:
+                has_budget = 1
+                budget = 65536
+        else:
+            if type(max_worker_scratch) is not int or max_worker_scratch < 0:
+                raise ValueError("max_worker_scratch must be a non-negative integer")
+            has_budget = 1
+            budget = <size_t>max_worker_scratch
         # Retain every array while the GIL is released; no implicit conversions.
         values = tuple(inputs)
         owners = []
@@ -424,11 +435,11 @@ cdef class _TypedExecSchedule:
             if use_alias:
                 rc = b2_exec_execute_alias(
                     self._schedule, views, count, &out_view, staging_budget, raise_mask,
-                    max_gather_bytes, workers, max_worker_scratch, &report, &error)
+                    max_gather_bytes, workers, has_budget, budget, &report, &error)
             else:
                 rc = b2_exec_execute_into(
                     self._schedule, views, count, &out_view, raise_mask,
-                    max_gather_bytes, workers, max_worker_scratch, &report, &error)
+                    max_gather_bytes, workers, has_budget, budget, &report, &error)
         if rc:
             raise _typed_exec_error(
                 rc, (<bytes>error.message).decode("utf-8", "replace"),
@@ -447,12 +458,12 @@ cdef class _TypedExecSchedule:
                         "fp_flags": report.fp.flags, "fp_supported": bool(report.fp.supported)}
 
     def execute(self, inputs, unsigned raise_mask=0, *, out=None, size_t workers=1,
-                size_t max_worker_scratch=65536, size_t max_gather_bytes=67108864):
+                max_worker_scratch=None, size_t max_gather_bytes=67108864):
         return self._run_into(inputs, out, False, 0, raise_mask, workers,
                               max_worker_scratch, max_gather_bytes)
 
     def execute_alias(self, inputs, size_t staging_budget, unsigned raise_mask=0, *, out,
-                      size_t workers=1, size_t max_worker_scratch=65536,
+                      size_t workers=1, max_worker_scratch=None,
                       size_t max_gather_bytes=67108864):
         if out is None:
             raise TypeError("Typed alias execution requires an explicit NumPy output buffer")

@@ -214,7 +214,8 @@ static void b2_exec_fill_report(b2_exec_report *report, const b2nd_exec_report *
 }
 static int b2_exec_execute_into(const void *schedule, const b2_exec_view *inputs, size_t ninputs,
                                 const b2_exec_output_view *output, unsigned raise_mask,
-                                size_t max_gather_bytes, size_t workers, size_t worker_scratch,
+                                size_t max_gather_bytes, size_t workers,
+                                int has_worker_scratch, size_t worker_scratch,
                                 b2_exec_report *report, me_error *error) {
     if (ninputs > B2ND_EXEC_MAX_INPUTS || !output) {
         return ME_ERR_INVALID_ARG;
@@ -225,14 +226,16 @@ static int b2_exec_execute_into(const void *schedule, const b2_exec_view *inputs
     b2nd_exec_report native = {0};
     b2nd_exec_jobs jobs = {sizeof(jobs), workers ? workers : 1, worker_scratch};
     int rc = b2nd_exec_execute_into(schedule, views, ninputs, &out_view, raise_mask,
-                                    max_gather_bytes, &jobs, &native, error);
+                                    max_gather_bytes,
+                                    (workers > 1 || has_worker_scratch) ? &jobs : NULL,
+                                    &native, error);
     b2_exec_fill_report(report, &native);
     return rc;
 }
 static int b2_exec_execute_alias(const void *schedule, const b2_exec_view *inputs, size_t ninputs,
                                  const b2_exec_output_view *output, size_t staging_budget,
                                  unsigned raise_mask, size_t max_gather_bytes,
-                                 size_t workers, size_t worker_scratch,
+                                 size_t workers, int has_worker_scratch, size_t worker_scratch,
                                  b2_exec_report *report, me_error *error) {
     if (ninputs > B2ND_EXEC_MAX_INPUTS || !output) {
         return ME_ERR_INVALID_ARG;
@@ -243,7 +246,9 @@ static int b2_exec_execute_alias(const void *schedule, const b2_exec_view *input
     b2nd_exec_report native = {0};
     b2nd_exec_jobs jobs = {sizeof(jobs), workers ? workers : 1, worker_scratch};
     int rc = b2nd_exec_execute_alias(schedule, views, ninputs, &out_view, staging_budget, raise_mask,
-                                     max_gather_bytes, &jobs, &native, error);
+                                     max_gather_bytes,
+                                     (workers > 1 || has_worker_scratch) ? &jobs : NULL,
+                                     &native, error);
     b2_exec_fill_report(report, &native);
     return rc;
 }
@@ -287,19 +292,22 @@ static int b2_exec_schedule_describe(const void *schedule, b2_exec_info *out) {
 }
 static int b2_exec_execute_into(const void *schedule, const b2_exec_view *inputs, size_t ninputs,
                                 const b2_exec_output_view *output, unsigned raise_mask,
-                                size_t max_gather_bytes, size_t workers, size_t worker_scratch,
+                                size_t max_gather_bytes, size_t workers,
+                                int has_worker_scratch, size_t worker_scratch,
                                 b2_exec_report *report, me_error *error) {
     (void)schedule; (void)inputs; (void)ninputs; (void)output; (void)raise_mask;
-    (void)max_gather_bytes; (void)workers; (void)worker_scratch; (void)report; (void)error;
+    (void)max_gather_bytes; (void)workers; (void)has_worker_scratch;
+    (void)worker_scratch; (void)report; (void)error;
     return ME_ERR_UNSUPPORTED;
 }
 static int b2_exec_execute_alias(const void *schedule, const b2_exec_view *inputs, size_t ninputs,
                                  const b2_exec_output_view *output, size_t staging_budget,
                                  unsigned raise_mask, size_t max_gather_bytes,
-                                 size_t workers, size_t worker_scratch,
+                                 size_t workers, int has_worker_scratch, size_t worker_scratch,
                                  b2_exec_report *report, me_error *error) {
     (void)schedule; (void)inputs; (void)ninputs; (void)output; (void)staging_budget;
-    (void)raise_mask; (void)max_gather_bytes; (void)workers; (void)worker_scratch;
+    (void)raise_mask; (void)max_gather_bytes; (void)workers;
+    (void)has_worker_scratch; (void)worker_scratch;
     (void)report; (void)error;
     return ME_ERR_UNSUPPORTED;
 }

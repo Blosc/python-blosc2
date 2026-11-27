@@ -125,6 +125,61 @@ def test_typed_partition_proof_rejects_checked_weak_conversion():
         schedule.execute((values,), out=output, workers=2)
     np.testing.assert_array_equal(output, np.full(4, 55, dtype=np.uint8))
 
+    # Weak integer arithmetic (+, -, unary -) is checked in Menudet and must not partition.
+    weak_max = np.int64(np.iinfo("int64").max).tobytes()
+    weak_min = np.int64(np.iinfo("int64").min).tobytes()
+    for expr_nodes, root_id in (
+        (
+            [
+                {"op": 0, "dtype": "int64", "slot": 0},
+                {"op": 1, "dtype": "int64", "scalar": weak_max, "weak": True},
+                {"op": 2, "args": [1, 1]},
+                {"op": 2, "args": [0, 2]},
+            ],
+            3,
+        ),
+        (
+            [
+                {"op": 0, "dtype": "int64", "slot": 0},
+                {"op": 1, "dtype": "int64", "scalar": weak_min, "weak": True},
+                {"op": 5, "args": [1]},
+                {"op": 2, "args": [0, 2]},
+            ],
+            3,
+        ),
+    ):
+        weak_plan = blosc2_ext._TypedExecPlan(expr_nodes, 1, root_id)
+        assert not weak_plan.info()["partitionable"]
+        weak_sched = weak_plan.specialize([("int64", (4,))], 2, 0)
+        in_i64 = np.arange(4, dtype=np.int64)
+        out_i64 = np.full(4, -77, dtype=np.int64)
+        with pytest.raises(NotImplementedError, match="not proven partitionable"):
+            weak_sched.execute((in_i64,), out=out_i64, workers=2)
+        np.testing.assert_array_equal(out_i64, np.full(4, -77, dtype=np.int64))
+
+
+def test_named_typed_facade_large_tile_and_gather_at_workers_1():
+    n = 16384
+    x = np.arange(n, dtype="float64")
+    y = np.arange(n, dtype="float64") * 2.0
+    typed = NativeGraph.from_expression(
+        "min(x + y)", {"x": "float64", "y": "float64"}, jit=False, _executor="c-blosc2"
+    )
+    adapter = NativeGraph.from_expression(
+        "min(x + y)", {"x": "float64", "y": "float64"}, jit=False, _executor="adapter"
+    )
+    # 16384 * 8 = 128 KiB mapped tile (> 64 KiB) must work at workers=1 on NativeGraph facade.
+    actual, report = typed.evaluate({"x": x, "y": y}, tile_items=n, return_report=True, workers=1)
+    assert actual == adapter.evaluate({"x": x, "y": y}, tile_items=n)
+    assert report["temporary_bytes"] == n * 8
+    # Strided inputs needing > 64 KiB per-job gather scratch must also work at workers=1.
+    strided_x = np.arange(n * 2, dtype="float64")[::2]
+    actual_s, report_s = typed.evaluate(
+        {"x": strided_x, "y": y}, tile_items=n, return_report=True, workers=1
+    )
+    assert actual_s == actual
+    assert report_s["gather_bytes"] == n * 8
+
 
 def test_typed_multiple_inputs_map_min_and_no_old_executor(monkeypatch):
     inputs = {"x": np.arange(37, dtype=np.int64), "y": np.arange(37, dtype=np.int64)[::-1].copy()}
