@@ -206,11 +206,17 @@ class TypedGraphSchedule:
             "pairwise_sum": native["pairwise_sum"],
         }
 
-    def execute_arrays(self, inputs, raise_mask=0, *, out=None, **budgets):
+    def execute_arrays(self, inputs, raise_mask=0, *, out=None, workers=1, **budgets):
+        if type(workers) is not int or workers < 1:
+            raise ValueError("workers must be a positive integer")
         if set(inputs) != set(self._names):
             raise ValueError("Typed graph input names do not match the schedule")
         return self._native.execute_arrays(
-            tuple(inputs[name] for name in self._names), raise_mask, out=out, **budgets
+            tuple(inputs[name] for name in self._names),
+            raise_mask,
+            out=out,
+            workers=workers,
+            **budgets,
         )
 
     def execute(self, inputs, raise_mask=0, *, out=None, workers=1):

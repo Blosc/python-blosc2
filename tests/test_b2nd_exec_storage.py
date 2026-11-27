@@ -120,11 +120,14 @@ def test_storage_unsupported_bindings_do_not_replay(monkeypatch):
         pytest.fail("unsupported native storage binding replayed the adapter")
 
     monkeypatch.setattr("blosc2.native_graph.evaluate_graph_sources", forbidden)
-    for dtype, contiguous in (("float32", False), ("float64", True)):
-        inputs = {"x": blosc2.asarray(np.arange(17, dtype=dtype), contiguous=contiguous)}
-        graph = NativeGraph.from_expression("min(x)", {"x": dtype}, jit=False, _executor="c-blosc2")
-        with pytest.raises(NotImplementedError, match="storage binding"):
-            graph.evaluate_sources(inputs)
+    inputs = {"x": blosc2.asarray(np.arange(17, dtype="float64"), contiguous=True)}
+    graph = NativeGraph.from_expression("min(x)", {"x": "float64"}, jit=False, _executor="c-blosc2")
+    with pytest.raises(NotImplementedError, match="storage binding"):
+        graph.evaluate_sources(inputs)
+    non_native_b2 = blosc2.asarray(np.arange(17, dtype=">f8"), chunks=(9,), blocks=(4,), contiguous=False)
+    f64_sched = graph.specialize({"x": ("float64", (17,))}, 8)
+    with pytest.raises(NotImplementedError, match="storage binding"):
+        f64_sched.execute_arrays({"x": non_native_b2})
     # A partial-axis reduction remains unadmitted even when its result has
     # one item (an unreduced unit dimension does not close the axis gate).
     plan = blosc2_ext._TypedExecPlan(
@@ -136,3 +139,74 @@ def test_storage_unsupported_bindings_do_not_replay(monkeypatch):
     with pytest.raises(NotImplementedError, match="whole-domain"):
         schedule.execute_arrays((values,), out=output)
     assert output[0] == -77
+
+
+@pytest.mark.parametrize(
+    ("expr", "dtype", "values", "expected"),
+    [
+        ("sum(x)", "int16", np.arange(-5, 30, dtype=np.int16).reshape(5, 7), np.int64(420)),
+        ("min(x)", "float32", (np.arange(35, dtype=np.float32).reshape(5, 7) + 1) * 0.5, np.float32(0.5)),
+        ("any(x)", "bool", np.array([False] * 34 + [True]).reshape(5, 7), np.bool_(True)),
+    ],
+)
+def test_storage_numeric_dtypes(expr, dtype, values, expected):
+    arr = blosc2.asarray(values, chunks=(3, 4), blocks=(2, 3), contiguous=False)
+    graph = NativeGraph.from_expression(expr, {"x": dtype}, jit=False, _executor="c-blosc2")
+    actual, report = graph.evaluate_sources({"x": arr}, tile_items=8, return_report=True)
+    assert actual == expected
+    assert actual.dtype == np.asarray(expected).dtype
+    assert report["route"] == "c-blosc2-typed-storage"
+
+
+def test_storage_mixed_resident_and_parallel_execution(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("mixed/parallel storage execution reached a Python reader or adapter")
+
+    monkeypatch.setattr(blosc2.NDArray, "__getitem__", forbidden)
+    monkeypatch.setattr("blosc2.native_graph.evaluate_graph_sources", forbidden)
+    x_np = (np.arange(35, dtype=np.float32).reshape(5, 7) + 1) * 0.5
+    y_np = np.arange(35, dtype=np.float32).reshape(5, 7) * 2.0
+    x_b2 = blosc2.asarray(x_np, chunks=(3, 4), blocks=(2, 3), contiguous=False)
+
+    min_graph = NativeGraph.from_expression(
+        "min(x + y)", {"x": "float32", "y": "float32"}, jit=False, _executor="c-blosc2"
+    )
+    actual, report = min_graph.evaluate_sources(
+        {"x": x_b2, "y": y_np}, tile_items=8, workers=3, return_report=True
+    )
+    assert actual == np.float32(0.5)
+    assert report["tasks"] == 3
+    assert report["decode_bytes"] == 3 * 24 * 4
+
+    add_graph = NativeGraph.from_expression(
+        "x + y", {"x": "float32", "y": "float32"}, jit=False, _executor="c-blosc2"
+    )
+    sum_out, add_report = add_graph.evaluate_sources(
+        {"x": x_b2, "y": y_np}, tile_items=8, workers=3, return_report=True
+    )
+    np.testing.assert_array_equal(sum_out, x_np + y_np)
+    assert add_report["tasks"] == 3
+
+    sched = add_graph.specialize({"x": ("float32", (5, 7)), "y": ("float32", (5, 7))}, 8)
+    capped_out, capped_report = sched.execute_arrays(
+        {"x": x_b2, "y": y_np}, workers=3, max_decode_bytes=2 * 24 * 4
+    )
+    np.testing.assert_array_equal(capped_out, x_np + y_np)
+    assert capped_report["tasks"] == 2
+    assert capped_report["decode_bytes"] == 2 * 24 * 4
+
+    with pytest.raises(ValueError, match="decode budget"):
+        sched.execute_arrays({"x": x_b2, "y": y_np}, workers=3, max_decode_bytes=24 * 4 - 1)
+
+    non_native_out, _ = sched.execute_arrays({"x": x_b2, "y": y_np.astype(">f4")}, workers=2)
+    np.testing.assert_array_equal(non_native_out, x_np + y_np)
+
+    sum_graph = NativeGraph.from_expression("sum(x)", {"x": "int16"}, jit=False, _executor="c-blosc2")
+    x16 = blosc2.asarray(
+        np.arange(-5, 30, dtype=np.int16).reshape(5, 7), chunks=(3, 4), blocks=(2, 3), contiguous=False
+    )
+    with pytest.raises(NotImplementedError, match="Ordered"):
+        sum_graph.evaluate_sources({"x": x16}, tile_items=8, workers=2)
+    sum_sched = sum_graph.specialize({"x": ("int16", (5, 7))}, 8)
+    with pytest.raises(NotImplementedError, match="Ordered"):
+        sum_sched.execute_arrays({"x": x16}, workers=2, max_decode_bytes=24 * 2)

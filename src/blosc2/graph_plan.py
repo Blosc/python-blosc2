@@ -154,23 +154,26 @@ class NativeGraph:
         """Export an eligible elementwise graph as a Menudet 0.1 beta artifact."""
         return self._handle.map_json()
 
-    def evaluate_sources(self, inputs, *, tile_items=65536, raise_mask=0, return_report=False, out=None):
+    def evaluate_sources(
+        self, inputs, *, tile_items=65536, raise_mask=0, return_report=False, out=None, workers=1
+    ):
         """Stream a single-region graph from NumPy/Blosc2 inputs with bounded scratch.
 
-        Native traversal owns broadcasting, axes and serial reduction order.
+        Native traversal owns broadcasting, axes and reduction order.
         Compressed operands are decoded only for requested tiles, never materialized.
         Staged graphs and compressed participation masks remain unsupported.
-        The explicit C-Blosc2 selector currently admits only serial, same-shape,
-        in-memory native float64 Blosc2 inputs; unsupported bindings raise
-        before numerical reads, without adapter replay.
+        The explicit C-Blosc2 selector currently admits same-shape in-memory
+        non-contiguous Blosc2 inputs (or mixed Blosc2 + native NumPy inputs)
+        for native numeric dtypes; unsupported bindings raise before numerical
+        reads, without adapter replay.
         """
         if getattr(self._handle, "_executor", None) == "c-blosc2":
-            if any(not isinstance(value, blosc2_ext.NDArray) for value in inputs.values()):
-                raise NotImplementedError("Typed storage execution requires native Blosc2 arrays")
+            if any(not isinstance(value, (blosc2_ext.NDArray, np.ndarray)) for value in inputs.values()):
+                raise NotImplementedError("Typed storage execution requires Blosc2 or NumPy arrays")
             schedule = self.specialize(
                 {name: (value.dtype, value.shape) for name, value in inputs.items()}, tile_items
             )
-            result, report = schedule.execute_arrays(inputs, raise_mask, out=out)
+            result, report = schedule.execute_arrays(inputs, raise_mask, out=out, workers=workers)
             return (result, report) if return_report else result
         from .native_graph import evaluate_graph_sources
 

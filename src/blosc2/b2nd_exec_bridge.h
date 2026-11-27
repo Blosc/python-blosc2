@@ -218,13 +218,32 @@ static void b2_exec_fill_report(b2_exec_report *report, const b2nd_exec_report *
     report->interpreter_calls = native->interpreter_calls;
     report->jit_calls = native->jit_calls;
 }
-static int b2_exec_execute_arrays(const void *schedule, const void *const *inputs, size_t ninputs,
+static int b2_exec_execute_arrays(const void *schedule, const void *const *inputs,
+                                  const b2_exec_view *views, size_t ninputs,
                                   void *output, size_t output_bytes, unsigned raise_mask,
                                   size_t decode_budget, size_t gather_budget,
+                                  size_t workers, int has_worker_scratch, size_t worker_scratch,
                                   b2_exec_storage_report *report, me_error *error) {
+    if (ninputs > B2ND_EXEC_MAX_INPUTS) {
+        return ME_ERR_INVALID_ARG;
+    }
+    b2nd_exec_view native_views[B2ND_EXEC_MAX_INPUTS] = {0};
+    if (views) {
+        for (size_t i = 0; i < ninputs; i++) {
+            native_views[i].struct_size = sizeof(native_views[i]);
+            native_views[i].base = views[i].base;
+            native_views[i].capacity = views[i].capacity;
+            native_views[i].offset = views[i].offset;
+            native_views[i].byte_order = views[i].byte_order;
+            memcpy(native_views[i].strides, views[i].strides, sizeof(native_views[i].strides));
+        }
+    }
     b2nd_exec_storage_report native = {0};
-    int rc = b2nd_exec_execute_arrays(schedule, (const b2nd_array_t *const *)inputs, ninputs,
-        (me_mut_buffer){output, output_bytes}, raise_mask, decode_budget, gather_budget, &native, error);
+    b2nd_exec_jobs jobs = {sizeof(jobs), workers ? workers : 1, worker_scratch};
+    int rc = b2nd_exec_execute_arrays_ex(
+        schedule, (const b2nd_array_t *const *)inputs, views ? native_views : NULL, ninputs,
+        (me_mut_buffer){output, output_bytes}, raise_mask, decode_budget, gather_budget,
+        (workers > 1 || has_worker_scratch) ? &jobs : NULL, &native, error);
     b2_exec_fill_report(&report->execution, &native.execution);
     report->decode_bytes = native.decode_bytes;
     report->storage_metadata_bytes = native.storage_metadata_bytes;
@@ -275,12 +294,15 @@ static int b2_exec_execute_alias(const void *schedule, const b2_exec_view *input
     return rc;
 }
 #else
-static int b2_exec_execute_arrays(const void *schedule, const void *const *inputs, size_t ninputs,
+static int b2_exec_execute_arrays(const void *schedule, const void *const *inputs,
+                                  const b2_exec_view *views, size_t ninputs,
                                   void *output, size_t output_bytes, unsigned raise_mask,
                                   size_t decode_budget, size_t gather_budget,
+                                  size_t workers, int has_worker_scratch, size_t worker_scratch,
                                   b2_exec_storage_report *report, me_error *error) {
-    (void)schedule; (void)inputs; (void)ninputs; (void)output; (void)output_bytes;
-    (void)raise_mask; (void)decode_budget; (void)gather_budget; (void)error;
+    (void)schedule; (void)inputs; (void)views; (void)ninputs; (void)output; (void)output_bytes;
+    (void)raise_mask; (void)decode_budget; (void)gather_budget; (void)workers;
+    (void)has_worker_scratch; (void)worker_scratch; (void)error;
     memset(report, 0, sizeof(*report));
     return ME_ERR_UNSUPPORTED;
 }

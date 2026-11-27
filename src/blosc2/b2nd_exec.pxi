@@ -64,8 +64,9 @@ cdef extern from "b2nd_exec_bridge.h":
     int b2_exec_execute_alias(const void *, const b2_exec_view *, size_t, const b2_exec_output_view *,
                               size_t, unsigned, size_t, size_t, int, size_t, b2_exec_report *,
                               me_error *) nogil
-    int b2_exec_execute_arrays(const void *, const void *const *, size_t, void *, size_t,
-                              unsigned, size_t, size_t, b2_exec_storage_report *, me_error *) nogil
+    int b2_exec_execute_arrays(const void *, const void *const *, const b2_exec_view *, size_t,
+                               void *, size_t, unsigned, size_t, size_t, size_t, int, size_t,
+                               b2_exec_storage_report *, me_error *) nogil
 
 
 def _b2nd_exec_available():
@@ -387,24 +388,48 @@ cdef class _TypedExecSchedule:
                 "broadcast_gather_bytes": self._info.broadcast_gather_bytes,
                  "schedule_metadata_bytes": self._info.schedule_metadata_bytes}
 
-    def execute_arrays(self, inputs, unsigned raise_mask=0, *, out=None,
-                       size_t max_decode_bytes=67108864, size_t max_gather_bytes=67108864):
-        """Serial native compressed binding; never materializes an operand."""
+    def execute_arrays(self, inputs, unsigned raise_mask=0, *, out=None, size_t workers=1,
+                       max_worker_scratch=None, size_t max_decode_bytes=67108864,
+                       size_t max_gather_bytes=67108864):
+        """Native compressed/mixed binding; never materializes a compressed operand."""
         cdef const void *arrays[128]
+        cdef b2_exec_view views[128]
         cdef b2_exec_storage_report report
         cdef me_error error
         cdef b2_exec_output_view output_view
-        cdef np.ndarray output
+        cdef np.ndarray output, np_value
         cdef int i, rc
         cdef size_t count = len(inputs)
         cdef size_t output_bytes
+        cdef size_t budget = 0
+        cdef int has_budget = 0, has_views = 0
         if self._schedule == NULL or count != self._info.ninputs or count > 128:
             raise ValueError("Invalid typed storage bindings")
-        values = tuple(inputs)  # Keep every native array owner alive while nogil.
+        if max_worker_scratch is None:
+            if workers > 1:
+                has_budget = 1
+                budget = 65536
+        else:
+            if type(max_worker_scratch) is not int or max_worker_scratch < 0:
+                raise ValueError("max_worker_scratch must be a non-negative integer")
+            has_budget = 1
+            budget = <size_t>max_worker_scratch
+        memset(arrays, 0, sizeof(arrays))
+        memset(views, 0, sizeof(views))
+        values = tuple(inputs)  # Keep every native/NumPy owner alive while nogil.
+        owners = []
         for i, value in enumerate(values):
-            if not isinstance(value, NDArray):
-                raise TypeError("Typed storage execution requires native Blosc2 arrays")
-            arrays[i] = <const void *>(<NDArray>value).array
+            if isinstance(value, NDArray):
+                arrays[i] = <const void *>(<NDArray>value).array
+            elif type(value) is np.ndarray:
+                exp_dtype, exp_shape = self._metadata[i]
+                np_value = value
+                if np_value.dtype.newbyteorder("=") != exp_dtype or value.shape != exp_shape:
+                    raise ValueError("Typed input dtype/shape mismatch")
+                owners.append(typed_view_binding(np_value, &views[i]))
+                has_views = 1
+            else:
+                raise TypeError("Typed storage execution requires native Blosc2 or NumPy arrays")
         shape = tuple(self._info.output_shape[i] for i in range(self._info.output_ndim))
         dtype = _numpy_dtype_from_me_dtype(<me_dtype>self._info.dtype)
         if out is None:
@@ -421,8 +446,9 @@ cdef class _TypedExecSchedule:
         memset(&error, 0, sizeof(error))
         with nogil:
             rc = b2_exec_execute_arrays(
-                self._schedule, arrays, count, <char *>output_view.base + output_view.offset,
-                output_bytes, raise_mask, max_decode_bytes, max_gather_bytes, &report, &error)
+                self._schedule, arrays, views if has_views else NULL, count,
+                <char *>output_view.base + output_view.offset, output_bytes, raise_mask,
+                max_decode_bytes, max_gather_bytes, workers, has_budget, budget, &report, &error)
         if rc:
             raise _typed_exec_error(
                 rc, (<bytes>error.message).decode("utf-8", "replace"),
