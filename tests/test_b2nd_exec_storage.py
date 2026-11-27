@@ -120,14 +120,14 @@ def test_storage_unsupported_bindings_do_not_replay(monkeypatch):
         pytest.fail("unsupported native storage binding replayed the adapter")
 
     monkeypatch.setattr("blosc2.native_graph.evaluate_graph_sources", forbidden)
-    inputs = {"x": blosc2.asarray(np.arange(17, dtype="float64"), contiguous=True)}
     graph = NativeGraph.from_expression("min(x)", {"x": "float64"}, jit=False, _executor="c-blosc2")
-    with pytest.raises(NotImplementedError, match="storage binding"):
-        graph.evaluate_sources(inputs)
     non_native_b2 = blosc2.asarray(np.arange(17, dtype=">f8"), chunks=(9,), blocks=(4,), contiguous=False)
     f64_sched = graph.specialize({"x": ("float64", (17,))}, 8)
     with pytest.raises(NotImplementedError, match="storage binding"):
         f64_sched.execute_arrays({"x": non_native_b2})
+    x_np = np.arange(17, dtype="float64")
+    c_in = blosc2.asarray(x_np, chunks=(9,), blocks=(4,), contiguous=True)
+    np.testing.assert_array_equal(graph.evaluate_sources({"x": c_in}), np.min(x_np))
 
 
 @pytest.mark.parametrize(
@@ -266,9 +266,24 @@ def test_storage_compressed_sink_mixed_and_rejections(monkeypatch):
     with pytest.raises(NotImplementedError, match="Aliased"):
         graph.evaluate_sources({"x": out_b2, "y": y_np}, tile_items=8, out=out_b2)
 
+    dict_out = blosc2.uninit(
+        (5, 7),
+        dtype="float32",
+        chunks=(3, 4),
+        blocks=(2, 3),
+        contiguous=False,
+        cparams={"use_dict": True, "codec": blosc2.Codec.LZ4},
+    )
+    with pytest.raises(NotImplementedError, match="compression parameters"):
+        graph.evaluate_sources({"x": x_b2, "y": y_np}, tile_items=8, out=dict_out)
+
     contig_out = blosc2.uninit((5, 7), dtype="float32", chunks=(3, 4), blocks=(2, 3), contiguous=True)
-    with pytest.raises(NotImplementedError, match="destination"):
-        graph.evaluate_sources({"x": x_b2, "y": y_np}, tile_items=8, out=contig_out)
+    res_contig, rep_contig = graph.evaluate_sources(
+        {"x": x_b2, "y": y_np}, tile_items=8, out=contig_out, return_report=True
+    )
+    assert res_contig is contig_out
+    assert rep_contig["route"] == "c-blosc2-typed-storage-sink"
+    np.testing.assert_array_equal(contig_out[...], x_np + y_np)
 
     min_graph = NativeGraph.from_expression("min(x)", {"x": "float32"}, jit=False, _executor="c-blosc2")
     min_out = blosc2.uninit((5, 7), dtype="float32", chunks=(3, 4), blocks=(2, 3), contiguous=False)
@@ -354,3 +369,81 @@ def test_storage_broadcast_and_partial_axis_reductions(monkeypatch):
         )
         np.testing.assert_array_equal(min_out, (x_np + y_np).min(axis=0))
         assert min_rep["tasks"] == 3
+
+
+def test_storage_frames_and_moments_argextrema(tmp_path, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("frame/moments/argextrema storage execution reached Python reader/writer or adapter")
+
+    x_np = ((np.arange(35, dtype=np.float64) * 7) % 13 - 4.0).reshape(5, 7)
+    x_np.flat[3] = -0.0
+    x_np.flat[9] = 0.0
+    x_np.flat[17] = -4.0
+    y_np = ((np.arange(35, dtype=np.float64) % 5) * 0.5).reshape(5, 7)
+
+    x_disk = blosc2.asarray(
+        x_np, chunks=(3, 4), blocks=(2, 3), contiguous=True, urlpath=str(tmp_path / "x.b2nd"), mode="w"
+    )
+    y_cf = blosc2.asarray(y_np, chunks=(4, 3), blocks=(3, 2), contiguous=True)
+    out_disk = blosc2.uninit(
+        (5, 7),
+        dtype="float64",
+        chunks=(2, 5),
+        blocks=(2, 2),
+        contiguous=True,
+        urlpath=str(tmp_path / "out.b2nd"),
+        mode="w",
+    )
+
+    add_graph = NativeGraph.from_expression(
+        "x + y", {"x": "float64", "y": "float64"}, jit=False, _executor="c-blosc2"
+    )
+    with monkeypatch.context() as m:
+        m.setattr(blosc2.NDArray, "__getitem__", forbidden)
+        m.setattr(blosc2.NDArray, "__setitem__", forbidden)
+        m.setattr("blosc2.native_graph.evaluate_graph_sources", forbidden)
+        res_disk, rep_disk = add_graph.evaluate_sources(
+            {"x": x_disk, "y": y_cf}, tile_items=8, workers=3, out=out_disk, return_report=True
+        )
+        res_arr = add_graph.evaluate_sources({"x": x_disk, "y": y_cf}, tile_items=8, workers=3)
+    assert res_disk is out_disk
+    assert rep_disk["route"] == "c-blosc2-typed-storage-sink"
+    np.testing.assert_array_equal(out_disk[...], x_np + y_np)
+    np.testing.assert_array_equal(res_arr, x_np + y_np)
+
+    for op in ("argmin", "argmax"):
+        g_all = NativeGraph.from_expression(f"{op}(x)", {"x": "float64"}, jit=False, _executor="c-blosc2")
+        g_ax = NativeGraph.from_expression(
+            f"{op}(x, axis=0, keepdims=True)", {"x": "float64"}, jit=False, _executor="c-blosc2"
+        )
+        with monkeypatch.context() as m:
+            m.setattr(blosc2.NDArray, "__getitem__", forbidden)
+            m.setattr("blosc2.native_graph.evaluate_graph_sources", forbidden)
+            act_all, rep_all = g_all.evaluate_sources(
+                {"x": x_disk}, tile_items=6, workers=3, return_report=True
+            )
+            act_ax = g_ax.evaluate_sources({"x": y_cf}, tile_items=2, workers=3)
+        assert act_all == getattr(np, op)(x_np)
+        assert rep_all["tasks"] == 3
+        np.testing.assert_array_equal(act_ax, getattr(np, op)(y_np, axis=0, keepdims=True))
+
+    for op in ("var", "std"):
+        for ddof in (0, 1):
+            g_all = NativeGraph.from_expression(
+                f"{op}(x, ddof={ddof})", {"x": "float64"}, jit=False, _executor="c-blosc2"
+            )
+            g_ax = NativeGraph.from_expression(
+                f"{op}(x, axis=1, ddof={ddof}, keepdims=True)",
+                {"x": "float64"},
+                jit=False,
+                _executor="c-blosc2",
+            )
+            with monkeypatch.context() as m:
+                m.setattr(blosc2.NDArray, "__getitem__", forbidden)
+                m.setattr("blosc2.native_graph.evaluate_graph_sources", forbidden)
+                act_all = g_all.evaluate_sources({"x": x_disk}, tile_items=6, workers=3)
+                act_ax = g_ax.evaluate_sources({"x": y_cf}, tile_items=3, workers=3)
+            np.testing.assert_allclose(act_all, getattr(np, op)(x_np, ddof=ddof), rtol=1e-13)
+            np.testing.assert_allclose(
+                act_ax, getattr(np, op)(y_np, axis=1, ddof=ddof, keepdims=True), rtol=1e-13
+            )

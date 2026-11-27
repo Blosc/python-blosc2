@@ -41,8 +41,12 @@ _OPS = {
     "max": 9,
     "any": 10,
     "all": 11,
+    "argmin": 12,
+    "argmax": 13,
+    "var": 14,
+    "std": 15,
 }
-_REDUCERS = {"min", "sum", "prod", "max", "any", "all"}
+_REDUCERS = {"min", "sum", "prod", "max", "any", "all", "argmin", "argmax", "var", "std"}
 
 
 class TypedGraphNotAdmitted(Exception):
@@ -70,7 +74,7 @@ def _encode_scalar_descriptor(desc):
 
 def _lower_reduction_options(op, node, is_root):
     if op not in _REDUCERS:
-        return None, False, None, b"", False
+        return None, False, None, b"", False, 0.0
     if not is_root or node["dtype"] != "auto" or node["where"] is not None:
         raise TypedGraphNotAdmitted
     axes = None
@@ -78,21 +82,67 @@ def _lower_reduction_options(op, node, is_root):
         if len(node["axes"]) > 16 or any(type(a) is not int or not -16 <= a < 16 for a in node["axes"]):
             raise TypedGraphNotAdmitted
         axes = tuple(node["axes"])
+    ddof = float(node.get("ddof", 0.0))
+    if not math.isfinite(ddof) or ddof < 0.0:
+        raise TypedGraphNotAdmitted
+    if op not in {"var", "std"} and ddof != 0.0:
+        raise TypedGraphNotAdmitted
     init_dtype, init_scalar, init_weak = None, b"", False
     if node["initial"] is not None:
-        if op in {"any", "all"}:
+        if op in {"any", "all", "argmin", "argmax", "var", "std"}:
             raise TypedGraphNotAdmitted
         init_dtype, init_scalar, init_weak = _encode_scalar_descriptor(node["initial"])
-    return axes, bool(node["keepdims"]), init_dtype, init_scalar, init_weak
+    return axes, bool(node["keepdims"]), init_dtype, init_scalar, init_weak, ddof
+
+
+def _make_typed_graph_adapter_cls():
+    from .native_graph import GraphAdapter
+
+    class _TypedGraphAdapter(GraphAdapter):
+        def visit(self, node):
+            if isinstance(node, ast.Call):
+                from .utils import MINIEXPR_FUNCTION_ALIASES
+
+                method = False
+                if isinstance(node.func, ast.Name):
+                    name = node.func.id
+                elif isinstance(node.func, ast.Attribute):
+                    name = node.func.attr
+                    method = not (
+                        isinstance(node.func.value, ast.Name) and node.func.value.id in {"np", "numpy"}
+                    )
+                    if method and name not in _REDUCERS:
+                        return super().visit(node)
+                else:
+                    return super().visit(node)
+                name = MINIEXPR_FUNCTION_ALIASES.get(name, name)
+                if name in {"argmin", "argmax", "var", "std"}:
+                    if (method and node.args) or (not method and len(node.args) != 1):
+                        raise ValueError("Native reductions require one expression and keyword options")
+                    value = self.visit(node.func.value if method else node.args[0])
+                    options = {}
+                    for keyword in node.keywords:
+                        if keyword.arg in options:
+                            raise ValueError("Duplicate native reduction keyword")
+                        if keyword.arg == "where":
+                            raise ValueError("Typed executor does not admit reduction where")
+                        options[keyword.arg] = ast.literal_eval(keyword.value)
+                    ddof = options.pop("ddof", 0.0)
+                    if name not in {"var", "std"} and ddof != 0.0:
+                        raise ValueError("Only var/std accept ddof")
+                    idx = self.reduction(name, value, options)
+                    self.nodes[idx]["ddof"] = float(ddof)
+                    return idx
+            return super().visit(node)
+
+    return _TypedGraphAdapter
 
 
 def lower_typed_graph(expression, operands, *, input_dtypes=None, syntax=None):
-    from .native_graph import GraphAdapter
-
     tree = expression_syntax(expression)[0].body if syntax is None else syntax
     if sum(1 for _ in ast.walk(tree)) > 1024:
         raise TypedGraphNotAdmitted
-    adapter = GraphAdapter(operands, input_dtypes=input_dtypes)
+    adapter = _make_typed_graph_adapter_cls()(operands, input_dtypes=input_dtypes)
     try:
         root = adapter.visit(tree)
     except (ValueError, KeyError, TypeError):
@@ -106,7 +156,7 @@ def lower_typed_graph(expression, operands, *, input_dtypes=None, syntax=None):
         op = node["op"]
         if op not in _OPS:
             raise TypedGraphNotAdmitted
-        axes, keepdims, init_dtype, init_scalar, init_weak = _lower_reduction_options(
+        axes, keepdims, init_dtype, init_scalar, init_weak, ddof = _lower_reduction_options(
             op, node, index == root
         )
         dtype = node.get("dtype") if op in {"input", "constant"} else None
@@ -133,6 +183,7 @@ def lower_typed_graph(expression, operands, *, input_dtypes=None, syntax=None):
                 init_dtype,
                 init_scalar,
                 init_weak,
+                ddof,
             )
         )
     if len(nodes) > 1024 or sum(n[0] == 1 for n in nodes) > 128:
@@ -157,6 +208,7 @@ def prepare_typed_plan(nodes, ninputs, root, execution=0, jit_compiler=0, math_b
         init_dtype,
         init_scalar,
         init_weak,
+        ddof,
     ) in nodes:
         node = {"op": op, "slot": slot, "args": args, "scalar": scalar, "weak": weak}
         if dtype is not None:
@@ -169,6 +221,8 @@ def prepare_typed_plan(nodes, ninputs, root, execution=0, jit_compiler=0, math_b
             node["initial_dtype"] = init_dtype
             node["initial_scalar"] = init_scalar
             node["initial_weak"] = init_weak
+        if ddof != 0.0:
+            node["ddof"] = ddof
         descriptor.append(node)
     return blosc2_ext._TypedExecPlan(
         descriptor, ninputs, root, execution=execution, jit_compiler=jit_compiler, math_backend=math_backend

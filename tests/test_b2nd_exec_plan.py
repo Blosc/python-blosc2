@@ -905,3 +905,51 @@ def test_typed_partitionable_metadata():
     assert not NativeGraph.from_expression(
         "prod(x)", {"x": "int64"}, jit=False, _executor="c-blosc2"
     ).partitionable
+    assert NativeGraph.from_expression(
+        "argmin(x)", {"x": "float64"}, jit=False, _executor="c-blosc2"
+    ).partitionable
+    assert NativeGraph.from_expression(
+        "std(x, ddof=1)", {"x": "float64"}, jit=False, _executor="c-blosc2"
+    ).partitionable
+
+
+def test_typed_resident_argmin_argmax_var_std():
+    x = np.array([[3.0, -0.0, 3.0, 1.0], [np.nan, 0.0, -2.0, -2.0]], dtype="float32")
+    for op in ("argmin", "argmax"):
+        g = NativeGraph.from_expression(f"{op}(x)", {"x": "float32"}, jit=False, _executor="c-blosc2")
+        assert g.reduction_info()["op"] == op
+        sched = g.specialize({"x": ("float32", x.shape)}, tile_items=2)
+        actual, rep = sched.execute({"x": x}, workers=3)
+        assert actual == getattr(np, op)(x)
+        assert rep["tasks"] == 3
+        gx = NativeGraph.from_expression(
+            f"{op}(x, axis=1)", {"x": "float32"}, jit=False, _executor="c-blosc2"
+        )
+        np.testing.assert_array_equal(
+            gx.specialize({"x": ("float32", x.shape)}, 2).execute({"x": x})[0], getattr(np, op)(x, axis=1)
+        )
+
+    y = np.arange(-12, 12, dtype="int32").reshape(4, 6)
+    for op in ("var", "std"):
+        for ddof in (0, 1):
+            g = NativeGraph.from_expression(
+                f"{op}(x, ddof={ddof})", {"x": "int32"}, jit=False, _executor="c-blosc2"
+            )
+            assert g.reduction_info()["op"] == op
+            actual, rep = g.specialize({"x": ("int32", y.shape)}, tile_items=5).execute({"x": y}, workers=3)
+            np.testing.assert_allclose(actual, getattr(np, op)(y, ddof=ddof), rtol=1e-13)
+            assert actual.dtype == np.float64
+            assert rep["tasks"] == 3
+            gx = NativeGraph.from_expression(
+                f"{op}(x, axis=0, ddof={ddof}, keepdims=True)",
+                {"x": "float32"},
+                jit=False,
+                _executor="c-blosc2",
+            )
+            xf = x.astype("float32")
+            xf[1, 0] = 5.0
+            res_ax = gx.specialize({"x": ("float32", xf.shape)}, 1).execute({"x": xf}, workers=2)[0]
+            np.testing.assert_allclose(
+                res_ax, getattr(np, op)(xf, axis=0, ddof=ddof, keepdims=True), rtol=1e-6
+            )
+            assert res_ax.dtype == np.float32

@@ -13,6 +13,7 @@ cdef extern from "b2nd_exec_bridge.h":
         size_t naxes, initial_size
         int axes[16]
         unsigned char initial_scalar[16]
+        double ddof
     ctypedef struct b2_exec_meta:
         int dtype, ndim
         size_t itemsize
@@ -262,6 +263,7 @@ cdef class _TypedExecPlan:
                 "initial_dtype",
                 "initial_scalar",
                 "initial_weak",
+                "ddof",
             }:
                 raise ValueError("Unsupported typed node field")
             native[i].op = node["op"]
@@ -305,6 +307,8 @@ cdef class _TypedExecPlan:
                 native[i].initial_size = len(initial_scalar)
                 memcpy(native[i].initial_scalar, <const char *>initial_scalar, len(initial_scalar))
                 native[i].initial_weak = bool(node.get("initial_weak", False))
+            if "ddof" in node and node["ddof"] is not None:
+                native[i].ddof = float(node["ddof"])
         with nogil:
             rc = b2_exec_prepare(native, count, ninputs, root, execution,
                                  jit_compiler, math_backend, &self._plan, &error)

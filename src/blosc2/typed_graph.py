@@ -112,7 +112,18 @@ class TypedGraphHandle:
         self._dtypes = dtypes
         self._expression = expression
         self._reducer = (
-            {6: "min", 7: "sum", 8: "prod", 9: "max", 10: "any", 11: "all"}.get(nodes[root][0])
+            {
+                6: "min",
+                7: "sum",
+                8: "prod",
+                9: "max",
+                10: "any",
+                11: "all",
+                12: "argmin",
+                13: "argmax",
+                14: "var",
+                15: "std",
+            }.get(nodes[root][0])
             if reduction
             else None
         )

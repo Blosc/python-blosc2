@@ -14,6 +14,7 @@ typedef struct {
     size_t naxes, initial_size;
     int axes[16];
     unsigned char initial_scalar[16];
+    double ddof;
 } b2_exec_node;
 
 typedef struct {
@@ -108,6 +109,7 @@ static int b2_exec_prepare(const b2_exec_node *nodes, size_t count, size_t ninpu
         native[i].initial_category = nodes[i].initial_weak ? ME_CAPTURE_WEAK : ME_CAPTURE_TYPED;
         native[i].initial_size = nodes[i].initial_size;
         memcpy(native[i].initial_scalar, nodes[i].initial_scalar, sizeof(native[i].initial_scalar));
+        native[i].ddof = nodes[i].ddof;
     }
     b2nd_exec_descriptor descriptor = {sizeof(descriptor), native, count, ninputs, root};
     b2nd_exec_options options = B2ND_EXEC_OPTIONS_INITIALIZER;
