@@ -195,6 +195,8 @@ or speed. For the sample array:
 | `--codec zstd --clevel 9`  | 9.95x             | 2.30 MB  |
 | `--codec zlib`             | 7.28x             | 3.14 MB  |
 | `--codec lz4`              | 3.20x             | 7.15 MB  |
+| `--codec blosclz`          | 3.12x             | 7.33 MB  |
+| `--codec lz4hc`            | 5.62x             | 4.07 MB  |
 | `--shuffle bitshuffle`     | 5.20x             | 4.40 MB  |
 | `--shuffle noshuffle`      | 12.18x            | 1.88 MB  |
 | `--codec gzip`             | 11.29x            | 2.03 MB  |
@@ -272,6 +274,14 @@ zarr-to-b2nd sample.zarr roundtrip.b2nd
  ...
 ```
 
+The new file is larger than `sample.b2nd` (3.25 MB instead of 2.88 MB), even
+though the data and the compression settings (zstd, level 5, shuffle) are the
+same. Plain Zarr has no block level, so the original `(2, 200, 300)` block
+shape was lost when `sample.zarr` was written. On the way back, Blosc2 picked
+smaller `(1, 100, 300)` blocks, which are faster to read but compress less
+well, because each block is compressed on its own. The tip below shows how to
+keep the original blocks.
+
 The output path defaults to the input name with a `.b2nd` suffix
 (`data.zarr` and `data.zarr.zip` both become `data.b2nd`). Zarr attributes
 become `vlmeta` entries; attributes that `vlmeta` cannot store, such as
@@ -291,7 +301,9 @@ integers larger than 64 bits, are skipped (`-v` reports them).
 To round-trip a `.b2nd` file through Zarr without losing its block shape,
 export it with `b2nd-to-zarr --sharded`. Converting `sharded.zarr` from
 Step 4 back gives chunks `(10, 200, 300)` and blocks `(2, 200, 300)`, the
-same as `sample.b2nd`.
+same as `sample.b2nd`, and the file is 2.88 MB again. If you only have a
+plain Zarr array, `zarr-to-b2nd sample.zarr blocks.b2nd --blocks 2,200,300`
+gives the same result.
 ```
 
 ### Compression
