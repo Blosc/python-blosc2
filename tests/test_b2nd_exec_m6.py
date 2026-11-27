@@ -165,8 +165,12 @@ def test_generic_source_nd_broadcast_reduction_and_preflight_failures(monkeypatc
     with pytest.raises(TypeError, match="NumPy or Blosc2"):
         plan.evaluate_sources({"x": masked_src, "m": blosc2.asarray(np.ones(8, dtype=bool))})
     assert masked_src.calls == 0
-    with pytest.raises(NotImplementedError):
-        NativeGraph.from_expression("sum(x, where=m)", {"x": "float64", "m": "bool"}, _executor="c-blosc2")
+    typed_masked = NativeGraph.from_expression(
+        "sum(x, where=m)", {"x": "float64", "m": "bool"}, jit=False, _executor="c-blosc2"
+    )
+    with pytest.raises(NotImplementedError, match="masked"):
+        typed_masked.evaluate_sources({"x": masked_src, "m": np.ones(8, dtype=bool)})
+    assert masked_src.calls == 0
 
 
 @pytest.mark.parametrize("scalar", [False, True])

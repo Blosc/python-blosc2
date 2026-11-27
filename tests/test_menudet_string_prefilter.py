@@ -69,11 +69,11 @@ def test_mismatched_partitions_and_output_grid_retain_original_groups():
     lazy = kernel.lazy({"text": source}, partitions=(8,))
     result = lazy.compute(chunks=source.chunks, blocks=source.blocks)
     np.testing.assert_array_equal(result[:], grouped_reference(values, 8))
-    assert not hasattr(lazy, "_source_execution_report")
+    assert getattr(lazy, "_source_execution_report", {}).get("route") != "menudet-prefilter"
     lazy = kernel.lazy({"text": source}, partitions=source.blocks)
     result = lazy.compute(chunks=(8,), blocks=(2,))
     np.testing.assert_array_equal(result[:], grouped_reference(values, 4))
-    assert not hasattr(lazy, "_source_execution_report")
+    assert getattr(lazy, "_source_execution_report", {}).get("route") != "menudet-prefilter"
 
 
 def test_contextual_indices_and_rejection_are_authoritative(monkeypatch):
@@ -93,7 +93,7 @@ def test_contextual_indices_and_rejection_are_authoritative(monkeypatch):
     lazy = kernel.lazy({"text": source}, partitions=source.blocks)
     result = lazy.compute()
     np.testing.assert_array_equal(result[:], grouped_reference(source[:], 4))
-    assert not hasattr(lazy, "_source_execution_report")
+    assert getattr(lazy, "_source_execution_report", {}).get("route") != "menudet-prefilter"
 
 
 def test_native_failure_is_not_replayed(monkeypatch):
@@ -130,7 +130,7 @@ def test_older_extension_gate_and_concurrent_calls(monkeypatch):
     monkeypatch.setattr(blosc2.blosc2_ext, "menudet_prefilter_inputs_eligible", lambda *a, **k: False)
     lazy = kernel.lazy({"text": source}, partitions=source.blocks)
     np.testing.assert_array_equal(lazy.compute()[:], grouped_reference(values, 4))
-    assert not hasattr(lazy, "_source_execution_report")
+    assert getattr(lazy, "_source_execution_report", {}).get("route") != "menudet-prefilter"
 
 
 def test_wide_unicode_and_byte_string_buffers():
@@ -165,8 +165,8 @@ def test_wide_unicode_and_byte_string_buffers():
         np.testing.assert_array_equal(result[:], expected)
         if author is wide:
             # C-Blosc2 represents records wider than 255 bytes with typesize=1;
-            # its callback output stride cannot represent these string slots.
-            assert not hasattr(lazy, "_source_execution_report")
+            # its prefilter callback output stride cannot represent these string slots.
+            assert getattr(lazy, "_source_execution_report", {}).get("route") != "menudet-prefilter"
         else:
             # Wide *inputs* are byte-addressed safely; only result items need a
             # complete callback stride no larger than the C-Blosc2 typesize cap.

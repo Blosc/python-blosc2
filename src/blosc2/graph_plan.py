@@ -19,7 +19,14 @@ class NativeGraph:
     Compressed storage is adapted through invocation-local native graph readers.
     """
 
-    def __init__(self, graph: str | bytes | dict, *, jit: bool | None = None, require_jit: bool = False):
+    def __init__(
+        self,
+        graph: str | bytes | dict,
+        *,
+        jit: bool | None = None,
+        require_jit: bool = False,
+        _executor="adapter",
+    ):
         jit = jit_config.execution_options()["jit"] if jit is None else jit
         if isinstance(graph, dict):
             graph = json.dumps(graph, separators=(",", ":"))
@@ -35,12 +42,19 @@ class NativeGraph:
             else 2
         )
         self._capture_execution_policy()
-        self._handle = NativeGraphHandle(graph, mode, require_jit)
+        if _executor == "c-blosc2":
+            from .typed_graph import TypedGraphHandle
+
+            self._handle = TypedGraphHandle.from_json(graph, jit=jit, require_jit=require_jit)
+        elif _executor == "adapter":
+            self._handle = NativeGraphHandle(graph, mode, require_jit)
+        else:
+            raise ValueError("Unknown graph executor")
         self._info = self._handle.info()
 
     @classmethod
-    def from_json(cls, graph, *, jit=None, require_jit=False):
-        return cls(graph, jit=jit, require_jit=require_jit)
+    def from_json(cls, graph, *, jit=None, require_jit=False, _executor="adapter"):
+        return cls(graph, jit=jit, require_jit=require_jit, _executor=_executor)
 
     @classmethod
     def from_expression(cls, expression, input_dtypes, *, jit=None, require_jit=False, _executor="adapter"):

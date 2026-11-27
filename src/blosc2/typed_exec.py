@@ -47,6 +47,34 @@ _OPS = {
     "std": 15,
 }
 _REDUCERS = {"min", "sum", "prod", "max", "any", "all", "argmin", "argmax", "var", "std"}
+_RESIDENT_OPS = frozenset(_OPS)
+_OPS.update(
+    {
+        "div": 16,
+        "cast": 17,
+        "function": 18,
+        "lt": 19,
+        "gt": 20,
+        "eq": 21,
+        "ne": 22,
+        "le": 23,
+        "ge": 24,
+        "bitand": 25,
+        "bitor": 26,
+        "bitxor": 27,
+        "floordiv": 28,
+        "mod": 29,
+        "pow": 30,
+        "lshift": 31,
+        "rshift": 32,
+        "invert": 33,
+        "not": 34,
+        "and": 35,
+        "or": 36,
+        "select": 37,
+        "pos": 38,
+    }
+)
 
 
 class TypedGraphNotAdmitted(Exception):
@@ -72,10 +100,14 @@ def _encode_scalar_descriptor(desc):
     return dtype, scalar, desc.get("category") == "weak"
 
 
-def _lower_reduction_options(op, node, is_root):
+def _lower_reduction_options(op, node, is_root, allow_stages=False):
     if op not in _REDUCERS:
         return None, False, None, b"", False, 0.0
-    if not is_root or node["dtype"] != "auto" or node["where"] is not None:
+    if (
+        (not is_root and not allow_stages)
+        or node["dtype"] != "auto"
+        or (node["where"] is not None and not allow_stages)
+    ):
         raise TypedGraphNotAdmitted
     axes = None
     if node["axes"] is not None:
@@ -138,7 +170,7 @@ def _make_typed_graph_adapter_cls():
     return _TypedGraphAdapter
 
 
-def lower_typed_graph(expression, operands, *, input_dtypes=None, syntax=None):
+def lower_typed_graph(expression, operands, *, input_dtypes=None, syntax=None, allow_stages=False):
     tree = expression_syntax(expression)[0].body if syntax is None else syntax
     if sum(1 for _ in ast.walk(tree)) > 1024:
         raise TypedGraphNotAdmitted
@@ -154,12 +186,12 @@ def lower_typed_graph(expression, operands, *, input_dtypes=None, syntax=None):
     nodes, depths = [], []
     for index, node in enumerate(adapter.nodes):
         op = node["op"]
-        if op not in _OPS:
+        if op not in _OPS or (not allow_stages and op not in _RESIDENT_OPS):
             raise TypedGraphNotAdmitted
         axes, keepdims, init_dtype, init_scalar, init_weak, ddof = _lower_reduction_options(
-            op, node, index == root
+            op, node, index == root, allow_stages
         )
-        dtype = node.get("dtype") if op in {"input", "constant"} else None
+        dtype = node.get("dtype") if op in {"input", "constant", "cast"} else None
         if dtype is not None and dtype not in TYPED_RESIDENT_DTYPES:
             raise TypedGraphNotAdmitted
         scalar = b""
@@ -186,30 +218,39 @@ def lower_typed_graph(expression, operands, *, input_dtypes=None, syntax=None):
                 ddof,
             )
         )
+        if op == "function":
+            function = node["name"]
+            if function == "where":
+                nodes[-1] = (37, *nodes[-1][1:])
+            else:
+                nodes[-1] = (*nodes[-1], function)
+        if op in _REDUCERS and node["where"] is not None:
+            nodes[-1] = (*nodes[-1], "", node["where"])
     if len(nodes) > 1024 or sum(n[0] == 1 for n in nodes) > 128:
         raise TypedGraphNotAdmitted
     return tuple(nodes), names, root, adapter.nodes[root]["op"] in _REDUCERS
 
 
 @lru_cache(maxsize=32)
-def prepare_typed_plan(nodes, ninputs, root, execution=0, jit_compiler=0, math_backend=0):
+def prepare_typed_plan(nodes, ninputs, root, execution=0, jit_compiler=0, math_backend=0, staged=False):
     # Cache only descriptor semantics/exact captures. Neither arrays nor results
     # reach this key or the native plan.
     descriptor = []
-    for (
-        op,
-        dtype,
-        slot,
-        args,
-        scalar,
-        weak,
-        axes,
-        keepdims,
-        init_dtype,
-        init_scalar,
-        init_weak,
-        ddof,
-    ) in nodes:
+    for original in nodes:
+        (
+            op,
+            dtype,
+            slot,
+            args,
+            scalar,
+            weak,
+            axes,
+            keepdims,
+            init_dtype,
+            init_scalar,
+            init_weak,
+            ddof,
+        ) = original[:12]
         node = {"op": op, "slot": slot, "args": args, "scalar": scalar, "weak": weak}
         if dtype is not None:
             node["dtype"] = dtype
@@ -223,10 +264,90 @@ def prepare_typed_plan(nodes, ninputs, root, execution=0, jit_compiler=0, math_b
             node["initial_weak"] = init_weak
         if ddof != 0.0:
             node["ddof"] = ddof
+        if len(original) > 12:
+            node["function"] = original[12]
+        if len(original) > 13:
+            node["where"] = original[13]
         descriptor.append(node)
     return blosc2_ext._TypedExecPlan(
-        descriptor, ninputs, root, execution=execution, jit_compiler=jit_compiler, math_backend=math_backend
+        descriptor,
+        ninputs,
+        root,
+        execution=execution,
+        jit_compiler=jit_compiler,
+        math_backend=math_backend,
+        staged=staged,
     )
+
+
+def _typed_input_record(node, overrides, dtypes):
+    name = node["name"]
+    if (
+        type(name) is not str
+        or not name.isascii()
+        or not name.isidentifier()
+        or len(name) > 63
+        or name in dtypes
+    ):
+        raise ValueError("Invalid graph input name")
+    declared = node["dtype"]
+    if declared == "auto" and overrides is None:
+        raise ValueError("External graph inputs require fixed dtypes")
+    expected = None if overrides is None else overrides[name]
+    dtype = np.dtype(expected if declared == "auto" else declared).newbyteorder("=")
+    if expected is not None and dtype != np.dtype(expected):
+        raise ValueError("Explicit graph input dtype mismatch")
+    if dtype.name not in TYPED_RESIDENT_DTYPES:
+        raise ValueError("Unsupported typed graph input dtype")
+    return name, dtype
+
+
+def typed_nodes_from_records(records, overrides=None):
+    """Lower validated JSON node records directly to the private typed bridge."""
+    descriptor, names, dtypes = [], [], {}
+    for index, original in enumerate(records):
+        node = dict(original)
+        op = node["op"]
+        if op not in _OPS:
+            raise ValueError("Unsupported typed graph operation")
+        args = node.get("args", [])
+        if (
+            type(args) is not list
+            or len(args) > 3
+            or any(type(a) is not int or not 0 <= a < index for a in args)
+        ):
+            raise ValueError("Invalid graph node arguments")
+        result = {"op": _OPS[op], "args": tuple(args)}
+        if op == "input":
+            name, dtype = _typed_input_record(node, overrides, dtypes)
+            result.update(dtype=dtype.name, slot=len(names))
+            names.append(name)
+            dtypes[name] = dtype
+        elif op == "constant":
+            dtype, scalar, weak = _encode_scalar_descriptor(node)
+            result.update(dtype=dtype, scalar=scalar, weak=weak)
+        elif op == "cast":
+            if node["dtype"] not in TYPED_RESIDENT_DTYPES:
+                raise ValueError("Unsupported typed graph cast")
+            result["dtype"] = node["dtype"]
+        elif op == "function":
+            result["function"] = node["name"]
+        elif op in _REDUCERS:
+            node = {"axes": None, "keepdims": False, "initial": None, "where": None, "dtype": "auto", **node}
+            axes, keepdims, dtype, scalar, weak, ddof = _lower_reduction_options(op, node, True, True)
+            if axes is not None:
+                result["axes"] = axes
+            result["keepdims"] = keepdims
+            if dtype is not None:
+                result.update(initial_dtype=dtype, initial_scalar=scalar, initial_weak=weak)
+            if node["where"] is not None:
+                where = node["where"]
+                if type(where) is not int or not 0 <= where < index:
+                    raise ValueError("Invalid reduction mask reference")
+                result["where"] = where
+            result["ddof"] = ddof
+        descriptor.append(result)
+    return descriptor, tuple(names), dtypes
 
 
 def _resident_broadcast_shape(operands, selection):

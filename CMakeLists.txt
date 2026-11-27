@@ -71,6 +71,7 @@ add_custom_command(
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_artifact_bridge.h"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/b2nd_kernel_pilot.h"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/b2nd_exec_bridge.h"
+          "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/b2nd_exec_stages_bridge.h"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/b2nd_exec.pxi"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_graph_bridge.h"
   VERBATIM)

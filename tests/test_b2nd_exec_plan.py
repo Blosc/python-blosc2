@@ -513,7 +513,7 @@ def test_named_typed_graph_has_no_adapter_prepare_or_borrow(monkeypatch):
 
 @pytest.mark.parametrize(
     "expression",
-    ["x.min()", "x ** 2", "x + 0x10", "x + 1_000", "sum(x, dtype=float64)", "x + 00.1", "x + 1.e3"],
+    ["x.min()", "x @ x", "x + 0x10", "x + 1_000", "sum(x, dtype=float64)", "x + 00.1", "x + 1.e3"],
 )
 def test_named_typed_graph_restricts_grammar_and_options(expression):
     with pytest.raises(NotImplementedError):

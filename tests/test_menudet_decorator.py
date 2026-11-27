@@ -303,6 +303,7 @@ def test_native_execution_error_not_replayed(native_graph_runtime, monkeypatch, 
         monkeypatch.setattr("blosc2.native_graph.execute_resident", failed)
     else:
         monkeypatch.delattr(lazy.kernel, "_resident_plan")
+        monkeypatch.setattr(lazy.kernel, "_cblosc2_handle", lambda: None)
         monkeypatch.setattr(blosc2.MenudetKernel, "evaluate_block", failed)
     with pytest.raises(blosc2.MenudetError, match="Invocation failed"):
         lazy[:]

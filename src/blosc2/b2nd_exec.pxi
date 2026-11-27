@@ -6,7 +6,7 @@ cdef extern from "b2nd_exec_bridge.h":
     int b2_exec_fp_end(b2_exec_fp_scope *, me_error *)
     ctypedef struct b2_exec_node:
         int op, dtype, slot, nargs, weak
-        int args[2]
+        int args[3]
         size_t itemsize, scalar_size
         unsigned char scalar[16]
         int has_axes, keepdims, has_initial, initial_dtype, initial_weak
@@ -14,6 +14,8 @@ cdef extern from "b2nd_exec_bridge.h":
         int axes[16]
         unsigned char initial_scalar[16]
         double ddof
+        char function[32]
+        int has_where, where
     ctypedef struct b2_exec_meta:
         int dtype, ndim
         size_t itemsize
@@ -24,7 +26,7 @@ cdef extern from "b2nd_exec_bridge.h":
         size_t plan_metadata_bytes, schedule_metadata_bytes
         size_t ndim, broadcast_gather_bytes
         int64_t shape[16]
-        int has_axes, keepdims, has_initial, pairwise_sum
+        int has_axes, keepdims, has_initial, pairwise_sum, has_where
         size_t naxes, output_ndim, reduction_groups, reduction_lanes
         int axes[16]
         int64_t output_shape[16]
@@ -122,6 +124,35 @@ cdef extern from "b2nd_exec_bridge.h":
 def _b2nd_exec_available():
     return bool(b2_exec_available())
 
+cdef extern from "b2nd_exec_bridge.h":
+    ctypedef struct b2_st_diag:
+        size_t stage
+        uint32_t node
+    ctypedef struct b2_st_info:
+        b2_exec_info info
+        size_t node, last_consumer, output_bytes
+    ctypedef struct b2_st_report:
+        b2_exec_callback_report stages[32]
+        size_t entered_stages, intermediate_bytes, live_intermediate_bytes
+        size_t failed_stage, failed_node
+        me_fp_status fp
+    int b2_st_prepare(const b2_exec_node *, size_t, size_t, uint32_t, int, int, int,
+                      void **, b2_st_diag *, me_error *) nogil
+    void b2_st_free(void *)
+    void b2_st_schedule_free(void *)
+    size_t b2_st_count(const void *)
+    int b2_st_describe(const void *, b2_exec_info *)
+    int b2_st_assemble(const void *const *, const int *, const size_t *, size_t, size_t,
+                       void **, b2_st_diag *, me_error *) nogil
+    int b2_st_child(const void *, size_t, void **, int *, size_t *, size_t *)
+    int b2_st_source(const char *, const char *, const me_signature *, int, int, int,
+                     void **, me_error *) nogil
+    int b2_st_specialize(const void *, const b2_exec_meta *, size_t, size_t, size_t, size_t,
+                         void **, b2_st_diag *, me_error *) nogil
+    int b2_st_stage(const void *, size_t, b2_st_info *)
+    int b2_st_execute(const void *, const b2_exec_source *, const b2_exec_view *, size_t,
+                      void *, size_t, unsigned, size_t, b2_st_report *, me_error *) nogil
+
 
 def _typed_exec_error(status, message, flags, supported, line, column):
     if status == -6:
@@ -148,6 +179,16 @@ def _typed_exec_error(status, message, flags, supported, line, column):
 cdef void raise_exec_error(int status, me_error *error) except *:
     cdef object message = (<bytes>error.message).decode("utf-8", "replace")
     raise _typed_exec_error(status, message, 0, False, 0, 0)
+
+
+cdef void raise_staged_error(int status, me_error *error, size_t stage, uint32_t node) except *:
+    cdef object message = (<bytes>error.message).decode("utf-8", "replace")
+    exception = _typed_exec_error(status, message, 0, False, 0, 0)
+    if stage != <size_t>-1:
+        exception.stage = stage
+    if node != <uint32_t>-1:
+        exception.node = node
+    raise exception
 
 
 cdef class _TypedFPScope:
@@ -366,15 +407,22 @@ cdef int _typed_sink_write_cb(void *context, size_t offset_items, size_t count,
 cdef class _TypedExecPlan:
     cdef void *_plan
     cdef b2_exec_info _info
+    cdef bint _staged
+    cdef object _borrowed_owners
+    cdef bint _borrowed_plan
 
-    def __cinit__(self, nodes, size_t ninputs, uint32_t root, int execution=0,
-                  int jit_compiler=0, int math_backend=0):
+    def __cinit__(self, nodes=None, size_t ninputs=0, uint32_t root=0, int execution=0,
+                  int jit_compiler=0, int math_backend=0, bint staged=False):
         cdef b2_exec_node native[1024]
         cdef me_error error
-        cdef size_t count = len(nodes)
+        cdef size_t count
         cdef int rc, i, j
         cdef bytes scalar, initial_scalar
         self._plan = NULL
+        self._staged = staged
+        if nodes is None:
+            return
+        count = len(nodes)
         if not b2_exec_available():
             raise NotImplementedError("Build with the C-Blosc2 typed executor")
         if not 0 < count <= 1024:
@@ -395,9 +443,14 @@ cdef class _TypedExecPlan:
                 "initial_scalar",
                 "initial_weak",
                 "ddof",
+                "function",
+                "where",
             }:
                 raise ValueError("Unsupported typed node field")
             native[i].op = node["op"]
+            if node.get("where") is not None:
+                native[i].has_where = 1
+                native[i].where = node["where"]
             native[i].slot = node.get("slot", 0)
             if "dtype" in node:
                 dtype = np.dtype(node["dtype"])
@@ -406,7 +459,7 @@ cdef class _TypedExecPlan:
                 native[i].dtype = _me_dtype_from_numpy_dtype(dtype)
                 native[i].itemsize = dtype.itemsize
             args = node.get("args", ())
-            if len(args) > 2:
+            if len(args) > 3:
                 raise ValueError("Typed node arity exceeded")
             native[i].nargs = len(args)
             for j, arg in enumerate(args):
@@ -440,16 +493,146 @@ cdef class _TypedExecPlan:
                 native[i].initial_weak = bool(node.get("initial_weak", False))
             if "ddof" in node and node["ddof"] is not None:
                 native[i].ddof = float(node["ddof"])
+            function = node.get("function", "").encode("ascii")
+            if len(function) >= 32:
+                raise ValueError("Typed function identifier limit exceeded")
+            if function:
+                memcpy(native[i].function, <const char *>function, len(function))
+        cdef b2_st_diag diag
+        diag.stage = <size_t>-1
+        diag.node = <uint32_t>-1
         with nogil:
-            rc = b2_exec_prepare(native, count, ninputs, root, execution,
-                                 jit_compiler, math_backend, &self._plan, &error)
+            if staged:
+                rc = b2_st_prepare(native, count, ninputs, root, execution,
+                                   jit_compiler, math_backend, &self._plan, &diag, &error)
+            else:
+                rc = b2_exec_prepare(native, count, ninputs, root, execution,
+                                     jit_compiler, math_backend, &self._plan, &error)
         if rc:
-            raise_exec_error(rc, &error)
-        if b2_exec_describe(self._plan, &self._info):
+            if staged:
+                raise_staged_error(rc, &error, diag.stage, diag.node)
+            else:
+                raise_exec_error(rc, &error)
+        rc = b2_st_describe(self._plan, &self._info) if staged else b2_exec_describe(self._plan, &self._info)
+        if rc:
             raise ValueError("Cannot describe typed plan")
 
+    @staticmethod
+    def assemble(children, bindings, size_t ninputs):
+        cdef const void *plans[32]
+        cdef int sources[4096]
+        cdef size_t offsets[32]
+        cdef size_t s, i, count = len(children), used = 0
+        cdef int rc
+        cdef me_error error
+        cdef b2_st_diag diag
+        cdef _TypedExecPlan child, result = _TypedExecPlan()
+        if not 0 < count <= 32 or len(bindings) != count:
+            raise ValueError("Invalid explicit stage count")
+        for s, obj in enumerate(children):
+            if not isinstance(obj, _TypedExecPlan):
+                raise TypeError("Explicit stages require typed plans")
+            child = obj
+            if child._staged or len(bindings[s]) != child._info.ninputs:
+                raise ValueError("Nested explicit stage plan or binding count mismatch")
+            plans[s] = child._plan
+            offsets[s] = used
+            for value in bindings[s]:
+                if used == 4096:
+                    raise ValueError("Explicit stage binding limit exceeded")
+                sources[used] = value
+                used += 1
+        memset(&error, 0, sizeof(error))
+        diag.stage = <size_t>-1
+        diag.node = <uint32_t>-1
+        result._staged = True
+        result._borrowed_owners = tuple(children)
+        with nogil:
+            rc = b2_st_assemble(plans, sources, offsets, count, ninputs, &result._plan, &diag, &error)
+        if rc:
+            raise_staged_error(rc, &error, diag.stage, diag.node)
+        if b2_st_describe(result._plan, &result._info):
+            raise ValueError("Cannot describe explicit stage plan")
+        return result
+
+    @staticmethod
+    def from_source(bytes version, bytes source, inputs, captures, output_dtype,
+                    casting="unsafe", int execution=0, int compiler=0, int math_backend=0,
+                    bint integer_powers=False):
+        cdef me_input_spec slots[128]
+        cdef me_capture constants[128]
+        cdef me_signature signature
+        cdef me_error error
+        cdef size_t n = len(inputs), nc = len(captures), i
+        cdef np.ndarray value
+        cdef int rc
+        cdef _TypedExecPlan result = _TypedExecPlan()
+        if n + nc > 128 or b"\x00" in source or b"\x00" in version:
+            raise ValueError("Invalid typed stage source/signature")
+        names = [name.encode("ascii") for name in inputs]
+        capture_names = [item[0].encode("ascii") for item in captures]
+        owners = [item[1] for item in captures]
+        for i, dtype in enumerate(inputs.values()):
+            slots[i].name = names[i]
+            slots[i].dtype = _me_dtype_from_numpy_dtype(np.dtype(dtype))
+            slots[i].itemsize = np.dtype(dtype).itemsize
+        for i in range(nc):
+            value = owners[i]
+            if value.ndim != 0 or not value.flags.c_contiguous or not value.flags.aligned or not value.dtype.isnative:
+                raise ValueError("Typed stage capture requires one aligned native scalar")
+            constants[i].spec.name = capture_names[i]
+            constants[i].spec.dtype = _me_dtype_from_numpy_dtype(value.dtype)
+            constants[i].spec.itemsize = value.dtype.itemsize
+            constants[i].value = np.PyArray_DATA(value)
+            constants[i].category = ME_CAPTURE_WEAK if captures[i][2] else ME_CAPTURE_TYPED
+        memset(&signature, 0, sizeof(signature))
+        memset(&error, 0, sizeof(error))
+        signature.struct_size = sizeof(signature)
+        signature.inputs = slots
+        signature.ninputs = n
+        signature.captures = constants
+        signature.ncaptures = nc
+        signature.output_dtype = _me_dtype_from_numpy_dtype(np.dtype(output_dtype))
+        signature.output_itemsize = np.dtype(output_dtype).itemsize
+        signature.cardinality = ME_ELEMENTWISE
+        signature.integer_powers = integer_powers
+        signature.casting = {"unsafe": ME_CAST_UNSAFE, "safe": ME_CAST_SAFE, "same_kind": ME_CAST_SAME_KIND}[casting]
+        cdef const char *v = version
+        cdef const char *text = source
+        with nogil:
+            rc = b2_st_source(v, text, &signature, execution, compiler, math_backend, &result._plan, &error)
+        if rc:
+            raise_exec_error(rc, &error)
+        if b2_exec_describe(result._plan, &result._info):
+            raise ValueError("Cannot describe trusted typed stage")
+        return result
+
     def __dealloc__(self):
-        b2_exec_free(self._plan)
+        if self._borrowed_plan:
+            return
+        if self._staged:
+            b2_st_free(self._plan)
+        else:
+            b2_exec_free(self._plan)
+
+    def components(self):
+        cdef int sources[128]
+        cdef size_t stage, count, node
+        cdef _TypedExecPlan child
+        if not self._staged:
+            return (self,), (tuple(-1 - i for i in range(self._info.ninputs)),)
+        children, bindings = [], []
+        for stage in range(b2_st_count(self._plan)):
+            child = _TypedExecPlan()
+            child._borrowed_plan = True
+            child._borrowed_owners = self
+            if b2_st_child(self._plan, stage, &child._plan, sources, &count, &node):
+                raise ValueError("Cannot inspect typed stage components")
+            if b2_exec_describe(child._plan, &child._info):
+                raise ValueError("Cannot inspect borrowed typed stage")
+            children.append(child)
+            bindings.append(tuple(sources[i] for i in range(count)))
+        return tuple(children), tuple(bindings)
 
     def info(self):
         axes = (
@@ -458,6 +641,7 @@ cdef class _TypedExecPlan:
             else None
         )
         return {"inferred_dtype": _numpy_dtype_from_me_dtype(<me_dtype>self._info.dtype),
+                "stages": b2_st_count(self._plan) if self._staged else 1,
                 "map_dtype": _numpy_dtype_from_me_dtype(<me_dtype>self._info.map_dtype),
                 "plan_metadata_bytes": self._info.plan_metadata_bytes,
                 "ninputs": self._info.ninputs, "reduction": bool(self._info.reduction),
@@ -466,16 +650,28 @@ cdef class _TypedExecPlan:
                 "has_jit": bool(self._info.has_jit),
                 "axes": axes, "keepdims": bool(self._info.keepdims),
                 "initial": bool(self._info.has_initial),
+                "where": bool(self._info.has_where),
                 "reducer": {0: None, 1: "sum", 2: "prod", 3: "min", 4: "max", 5: "any",
                             6: "all"}.get(self._info.reducer, "unknown")}
 
     def specialize(self, inputs, size_t tile_items=1024, size_t max_mapped_bytes=65536,
-                   bint pairwise_sum=False):
+                   bint pairwise_sum=False, size_t intermediate_budget=67108864):
         cdef b2_exec_meta metadata[128]
         cdef size_t count = len(inputs)
         cdef int i, j, rc
         cdef me_error error
-        cdef _TypedExecSchedule result = _TypedExecSchedule()
+        cdef _TypedExecSchedule result
+        cdef b2_st_info stage_info
+        cdef b2_st_diag diag
+        diag.stage = <size_t>-1
+        diag.node = <uint32_t>-1
+        if self._staged:
+            if pairwise_sum:
+                raise NotImplementedError("Staged pairwise_sum is not admitted")
+            result = _TypedStagedSchedule()
+            (<_TypedStagedSchedule>result)._stage_count = b2_st_count(self._plan)
+        else:
+            result = _TypedExecSchedule()
         if count > 128:
             raise ValueError("Typed input limit exceeded")
         memset(metadata, 0, sizeof(metadata))
@@ -490,14 +686,27 @@ cdef class _TypedExecPlan:
             for j, extent in enumerate(shape):
                 metadata[i].shape[j] = extent
         with nogil:
-            rc = b2_exec_specialize(self._plan, metadata, count, tile_items, max_mapped_bytes,
-                                    pairwise_sum, &result._schedule, &error)
+            if self._staged:
+                rc = b2_st_specialize(self._plan, metadata, count, tile_items, max_mapped_bytes,
+                                      intermediate_budget, &result._schedule, &diag, &error)
+            else:
+                rc = b2_exec_specialize(self._plan, metadata, count, tile_items, max_mapped_bytes,
+                                        pairwise_sum, &result._schedule, &error)
         if rc:
-            raise_exec_error(rc, &error)
+            if self._staged:
+                raise_staged_error(rc, &error, diag.stage, diag.node)
+            else:
+                raise_exec_error(rc, &error)
         result._owner = self
         result._metadata = tuple((np.dtype(dtype).newbyteorder("="), tuple(shape)) for dtype, shape in inputs)
         result._info = self._info
-        if b2_exec_schedule_describe(result._schedule, &result._info):
+        if self._staged:
+            rc = b2_st_stage(result._schedule, (<_TypedStagedSchedule>result)._stage_count - 1, &stage_info)
+            result._info = stage_info.info
+            result._info.ninputs = self._info.ninputs
+        else:
+            rc = b2_exec_schedule_describe(result._schedule, &result._info)
+        if rc:
             raise ValueError("Cannot describe typed schedule")
         return result
 
@@ -835,4 +1044,166 @@ cdef class _TypedExecSchedule:
         if out is None:
             raise TypeError("Typed alias execution requires an explicit NumPy output buffer")
         return self._run_into(inputs, out, True, staging_budget, raise_mask, workers,
-                              max_worker_scratch, max_gather_bytes)
+                               max_worker_scratch, max_gather_bytes)
+
+
+cdef class _TypedStagedSchedule(_TypedExecSchedule):
+    cdef size_t _stage_count
+
+    def __dealloc__(self):
+        b2_st_schedule_free(self._schedule)
+        self._schedule = NULL
+
+    def stage_info(self, size_t stage):
+        cdef b2_st_info info
+        if b2_st_stage(self._schedule, stage, &info):
+            raise ValueError("Invalid typed graph stage")
+        return {
+            "shape": tuple(info.info.output_shape[i] for i in range(info.info.output_ndim)),
+            "dtype": _numpy_dtype_from_me_dtype(<me_dtype>info.info.dtype),
+            "bytes": info.output_bytes,
+            "last_consumer": stage if info.last_consumer == <size_t>-1 else info.last_consumer,
+            "node": info.node,
+        }
+
+    def info(self):
+        cdef b2_st_info info
+        metadata_bytes = intermediate = scratch = reducer = 0
+        for stage in range(self._stage_count):
+            if b2_st_stage(self._schedule, stage, &info):
+                raise ValueError("Cannot describe typed graph stage")
+            metadata_bytes += info.info.schedule_metadata_bytes
+            if stage + 1 < self._stage_count:
+                intermediate += info.output_bytes
+            scratch = max(scratch, info.info.mapped_bytes + info.info.broadcast_gather_bytes)
+            reducer = max(reducer, info.info.reducer_bytes)
+        return {**super().info(),
+                "dtype": _numpy_dtype_from_me_dtype(<me_dtype>self._info.dtype),
+                "stages": self._stage_count, "intermediate_bytes": intermediate,
+                "schedule_metadata_bytes": metadata_bytes, "mapped_bytes": scratch, "reducer_bytes": reducer}
+
+    def execute(self, inputs, unsigned raise_mask=0, *, out=None, size_t workers=1,
+                max_worker_scratch=None, size_t max_gather_bytes=67108864):
+        if max_worker_scratch is not None:
+            raise NotImplementedError("Staged execution uses explicit per-stage gather/mapped budgets")
+        if any(type(value) is not np.ndarray for value in inputs):
+            raise TypeError("Staged resident execution requires explicit NumPy buffers")
+        return self.execute_sources(inputs, raise_mask, out=out, workers=workers,
+                                     max_gather_bytes=max_gather_bytes)
+
+    def execute_arrays(self, inputs, unsigned raise_mask=0, *, out=None, size_t workers=1, **budgets):
+        # Preserve the adapter's unsupported compressed/staged capability, without
+        # materializing an operand or falling back after native work has started.
+        if any(isinstance(value, NDArray) for value in inputs) or isinstance(out, NDArray):
+            raise NotImplementedError("Compressed staged execution is not admitted")
+        return self.execute_sources(inputs, raise_mask, out=out, workers=workers, **budgets)
+
+    def execute_alias(self, *args, **kwargs):
+        raise NotImplementedError("Aliased staged output is not admitted")
+
+    def execute_sources(self, inputs, unsigned raise_mask=0, *, out=None, sink=None,
+                        size_t workers=1, size_t max_gather_bytes=67108864):
+        cdef b2_exec_source sources[128]
+        cdef b2_exec_view views[128]
+        cdef b2_exec_output_view out_view
+        cdef b2_st_report report
+        cdef me_error error
+        cdef np.ndarray value, output
+        cdef _TypedSourceState cb_state
+        cdef size_t n = len(inputs), i, j
+        cdef int rc
+        cdef void *out_ptr
+        cdef size_t out_bytes
+        if workers != 1 or sink is not None:
+            raise NotImplementedError("Staged execution requires one worker and resident output")
+        if not self._schedule or n != self._info.ninputs or n > 128:
+            raise ValueError("Invalid staged execution bindings")
+        memset(sources, 0, sizeof(sources))
+        memset(views, 0, sizeof(views))
+        memset(&error, 0, sizeof(error))
+        memset(&report, 0, sizeof(report))
+        values = tuple(inputs)
+        owners, callbacks = [], []
+        for i, obj in enumerate(values):
+            dtype, shape = self._metadata[i]
+            if isinstance(obj, NDArray):
+                raise NotImplementedError("Compressed staged execution is not admitted")
+            if np.dtype(obj.dtype).newbyteorder("=") != dtype or tuple(obj.shape) != shape:
+                raise ValueError("Staged input dtype/shape mismatch")
+            sources[i].dtype = _me_dtype_from_numpy_dtype(dtype)
+            sources[i].itemsize = dtype.itemsize
+            sources[i].ndim = len(shape)
+            for j, extent in enumerate(shape):
+                sources[i].shape[j] = extent
+            if type(obj) is np.ndarray:
+                value = obj
+                owners.append(typed_view_binding(value, &views[i]))
+            elif callable(getattr(obj, "read", None)):
+                cb_state = _TypedSourceState(obj, dtype, None)
+                callbacks.append(cb_state)
+                sources[i].context = <void *>cb_state
+                sources[i].read = _typed_source_read_cb
+            else:
+                raise TypeError("Staged inputs require NumPy buffers or source adapters")
+        shape = tuple(self._info.output_shape[i] for i in range(self._info.output_ndim))
+        dtype = _numpy_dtype_from_me_dtype(<me_dtype>self._info.dtype)
+        if out is None:
+            output = np.empty(shape, dtype=dtype)
+        else:
+            if type(out) is not np.ndarray or out.dtype != dtype or out.shape != shape:
+                raise ValueError("Staged output dtype/shape mismatch")
+            output = out
+        if not output.flags.c_contiguous:
+            raise NotImplementedError("Staged output must be contiguous")
+        owners.append(typed_output_view_binding(output, &out_view))
+        out_bytes = output.nbytes
+        out_ptr = <void *>np.PyArray_DATA(output) if out_bytes else NULL
+        with nogil:
+            rc = b2_st_execute(self._schedule, sources, views, n, out_ptr, out_bytes,
+                               raise_mask, max_gather_bytes, &report, &error)
+        for cb_state in callbacks:
+            if cb_state.error is not None:
+                raise cb_state.error
+        if rc:
+            exception = _typed_exec_error(
+                rc, (<bytes>error.message).decode("utf-8", "replace"),
+                report.fp.flags, report.fp.supported, 0, 0)
+            if report.failed_stage < self._stage_count:
+                exception.stage = report.failed_stage
+            if report.failed_node != <uint32_t>-1:
+                exception.node = report.failed_node
+            raise exception
+        stage_reports = []
+        for i in range(report.entered_stages):
+            stage_reports.append({
+                "stage": i, "node": self.stage_info(i)["node"],
+                "tiles": report.stages[i].execution.tiles,
+                "map_calls": report.stages[i].execution.map_calls,
+                "direct_tiles": report.stages[i].execution.direct_tiles,
+                "jit_calls": report.stages[i].execution.jit_calls,
+                "interpreter_calls": report.stages[i].execution.interpreter_calls,
+                "read_calls": report.stages[i].read_calls,
+                "read_items": report.stages[i].read_items,
+                "gathered_bytes": report.stages[i].execution.gathered_bytes,
+                "temporary_bytes": report.stages[i].execution.mapped_bytes,
+                "fp_flags": report.stages[i].execution.fp.flags,
+                "fp_supported": bool(report.stages[i].execution.fp.supported),
+            })
+        jit_stages = sum(r["jit_calls"] > 0 for r in stage_reports)
+        return output, {
+            "route": "c-blosc2-typed-staged", "stages": self._stage_count,
+            "entered_stages": report.entered_stages, "stage_reports": tuple(stage_reports),
+            "intermediate_bytes": report.intermediate_bytes,
+            "live_intermediate_bytes": report.live_intermediate_bytes,
+            "fp_flags": report.fp.flags, "fp_supported": bool(report.fp.supported),
+            "has_jit": bool(jit_stages), "jit_stages": jit_stages,
+            "interpreter_stages": report.entered_stages - jit_stages,
+            "jit_calls": sum(r["jit_calls"] for r in stage_reports),
+            "interpreter_calls": sum(r["interpreter_calls"] for r in stage_reports),
+            "map_calls": sum(r["map_calls"] for r in stage_reports),
+            "direct_tiles": sum(r["direct_tiles"] for r in stage_reports),
+            "evaluated_tiles": sum(r["map_calls"] for r in stage_reports),
+            "tiles": sum(r["tiles"] for r in stage_reports),
+            "gathered_bytes": sum(r["gathered_bytes"] for r in stage_reports),
+            "input_materialization_bytes": 0, "tasks": 1,
+        }

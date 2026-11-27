@@ -50,14 +50,14 @@ def test_generator_prefilter_rejects_repartitioning(chunks, blocks):
     lazy = grouped_index.specialize().lazy({}, shape=(37,), partitions=(8,))
     output = lazy.compute(chunks=(chunks,), blocks=(blocks,), cparams={"clevel": 0})
     np.testing.assert_array_equal(output[:], expected_groups(37, 8))
-    assert not hasattr(lazy, "_source_execution_report")
+    assert getattr(lazy, "_source_execution_report", {}).get("route") != "menudet-prefilter"
 
 
 def test_generator_partial_selection_keeps_original_groups():
     lazy = grouped_index.specialize().lazy({}, shape=(37,), partitions=(8,))
     result = lazy.compute(item=slice(3, 21), chunks=(16,), blocks=(8,), cparams={"clevel": 0})
     np.testing.assert_array_equal(result[:], expected_groups(37, 8)[3:21])
-    assert not hasattr(lazy, "_source_execution_report")
+    assert getattr(lazy, "_source_execution_report", {}).get("route") != "menudet-prefilter"
 
 
 def test_generator_prefilter_raises_native_error_and_cleans_output_context():

@@ -7,7 +7,7 @@
 #include <string.h>
 
 typedef struct {
-    int op, dtype, slot, args[2], nargs, weak;
+    int op, dtype, slot, args[3], nargs, weak;
     size_t itemsize, scalar_size;
     unsigned char scalar[16];
     int has_axes, keepdims, has_initial, initial_dtype, initial_weak;
@@ -15,6 +15,8 @@ typedef struct {
     int axes[16];
     unsigned char initial_scalar[16];
     double ddof;
+    char function[32];
+    int has_where, where;
 } b2_exec_node;
 
 typedef struct {
@@ -29,7 +31,7 @@ typedef struct {
     size_t plan_metadata_bytes, schedule_metadata_bytes;
     size_t ndim, broadcast_gather_bytes;
     int64_t shape[16];
-    int has_axes, keepdims, has_initial, pairwise_sum;
+    int has_axes, keepdims, has_initial, pairwise_sum, has_where;
     size_t naxes, output_ndim, reduction_groups, reduction_lanes;
     int axes[16];
     int64_t output_shape[16];
@@ -108,6 +110,7 @@ typedef struct {
 #ifdef B2_HAVE_B2ND_EXEC
 #include "b2nd-exec.h"
 #include "b2nd-exec-storage.h"
+#include "b2nd-exec-stages.h"
 #ifdef B2_HAVE_MENUDET_ARTIFACT
 #include "miniexpr_artifact.h"
 #endif
@@ -121,10 +124,13 @@ static int b2_exec_fp_end(b2_exec_fp_scope *scope, me_error *error) {
 }
 
 static int b2_exec_available(void) { return 1; }
-static int b2_exec_prepare(const b2_exec_node *nodes, size_t count, size_t ninputs,
-                           uint32_t root, int execution, int compiler, int math_backend,
-                           void **out, me_error *error) {
+static int b2_exec_prepare_impl(const b2_exec_node *nodes, size_t count, size_t ninputs,
+                            uint32_t root, int execution, int compiler, int math_backend,
+                            void **out, size_t *failed_stage, uint32_t *failed_node,
+                            me_error *error, int staged) {
     *out = NULL;
+    if (failed_stage) *failed_stage = SIZE_MAX;
+    if (failed_node) *failed_node = UINT32_MAX;
     if (!count || count > B2ND_EXEC_MAX_NODES) {
         return ME_ERR_INVALID_ARG;
     }
@@ -141,6 +147,8 @@ static int b2_exec_prepare(const b2_exec_node *nodes, size_t count, size_t ninpu
         native[i].nargs = (size_t)nodes[i].nargs;
         native[i].args[0] = (uint32_t)nodes[i].args[0];
         native[i].args[1] = (uint32_t)nodes[i].args[1];
+        native[i].args[2] = (uint32_t)nodes[i].args[2];
+        memcpy(native[i].function, nodes[i].function, sizeof(native[i].function));
         native[i].itemsize = nodes[i].itemsize;
         native[i].scalar_size = nodes[i].scalar_size;
         native[i].category = nodes[i].weak ? ME_CAPTURE_WEAK : ME_CAPTURE_TYPED;
@@ -157,17 +165,35 @@ static int b2_exec_prepare(const b2_exec_node *nodes, size_t count, size_t ninpu
         native[i].initial_size = nodes[i].initial_size;
         memcpy(native[i].initial_scalar, nodes[i].initial_scalar, sizeof(native[i].initial_scalar));
         native[i].ddof = nodes[i].ddof;
+        native[i].has_where = nodes[i].has_where != 0;
+        native[i].where = (uint32_t)nodes[i].where;
     }
     b2nd_exec_descriptor descriptor = {sizeof(descriptor), native, count, ninputs, root};
     b2nd_exec_options options = B2ND_EXEC_OPTIONS_INITIALIZER;
     options.execution = (me_execution_policy)execution;
     options.jit_compiler = (me_jit_compiler)compiler;
     options.math_backend = (me_math_backend)math_backend;
-    b2nd_exec_plan *plan = NULL;
-    int rc = b2nd_exec_prepare(&descriptor, &options, &plan, error);
+    int rc;
+    if (staged) {
+        b2nd_exec_staged_plan *plan = NULL;
+        b2nd_exec_stage_diagnostic diag = {SIZE_MAX, UINT32_MAX};
+        rc = b2nd_exec_staged_prepare_ex(&descriptor, &options, &plan, &diag, error);
+        if (failed_stage) *failed_stage = diag.stage;
+        if (failed_node) *failed_node = diag.node;
+        *out = plan;
+    } else {
+        b2nd_exec_plan *plan = NULL;
+        rc = b2nd_exec_prepare(&descriptor, &options, &plan, error);
+        *out = plan;
+    }
     free(native);
-    *out = plan;
     return rc;
+}
+static int b2_exec_prepare(const b2_exec_node *nodes, size_t count, size_t ninputs,
+                           uint32_t root, int execution, int compiler, int math_backend,
+                           void **out, me_error *error) {
+    return b2_exec_prepare_impl(nodes, count, ninputs, root, execution, compiler, math_backend,
+                                out, NULL, NULL, error, 0);
 }
 static void b2_exec_free(void *plan) { b2nd_exec_plan_free(plan); }
 static void b2_exec_schedule_free(void *schedule) { b2nd_exec_schedule_free(schedule); }
@@ -193,6 +219,7 @@ static int b2_exec_describe(const void *plan, b2_exec_info *out) {
         }
         out->keepdims = info.keepdims;
         out->has_initial = info.has_initial;
+        out->has_where = info.has_where;
     }
     return rc;
 }
@@ -720,4 +747,5 @@ static int b2_exec_execute_partitions(const void *schedule, const void *const *a
     return ME_ERR_UNSUPPORTED;
 }
 #endif
+#include "b2nd_exec_stages_bridge.h"
 #endif
