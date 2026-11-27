@@ -6,6 +6,7 @@ metadata-only; once preparation starts, failures propagate without replay.
 """
 
 import ast
+import sys
 from functools import lru_cache
 
 import numpy as np
@@ -26,89 +27,68 @@ _DTYPES = {
     "float32",
     "float64",
 }
-_BINARY = {ast.Add: 2, ast.Sub: 3, ast.Mult: 4}
+_OPS = {"input": 0, "constant": 1, "add": 2, "sub": 3, "mul": 4, "neg": 5, "min": 6}
 
 
 class _NotAdmitted(Exception):
     pass
 
 
-def _scalar(value):
-    typed = isinstance(value, np.generic)
-    if typed:
-        dtype = value.dtype
-    elif type(value) is bool:
-        dtype = np.dtype("bool")
-    elif type(value) is int and -(2**63) <= value < 2**63:
-        dtype = np.dtype("int64")
-    elif type(value) is float and np.isfinite(value):
-        dtype = np.dtype("float64")
-    else:
-        raise _NotAdmitted
-    if dtype.name not in _DTYPES or not dtype.isnative:
-        raise _NotAdmitted
-    return (1, dtype.name, 0, (), np.asarray(value, dtype=dtype).tobytes(), not typed)
+def _lower(expression, operands):
+    from .native_graph import GraphAdapter
 
-
-def _lower(expression, operands):  # noqa: C901 -- explicit bounded syntax admission
     tree = expression_syntax(expression)[0].body
     if sum(1 for _ in ast.walk(tree)) > 1024:
         raise _NotAdmitted
-    nodes, names, slots = [], [], {}
-    for name, value in operands.items():
-        if type(value) is np.ndarray:
-            slots[name] = len(nodes)
-            nodes.append((0, value.dtype.name, len(names), (), b"", False))
-            names.append(name)
-        else:
-            slots[name] = len(nodes)
-            nodes.append(_scalar(value))
-    if not names or len(names) > 128:
+    adapter = GraphAdapter(operands)
+    try:
+        root = adapter.visit(tree)
+    except (ValueError, KeyError, TypeError):
+        raise _NotAdmitted from None
+    names = tuple(adapter.arrays)
+    if not names or len(names) > 128 or len(adapter.nodes) > 1024:
         raise _NotAdmitted
-
-    def lower(node, depth=0):
-        if depth >= 128 or len(nodes) >= 1024:
+    slots = {name: slot for slot, name in enumerate(names)}
+    nodes, depths = [], []
+    for index, node in enumerate(adapter.nodes):
+        op = node["op"]
+        if op not in _OPS:
             raise _NotAdmitted
-        if isinstance(node, ast.Name) and node.id in slots:
-            return slots[node.id]
-        if isinstance(node, ast.Constant):
-            result = _scalar(node.value)
-        elif isinstance(node, ast.BinOp) and type(node.op) in _BINARY:
-            result = (
-                _BINARY[type(node.op)],
-                None,
-                0,
-                (lower(node.left, depth + 1), lower(node.right, depth + 1)),
-                b"",
-                False,
-            )
-        elif isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-            if isinstance(node.operand, ast.Constant):
-                result = _scalar(-node.operand.value)
-            else:
-                result = (5, None, 0, (lower(node.operand, depth + 1),), b"", False)
-        else:
-            raise _NotAdmitted
-        nodes.append(result)
-        return len(nodes) - 1
-
-    reduction = isinstance(tree, ast.Call)
-    if reduction:
-        if not (
-            isinstance(tree.func, ast.Name)
-            and tree.func.id == "min"
-            and len(tree.args) == 1
-            and not tree.keywords
+        if op == "min" and (
+            index != root
+            or node["axes"] is not None
+            or node["keepdims"]
+            or node["dtype"] != "auto"
+            or node["initial"] is not None
+            or node["where"] is not None
         ):
             raise _NotAdmitted
-        mapped = lower(tree.args[0])
-        nodes.append((6, None, 0, (mapped,), b"", False))
-        root = len(nodes) - 1
-    else:
-        root = lower(tree)
+        dtype = node.get("dtype") if op in {"input", "constant"} else None
+        if dtype is not None and dtype not in _DTYPES:
+            raise _NotAdmitted
+        scalar = b""
+        if op == "constant":
+            if node["encoding"] == "ieee754-hex":
+                scalar = bytes.fromhex(node["value"])
+                if sys.byteorder == "little":
+                    scalar = scalar[::-1]
+            else:
+                value = node["value"] if dtype == "bool" else int(node["value"])
+                try:
+                    scalar = np.asarray(value, dtype=dtype).tobytes()
+                except (OverflowError, ValueError):
+                    raise _NotAdmitted from None
+        args = tuple(node.get("args", ()))
+        depth = 1 + max((depths[arg] for arg in args), default=0)
+        if depth > 128:
+            raise _NotAdmitted
+        depths.append(depth)
+        nodes.append(
+            (_OPS[op], dtype, slots.get(node.get("name"), 0), args, scalar, node.get("category") == "weak")
+        )
     if len(nodes) > 1024 or sum(n[0] == 1 for n in nodes) > 128:
         raise _NotAdmitted
-    return tuple(nodes), tuple(names), root, reduction
+    return tuple(nodes), names, root, adapter.nodes[root]["op"] == "min"
 
 
 @lru_cache(maxsize=32)
@@ -166,11 +146,18 @@ def compute_typed_resident_if_eligible(expr, item, tile, options):
         return None
     if (reduction and (selection or shape == (0,))) or (not reduction and not options.get("_getitem")):
         return None
-    # Maximum numerical width bounds mapped scratch before native admission;
-    # specialization computes the exact core-inferred result width.
-    if shape is None or min(shape[0], tile) * 8 > 65536:
+    if shape is None:
         return None
     plan = _prepare(nodes, len(names), root)
+    # Use core-inferred width, and charge only maps feeding reductions.
+    # Direct-output maps and identity reductions need no mapped scratch.
+    info = plan.info()
+    if (
+        info["reduction"]
+        and not info["identity"]
+        and min(shape[0], tile) * info["inferred_dtype"].itemsize > 65536
+    ):
+        return None
     arrays = tuple(expr.operands[name] for name in names)
     schedule = plan.specialize(tuple((value.dtype, value.shape) for value in arrays), tile, 65536)
     result, expr._native_execution_report = schedule.execute(arrays)

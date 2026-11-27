@@ -132,6 +132,9 @@ def test_typed_failure_never_replays_adapter(monkeypatch):
             raise ValueError("injected typed execution failure")
 
     class Prepared:
+        def info(self):
+            return {"reduction": True, "identity": False, "inferred_dtype": np.dtype("int64")}
+
         def specialize(self, *args):
             return FailedSchedule()
 
@@ -187,3 +190,27 @@ def test_typed_named_exact_capture():
     assert actual.tobytes() == expected.tobytes()
     assert actual == 5
     assert expr._native_execution_report["route"] == "c-blosc2-typed-resident"
+
+
+def test_typed_direct_map_needs_no_mapped_budget():
+    nodes = descriptor()[:-1]
+    plan = blosc2_ext._TypedExecPlan(nodes, 2, 4)
+    schedule = plan.specialize([("int64", (17003,)), ("int64", (17003,))], 16384, 0)
+    assert schedule.info()["mapped_bytes"] == 0
+    values = np.arange(17003, dtype=np.int64)
+    result, report = schedule.execute((values, values))
+    np.testing.assert_array_equal(result, 4 * values)
+    assert report["temporary_bytes"] == 0
+
+
+def test_typed_large_identity_tile_and_narrow_reduction():
+    values = np.arange(17003, dtype=np.int16)
+    for expression in ("min(x)", "min(x + 1)"):
+        with blosc2.expression_evaluation("safe"):
+            expr = blosc2.lazyexpr(expression, {"x": values})
+        expected = expr.compute(jit=False, _require_native=True)
+        actual = expr.compute(jit=False, _native_tile_items=16384)
+        assert actual.tobytes() == expected.tobytes()
+        report = expr._native_execution_report
+        assert report["route"] == "c-blosc2-typed-resident"
+        assert report["temporary_bytes"] == (0 if expression == "min(x)" else 32768)
