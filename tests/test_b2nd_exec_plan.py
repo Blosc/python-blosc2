@@ -110,6 +110,22 @@ def test_typed_backend_reports_and_concurrent_schedule():
             blosc2_ext._TypedExecPlan(descriptor("float64"), 2, 5, **policy)
 
 
+def test_typed_partition_proof_rejects_checked_weak_conversion():
+    nodes = [
+        {"op": 0, "dtype": "uint8", "slot": 0},
+        {"op": 1, "dtype": "int64", "scalar": np.int64(300).tobytes(), "weak": True},
+        {"op": 2, "args": [0, 1]},
+    ]
+    plan = blosc2_ext._TypedExecPlan(nodes, 1, 2)
+    assert not plan.info()["partitionable"]
+    schedule = plan.specialize([("uint8", (4,))], 2, 0)
+    values = np.arange(4, dtype=np.uint8)
+    output = np.full(4, 55, dtype=np.uint8)
+    with pytest.raises(NotImplementedError, match="not proven partitionable"):
+        schedule.execute((values,), out=output, workers=2)
+    np.testing.assert_array_equal(output, np.full(4, 55, dtype=np.uint8))
+
+
 def test_typed_multiple_inputs_map_min_and_no_old_executor(monkeypatch):
     inputs = {"x": np.arange(37, dtype=np.int64), "y": np.arange(37, dtype=np.int64)[::-1].copy()}
     expected = {}
@@ -565,8 +581,14 @@ def test_typed_truth_reductions_and_empty_domains(reducer, dtype):
     expression = f"{reducer}(x * 2)"
     typed = NativeGraph.from_expression(expression, {"x": dtype}, jit=False, _executor="c-blosc2")
     adapter = NativeGraph.from_expression(expression, {"x": dtype}, jit=False, _executor="adapter")
-    assert typed.info()["partitionable"] is True
-    for workers in (1, 3):
+    # The core deliberately does not certify value-dependent narrow weak
+    # conversions yet, even when this particular capture fits.
+    partitionable = dtype != "int8"
+    assert typed.info()["partitionable"] is partitionable
+    if not partitionable:
+        with pytest.raises(NotImplementedError, match="not proven partitionable"):
+            typed.evaluate({"x": values}, tile_items=4, workers=3)
+    for workers in (1, 3) if partitionable else (1,):
         actual, report = typed.evaluate({"x": values}, tile_items=4, return_report=True, workers=workers)
         expected = adapter.evaluate({"x": values}, tile_items=4)
         assert actual.dtype == expected.dtype == np.dtype("bool")
