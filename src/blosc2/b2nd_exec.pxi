@@ -1,5 +1,9 @@
 # Private opt-in binding; ordinary NativeGraph dispatch is unchanged.
 cdef extern from "b2nd_exec_bridge.h":
+    ctypedef union b2_exec_fp_scope:
+        pass
+    int b2_exec_fp_begin(b2_exec_fp_scope *, me_fp_status *, me_error *)
+    int b2_exec_fp_end(b2_exec_fp_scope *, me_error *)
     ctypedef struct b2_exec_node:
         int op, dtype, slot, nargs, weak
         int args[2]
@@ -12,6 +16,7 @@ cdef extern from "b2nd_exec_bridge.h":
     ctypedef struct b2_exec_info:
         int dtype, reduction, identity, map_dtype
         size_t itemsize, ninputs, nitems, tile_items, mapped_bytes, reducer_bytes, output_items
+        size_t plan_metadata_bytes, schedule_metadata_bytes
     ctypedef struct me_buffer:
         const void *data
         size_t capacity
@@ -37,13 +42,71 @@ def _b2nd_exec_available():
     return bool(b2_exec_available())
 
 
-cdef void raise_exec_error(int status, me_error *error) except *:
-    message = (<bytes>error.message).decode("utf-8", "replace") or "Invalid typed execution request"
+def _typed_exec_error(status, message, flags, supported, line, column):
     if status == -6:
-        raise MemoryError(message)
+        return MemoryError(message)
     if status == -2:
-        raise NotImplementedError(message)
-    raise ValueError(message)
+        return NotImplementedError(message)
+    # MenudetError is a ValueError: existing narrower handlers keep working,
+    # while callers of the graph facade can catch its public exception type.
+    from blosc2.menudet_kernel import MenudetError
+
+    statuses = {-1: "invalid_graph", -3: "invalid_signature", -5: "evaluation_error"}
+    exception = MenudetError(
+        message or "Invalid typed execution request",
+        status=statuses.get(status, "native_error"),
+        native_status=status,
+        line=line,
+        column=column,
+    )
+    if status == -5:
+        exception.fp_status = {"flags": flags, "supported": bool(supported)}
+    return exception
+
+
+cdef void raise_exec_error(int status, me_error *error) except *:
+    cdef object message = (<bytes>error.message).decode("utf-8", "replace")
+    raise _typed_exec_error(status, message, 0, False, 0, 0)
+
+
+cdef class _TypedFPScope:
+    """Same-thread, LIFO scope for restricted frontend literal parsing."""
+    cdef b2_exec_fp_scope _scope
+    cdef me_fp_status _fp
+    cdef bint _active
+
+    def __cinit__(self):
+        self._active = False
+
+    def __enter__(self):
+        cdef me_error error
+        cdef int rc
+        if self._active:
+            raise ValueError("Floating scope is already active")
+        if not b2_exec_available():
+            raise NotImplementedError("Typed frontend FP scope is unavailable")
+        memset(&error, 0, sizeof(error))
+        rc = b2_exec_fp_begin(&self._scope, &self._fp, &error)
+        if rc:
+            raise_exec_error(rc, &error)
+        self._active = True
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        cdef me_error error
+        cdef int rc
+        if not self._active:
+            raise ValueError("Floating scope is not active")
+        self._active = False
+        memset(&error, 0, sizeof(error))
+        rc = b2_exec_fp_end(&self._scope, &error)
+        if rc:
+            raise_exec_error(rc, &error)
+        return False
+
+    def __dealloc__(self):
+        if self._active:
+            b2_exec_fp_end(&self._scope, NULL)
 
 
 cdef object typed_buffer_binding(np.ndarray array, me_buffer *buffer):
@@ -139,6 +202,7 @@ cdef class _TypedExecPlan:
     def info(self):
         return {"inferred_dtype": _numpy_dtype_from_me_dtype(<me_dtype>self._info.dtype),
                 "map_dtype": _numpy_dtype_from_me_dtype(<me_dtype>self._info.map_dtype),
+                "plan_metadata_bytes": self._info.plan_metadata_bytes,
                 "ninputs": self._info.ninputs, "reduction": bool(self._info.reduction),
                 "identity": bool(self._info.identity)}
 
@@ -191,7 +255,8 @@ cdef class _TypedExecSchedule:
     def info(self):
         return {"items": self._info.nitems, "tile_items": self._info.tile_items,
                 "mapped_bytes": self._info.mapped_bytes, "reducer_bytes": self._info.reducer_bytes,
-                "output_items": self._info.output_items}
+                "output_items": self._info.output_items,
+                "schedule_metadata_bytes": self._info.schedule_metadata_bytes}
 
     def execute(self, inputs, unsigned raise_mask=0, *, out=None):
         cdef me_buffer buffers[128]
@@ -239,7 +304,9 @@ cdef class _TypedExecSchedule:
         with nogil:
             rc = b2_exec_execute(self._schedule, buffers, count, destination, raise_mask, &report, &error)
         if rc:
-            raise_exec_error(rc, &error)
+            raise _typed_exec_error(
+                rc, (<bytes>error.message).decode("utf-8", "replace"),
+                report.fp.flags, report.fp.supported, 0, 0)
         return output, {"route": "c-blosc2-typed-resident", "tiles": report.tiles,
                         "map_calls": report.map_calls, "direct_tiles": report.direct_tiles,
                         "evaluated_tiles": report.map_calls, "zero_copy_tiles": report.tiles,

@@ -2166,8 +2166,13 @@ def _graph_document(adapter, root, optimization="moderate"):
 class GraphAdapter:
     """Python syntax -> declarative nodes; no type/shape/reduction planning."""
 
-    def __init__(self, operands):
+    def __init__(self, operands, *, input_dtypes=None):
         self.operands, self.arrays, self.nodes, self.bindings = operands, {}, [], {}
+        # Metadata-only restricted-expression preparation must not fabricate
+        # placeholder arrays or read operand values to enter the shared lowerer.
+        for name, dtype in (input_dtypes or {}).items():
+            self.arrays[name] = np.dtype(dtype)
+            self.bindings[name] = self.add("input", name=name, dtype=np.dtype(dtype).name)
 
     def add(self, op, **payload):
         index = len(self.nodes)

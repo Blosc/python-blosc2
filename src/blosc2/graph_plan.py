@@ -43,8 +43,13 @@ class NativeGraph:
         return cls(graph, jit=jit, require_jit=require_jit)
 
     @classmethod
-    def from_expression(cls, expression, input_dtypes, *, jit=None, require_jit=False):
-        """Native restricted grammar, not a Python expression evaluator."""
+    def from_expression(cls, expression, input_dtypes, *, jit=None, require_jit=False, _executor="adapter"):
+        """Restricted grammar, not a Python expression evaluator.
+
+        ``_executor`` explicitly selects the comparison adapter (default) or
+        the opt-in C-Blosc2 resident subset. Unsupported typed requests fail
+        before execution; there is no runtime backend fallback.
+        """
         jit = jit_config.execution_options()["jit"] if jit is None else jit
         if not isinstance(expression, str):
             raise TypeError("Native expression must be text")
@@ -57,9 +62,16 @@ class NativeGraph:
             else 2
         )
         result._capture_execution_policy()
-        result._handle = NativeGraphHandle.from_expression(
-            expression.encode("utf-8"), input_dtypes, mode, require_jit
-        )
+        if _executor == "adapter":
+            result._handle = NativeGraphHandle.from_expression(
+                expression.encode("utf-8"), input_dtypes, mode, require_jit
+            )
+        elif _executor == "c-blosc2":
+            from .typed_graph import TypedGraphHandle
+
+            result._handle = TypedGraphHandle(expression, input_dtypes, jit=jit, require_jit=require_jit)
+        else:
+            raise ValueError("Unknown graph executor")
         result._info = result._handle.info()
         return result
 
@@ -145,6 +157,8 @@ class NativeGraph:
         Compressed operands are decoded only for requested tiles, never materialized.
         Staged graphs and compressed participation masks remain unsupported.
         """
+        if getattr(self._handle, "_executor", None) == "c-blosc2":
+            raise NotImplementedError("Typed source-backed execution is not yet qualified")
         from .native_graph import evaluate_graph_sources
 
         result, report = evaluate_graph_sources(

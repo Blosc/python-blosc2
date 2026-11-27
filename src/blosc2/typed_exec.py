@@ -15,7 +15,7 @@ import numpy as np
 from . import blosc2_ext
 from .expression_graph import _NUMPY_VALUE_PROMOTION, expression_syntax
 
-_DTYPES = {
+TYPED_RESIDENT_DTYPES = {
     "bool",
     "int8",
     "int16",
@@ -43,30 +43,30 @@ _OPS = {
 _REDUCERS = {"min", "sum", "prod", "max"}
 
 
-class _NotAdmitted(Exception):
+class TypedGraphNotAdmitted(Exception):
     pass
 
 
-def _lower(expression, operands):
+def lower_typed_graph(expression, operands, *, input_dtypes=None, syntax=None):
     from .native_graph import GraphAdapter
 
-    tree = expression_syntax(expression)[0].body
+    tree = expression_syntax(expression)[0].body if syntax is None else syntax
     if sum(1 for _ in ast.walk(tree)) > 1024:
-        raise _NotAdmitted
-    adapter = GraphAdapter(operands)
+        raise TypedGraphNotAdmitted
+    adapter = GraphAdapter(operands, input_dtypes=input_dtypes)
     try:
         root = adapter.visit(tree)
     except (ValueError, KeyError, TypeError):
-        raise _NotAdmitted from None
+        raise TypedGraphNotAdmitted from None
     names = tuple(adapter.arrays)
     if not names or len(names) > 128 or len(adapter.nodes) > 1024:
-        raise _NotAdmitted
+        raise TypedGraphNotAdmitted
     slots = {name: slot for slot, name in enumerate(names)}
     nodes, depths = [], []
     for index, node in enumerate(adapter.nodes):
         op = node["op"]
         if op not in _OPS:
-            raise _NotAdmitted
+            raise TypedGraphNotAdmitted
         if op in _REDUCERS and (
             index != root
             or node["axes"] is not None
@@ -75,10 +75,10 @@ def _lower(expression, operands):
             or node["initial"] is not None
             or node["where"] is not None
         ):
-            raise _NotAdmitted
+            raise TypedGraphNotAdmitted
         dtype = node.get("dtype") if op in {"input", "constant"} else None
-        if dtype is not None and dtype not in _DTYPES:
-            raise _NotAdmitted
+        if dtype is not None and dtype not in TYPED_RESIDENT_DTYPES:
+            raise TypedGraphNotAdmitted
         scalar = b""
         if op == "constant":
             if node["encoding"] == "ieee754-hex":
@@ -90,22 +90,22 @@ def _lower(expression, operands):
                 try:
                     scalar = np.asarray(value, dtype=dtype).tobytes()
                 except (OverflowError, ValueError):
-                    raise _NotAdmitted from None
+                    raise TypedGraphNotAdmitted from None
         args = tuple(node.get("args", ()))
         depth = 1 + max((depths[arg] for arg in args), default=0)
         if depth > 128:
-            raise _NotAdmitted
+            raise TypedGraphNotAdmitted
         depths.append(depth)
         nodes.append(
             (_OPS[op], dtype, slots.get(node.get("name"), 0), args, scalar, node.get("category") == "weak")
         )
     if len(nodes) > 1024 or sum(n[0] == 1 for n in nodes) > 128:
-        raise _NotAdmitted
+        raise TypedGraphNotAdmitted
     return tuple(nodes), names, root, adapter.nodes[root]["op"] in _REDUCERS
 
 
 @lru_cache(maxsize=32)
-def _prepare(nodes, ninputs, root):
+def prepare_typed_plan(nodes, ninputs, root):
     # Cache only descriptor semantics/exact captures. Neither arrays nor results
     # reach this key or the native plan.
     descriptor = []
@@ -144,10 +144,16 @@ def compute_typed_resident_if_eligible(expr, item, tile, options):
         return None
     shape = None
     for value in expr.operands.values():
+        if type(value) is not np.ndarray and not (
+            type(value) in {int, float, bool} or isinstance(value, (np.integer, np.floating, np.bool_))
+        ):
+            # Shared GraphAdapter also knows compressed arrays. They are not
+            # resident buffers and must retain storage admission before prepare.
+            return None
         if type(value) is np.ndarray:
             if (
                 value.ndim > 16
-                or value.dtype.name not in _DTYPES
+                or value.dtype.name not in TYPED_RESIDENT_DTYPES
                 or not value.dtype.isnative
                 or not value.flags.aligned
                 or not value.flags.c_contiguous
@@ -159,8 +165,8 @@ def compute_typed_resident_if_eligible(expr, item, tile, options):
     if shape is None or len(selection) > len(shape):
         return None
     try:
-        nodes, names, root, reduction = _lower(expr.expression, expr.operands)
-    except (_NotAdmitted, SyntaxError, RecursionError):
+        nodes, names, root, reduction = lower_typed_graph(expr.expression, expr.operands)
+    except (TypedGraphNotAdmitted, SyntaxError, RecursionError):
         return None
     items = math.prod(shape)
     if (
@@ -169,7 +175,7 @@ def compute_typed_resident_if_eligible(expr, item, tile, options):
         or (not reduction and not options.get("_getitem") and output is None)
     ):
         return None
-    plan = _prepare(nodes, len(names), root)
+    plan = prepare_typed_plan(nodes, len(names), root)
     # Use core-inferred width, and charge only maps feeding reductions.
     # Direct-output maps and identity reductions need no mapped scratch.
     info = plan.info()

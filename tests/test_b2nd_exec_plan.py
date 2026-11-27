@@ -34,7 +34,9 @@ def test_typed_prepare_copies_descriptor_and_schedule_owns_plan():
     schedule = plan.specialize([("int64", (17,)), ("int64", (17,))], 8, 64)
     del plan
     gc.collect()
-    assert schedule.info() == {
+    geometry = schedule.info()
+    assert geometry.pop("schedule_metadata_bytes") > 0
+    assert geometry == {
         "items": 17,
         "tile_items": 8,
         "mapped_bytes": 64,
@@ -143,7 +145,7 @@ def test_typed_failure_never_replays_adapter(monkeypatch):
         def specialize(self, *args):
             return FailedSchedule()
 
-    monkeypatch.setattr(typed_exec, "_prepare", lambda *args: Prepared())
+    monkeypatch.setattr(typed_exec, "prepare_typed_plan", lambda *args: Prepared())
     with blosc2.expression_evaluation("safe"):
         expr = blosc2.lazyexpr("min(x + 1)", {"x": np.arange(7, dtype=np.int64)})
     with pytest.raises(ValueError, match="injected typed execution"):
@@ -304,3 +306,106 @@ def test_typed_sum_order_and_empty_identities():
         assert result.dtype == np.dtype("float32")
         assert result == identity
         assert empty._native_execution_report["map_calls"] == 0
+
+
+@pytest.mark.parametrize(
+    "expression", ["x + .5", "x + 1.", "x * -0.0", "min(x + y * 3)", "sum(x)", "prod(x)", "max(x)"]
+)
+def test_named_typed_graph_matches_explicit_adapter(expression):
+    inputs = {"x": np.arange(1, 7, dtype="float64").reshape(2, 3), "y": np.full((2, 3), 2, dtype="float64")}
+    if "y" not in expression:
+        inputs.pop("y")
+    dtypes = dict.fromkeys(inputs, "float64")
+    baseline = NativeGraph.from_expression(expression, dtypes, jit=False, _executor="adapter")
+    typed = NativeGraph.from_expression(expression, dtypes, jit=False, _executor="c-blosc2")
+    assert typed.input_dtypes == baseline.input_dtypes
+    assert typed.inferred_dtype == baseline.inferred_dtype
+    assert typed.reduction_info() == baseline.reduction_info()
+    assert typed.to_json() == baseline.to_json()  # Explicit compatibility export only.
+    with blosc2.compute_options(math_backend="system"):
+        assert typed.to_json() == baseline.to_json()
+    metadata = {name: (value.dtype, value.shape) for name, value in inputs.items()}
+    schedule = typed.specialize(metadata, 2)
+    assert schedule.info()["schedule_metadata_bytes"] > 0
+    assert typed.info()["plan_metadata_bytes"] > 0
+    result, report = schedule.execute(inputs)
+    expected = baseline.evaluate(inputs, tile_items=2)
+    assert schedule.stage_info(0) == baseline.specialize(metadata, 2).stage_info(0)
+    assert result.shape == expected.shape == schedule.info()["shape"]
+    assert result.tobytes() == expected.tobytes()
+    assert report["route"] == "c-blosc2-typed-resident"
+
+
+def test_named_typed_graph_has_no_adapter_prepare_or_borrow(monkeypatch):
+    from blosc2 import graph_plan
+    from blosc2.typed_exec import prepare_typed_plan
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("typed metadata/execution reached the adapter")
+
+    monkeypatch.setattr(graph_plan, "NativeGraphHandle", forbidden)
+    plan = NativeGraph.from_expression("sum(x * 2)", {"x": "int16"}, jit=False, _executor="c-blosc2")
+    assert plan._handle.resident_artifact() is None
+    assert plan._handle.reduction_artifact() is None
+    assert plan.info()["map_dtype"] == np.dtype("int16")
+    schedule = plan.specialize({"x": ("int16", (3,))}, 2)
+    prepare_typed_plan.cache_clear()
+    del plan
+    gc.collect()
+    actual, _ = schedule.execute({"x": np.array([1, 2, 3], dtype="int16")})
+    assert actual.dtype == np.dtype("int64")
+    assert actual == 12
+    with pytest.raises(NotImplementedError, match="parallel"):
+        schedule.execute({}, workers=2)
+
+
+@pytest.mark.parametrize(
+    "expression", ["x.min()", "x ** 2", "x + 0x10", "x + 1_000", "sum(x, axis=0)", "x + 00.1", "x + 1.e3"]
+)
+def test_named_typed_graph_restricts_grammar_and_options(expression):
+    with pytest.raises(NotImplementedError):
+        NativeGraph.from_expression(expression, {"x": "float64"}, jit=False, _executor="c-blosc2")
+
+
+def test_typed_frontend_scope_restores_after_parser_exception():
+    with pytest.raises(RuntimeError, match="injected"):
+        with blosc2_ext._TypedFPScope():
+            raise RuntimeError("injected frontend failure")
+    with blosc2_ext._TypedFPScope():
+        plan = NativeGraph.from_expression("min(x)", {"x": "int64"}, jit=False, _executor="c-blosc2")
+    assert plan.inferred_dtype == np.dtype("int64")
+
+
+def test_named_typed_graph_rejects_unreachable_signature():
+    for executor in ("adapter", "c-blosc2"):
+        with pytest.raises(ValueError, match="unreachable"):
+            NativeGraph.from_expression(
+                "x + 1", {"x": "int64", "unused": "int64"}, jit=False, _executor=executor
+            )
+
+
+def test_named_typed_graph_fp_raise_parity():
+    from blosc2.menudet_kernel import MenudetError
+
+    x = np.array([np.finfo("float64").max, np.finfo("float64").max, 1.0])
+    failures = []
+    for executor in ("adapter", "c-blosc2"):
+        graph = NativeGraph.from_expression("sum(x)", {"x": "float64"}, jit=False, _executor=executor)
+        with pytest.raises(MenudetError) as caught:
+            graph.evaluate({"x": x}, tile_items=1, raise_mask=4)
+        failures.append((caught.value.status, caught.value.fp_status))
+    assert failures[0] == failures[1] == ("evaluation_error", {"flags": 4, "supported": True})
+
+
+def test_typed_resident_rejects_mixed_storage_before_prepare(monkeypatch):
+    from blosc2 import typed_exec
+
+    values = np.arange(5, dtype="int64")
+    with blosc2.expression_evaluation("safe"):
+        expr = blosc2.lazyexpr("min(x + y)", {"x": values, "y": blosc2.asarray(values)})
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("mixed storage entered resident preparation")
+
+    monkeypatch.setattr(typed_exec, "prepare_typed_plan", forbidden)
+    assert typed_exec.compute_typed_resident_if_eligible(expr, (), 2, {}) is None

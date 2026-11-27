@@ -12,7 +12,7 @@ from resident_min_pilot import medians
 
 import blosc2
 from blosc2.graph_plan import NativeGraph
-from blosc2.typed_exec import _lower, _prepare
+from blosc2.typed_exec import lower_typed_graph, prepare_typed_plan
 
 
 def main():
@@ -30,15 +30,17 @@ def main():
     rng = np.random.default_rng(42)
     inputs = {name: rng.integers(-(2**60), 2**60, size=args.items) for name in ("x", "y")}
     metadata = {name: (value.dtype, value.shape) for name, value in inputs.items()}
-    nodes, names, root, _ = _lower(expression, inputs)
+    nodes, names, root, _ = lower_typed_graph(expression, inputs)
     arrays = tuple(inputs[name] for name in names)
     typed_metadata = tuple(metadata[name] for name in names)
 
     def prepare_typed():
-        return _prepare.__wrapped__(nodes, len(names), root)
+        return prepare_typed_plan.__wrapped__(nodes, len(names), root)
 
     def prepare_adapter():
-        return NativeGraph.from_expression(expression, dict.fromkeys(names, "int64"), jit=False)
+        return NativeGraph.from_expression(
+            expression, dict.fromkeys(names, "int64"), jit=False, _executor="adapter"
+        )
 
     typed = prepare_typed()
     adapter = prepare_adapter()
@@ -50,7 +52,7 @@ def main():
     assert actual.shape == expected.shape
     assert actual.tobytes() == expected.tobytes()
     assert report["fp_flags"] == reference["fp_flags"]
-    a, _ = medians(lambda: _lower(expression, inputs), lambda: None, args.repeat)
+    a, _ = medians(lambda: lower_typed_graph(expression, inputs), lambda: None, args.repeat)
     print(f"{'phase':<24} {'typed us':>12} {'adapter us':>12}")
     print(f"{'frontend':<24} {a:12.2f} {'in prepare':>12}")
     for label, first, second in (

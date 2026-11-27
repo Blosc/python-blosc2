@@ -61,7 +61,9 @@ def main():
                 return blosc2.blosc2_ext._ResidentMapMinI64Plan(source, count, args.tile)
 
             def prepare_adapter(metadata=metadata):
-                return NativeGraph.from_expression(args.expression, {"x": "int64"}, jit=False)
+                return NativeGraph.from_expression(
+                    args.expression, {"x": "int64"}, jit=False, _executor="adapter"
+                )
 
             pilot = prepare_pilot()
             adapter_plan = prepare_adapter()

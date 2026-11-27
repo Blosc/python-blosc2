@@ -21,6 +21,7 @@ typedef struct {
 typedef struct {
     int dtype, reduction, identity, map_dtype;
     size_t itemsize, ninputs, nitems, tile_items, mapped_bytes, reducer_bytes, output_items;
+    size_t plan_metadata_bytes, schedule_metadata_bytes;
 } b2_exec_info;
 
 typedef struct {
@@ -30,6 +31,14 @@ typedef struct {
 
 #ifdef B2_HAVE_B2ND_EXEC
 #include "b2nd-exec.h"
+typedef me_fp_scope b2_exec_fp_scope;
+
+static int b2_exec_fp_begin(b2_exec_fp_scope *scope, me_fp_status *status, me_error *error) {
+    return me_fp_scope_begin(scope, status, error);
+}
+static int b2_exec_fp_end(b2_exec_fp_scope *scope, me_error *error) {
+    return me_fp_scope_end(scope, error);
+}
 
 static int b2_exec_available(void) { return 1; }
 static int b2_exec_prepare(const b2_exec_node *nodes, size_t count, size_t ninputs,
@@ -78,6 +87,7 @@ static int b2_exec_describe(const void *plan, b2_exec_info *out) {
         out->ninputs = info.ninputs;
         out->identity = info.identity;
         out->reduction = info.reduction;
+        out->plan_metadata_bytes = info.plan_metadata_bytes;
     }
     return rc;
 }
@@ -108,6 +118,7 @@ static int b2_exec_schedule_describe(const void *schedule, b2_exec_info *out) {
         out->mapped_bytes = info.mapped_bytes;
         out->reducer_bytes = info.reducer_bytes;
         out->output_items = info.output_items;
+        out->schedule_metadata_bytes = info.schedule_metadata_bytes;
     }
     return rc;
 }
@@ -124,6 +135,18 @@ static int b2_exec_execute(const void *schedule, const me_buffer *inputs, size_t
     return rc;
 }
 #else
+typedef union {
+    long double alignment;
+    unsigned char storage[256];
+} b2_exec_fp_scope;
+static int b2_exec_fp_begin(b2_exec_fp_scope *scope, me_fp_status *status, me_error *error) {
+    (void)scope; (void)status; (void)error;
+    return ME_ERR_UNSUPPORTED;
+}
+static int b2_exec_fp_end(b2_exec_fp_scope *scope, me_error *error) {
+    (void)scope; (void)error;
+    return ME_ERR_UNSUPPORTED;
+}
 static int b2_exec_available(void) { return 0; }
 static int b2_exec_prepare(const b2_exec_node *nodes, size_t count, size_t ninputs,
                            uint32_t root, int execution, void **out, me_error *error) {
