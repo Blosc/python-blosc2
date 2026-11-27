@@ -72,7 +72,9 @@ def test_typed_backend_reports_and_concurrent_schedule():
     from concurrent.futures import ThreadPoolExecutor
 
     for execution in (0, 1):
-        plan = blosc2_ext._TypedExecPlan(descriptor("float64"), 2, 5, execution=execution)
+        plan = blosc2_ext._TypedExecPlan(
+            descriptor("float64"), 2, 5, execution=execution, jit_compiler=2, math_backend=2
+        )
         prepared_jit = plan.info()["has_jit"]
         if execution == 0:
             assert not prepared_jit
@@ -91,6 +93,10 @@ def test_typed_backend_reports_and_concurrent_schedule():
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             assert list(pool.map(evaluate, range(6))) == [-2 * (36 + offset) for offset in range(6)]
+        x = np.arange(37, dtype=np.float64)
+        with pytest.raises(ValueError, match="scratch budget"):
+            schedule.execute((x, -x), workers=1, max_worker_scratch=63)
+        assert evaluate(0) == -72
 
     identity = blosc2_ext._TypedExecPlan([{"op": 0, "dtype": "float64", "slot": 0}], 1, 0, execution=1)
     x = np.arange(17, dtype=np.float64)
@@ -99,6 +105,9 @@ def test_typed_backend_reports_and_concurrent_schedule():
     assert not report["has_jit"]
     assert report["jit_calls"] == report["interpreter_calls"] == 0
     assert report["direct_tiles"] == 3
+    for policy in ({"jit_compiler": 99}, {"math_backend": 99}):
+        with pytest.raises(ValueError, match="options"):
+            blosc2_ext._TypedExecPlan(descriptor("float64"), 2, 5, **policy)
 
 
 def test_typed_multiple_inputs_map_min_and_no_old_executor(monkeypatch):
@@ -374,6 +383,38 @@ def test_named_typed_graph_matches_explicit_adapter(expression):
     assert result.shape == expected.shape == schedule.info()["shape"]
     assert result.tobytes() == expected.tobytes()
     assert report["route"] == "c-blosc2-typed-resident"
+
+
+def test_named_typed_backend_policy_and_cache_separation():
+    values = {"x": np.arange(17, dtype=np.float64), "y": np.full(17, 2, dtype=np.float64)}
+    metadata = {name: (value.dtype, value.shape) for name, value in values.items()}
+    with blosc2.compute_options(jit_backend="cc", math_backend="system"):
+        interpreted = NativeGraph.from_expression(
+            "min(x + y * 3)", dict.fromkeys(values, "float64"), jit=False, _executor="c-blosc2"
+        )
+        preferred = NativeGraph.from_expression(
+            "min(x + y * 3)", dict.fromkeys(values, "float64"), jit=True, _executor="c-blosc2"
+        )
+    assert interpreted._handle._plan is not preferred._handle._plan
+    assert not interpreted.has_jit
+    for graph in (interpreted, preferred):
+        result, report = graph.specialize(metadata, 4).execute(values)
+        assert result == 6
+        assert report["jit_calls"] == (5 if graph.has_jit else 0)
+        assert report["interpreter_calls"] == (0 if graph.has_jit else 5)
+    if preferred.has_jit:
+        with blosc2.compute_options(jit_backend="cc", math_backend="system"):
+            required = NativeGraph.from_expression(
+                "min(x + y * 3)",
+                dict.fromkeys(values, "float64"),
+                require_jit=True,
+                _executor="c-blosc2",
+            )
+        assert required.has_jit
+        assert required._handle._plan is not preferred._handle._plan
+        result, report = required.specialize(metadata, 4).execute(values)
+        assert result == 6
+        assert report["jit_calls"] == 5
 
 
 def test_named_typed_graph_has_no_adapter_prepare_or_borrow(monkeypatch):

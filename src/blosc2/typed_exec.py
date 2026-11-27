@@ -141,7 +141,7 @@ def lower_typed_graph(expression, operands, *, input_dtypes=None, syntax=None):
 
 
 @lru_cache(maxsize=32)
-def prepare_typed_plan(nodes, ninputs, root):
+def prepare_typed_plan(nodes, ninputs, root, execution=0, jit_compiler=0, math_backend=0):
     # Cache only descriptor semantics/exact captures. Neither arrays nor results
     # reach this key or the native plan.
     descriptor = []
@@ -170,7 +170,9 @@ def prepare_typed_plan(nodes, ninputs, root):
             node["initial_scalar"] = init_scalar
             node["initial_weak"] = init_weak
         descriptor.append(node)
-    return blosc2_ext._TypedExecPlan(descriptor, ninputs, root)
+    return blosc2_ext._TypedExecPlan(
+        descriptor, ninputs, root, execution=execution, jit_compiler=jit_compiler, math_backend=math_backend
+    )
 
 
 def _resident_broadcast_shape(operands, selection):

@@ -49,7 +49,7 @@ cdef extern from "b2nd_exec_bridge.h":
         size_t capacity, offset
         int64_t strides[16]
     int b2_exec_available()
-    int b2_exec_prepare(const b2_exec_node *, size_t, size_t, uint32_t, int, void **, me_error *) nogil
+    int b2_exec_prepare(const b2_exec_node *, size_t, size_t, uint32_t, int, int, int, void **, me_error *) nogil
     void b2_exec_free(void *)
     void b2_exec_schedule_free(void *)
     int b2_exec_describe(const void *, b2_exec_info *)
@@ -226,7 +226,8 @@ cdef class _TypedExecPlan:
     cdef void *_plan
     cdef b2_exec_info _info
 
-    def __cinit__(self, nodes, size_t ninputs, uint32_t root, int execution=0):
+    def __cinit__(self, nodes, size_t ninputs, uint32_t root, int execution=0,
+                  int jit_compiler=0, int math_backend=0):
         cdef b2_exec_node native[1024]
         cdef me_error error
         cdef size_t count = len(nodes)
@@ -296,7 +297,8 @@ cdef class _TypedExecPlan:
                 memcpy(native[i].initial_scalar, <const char *>initial_scalar, len(initial_scalar))
                 native[i].initial_weak = bool(node.get("initial_weak", False))
         with nogil:
-            rc = b2_exec_prepare(native, count, ninputs, root, execution, &self._plan, &error)
+            rc = b2_exec_prepare(native, count, ninputs, root, execution,
+                                 jit_compiler, math_backend, &self._plan, &error)
         if rc:
             raise_exec_error(rc, &error)
         if b2_exec_describe(self._plan, &self._info):

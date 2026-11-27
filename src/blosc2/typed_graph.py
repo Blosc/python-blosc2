@@ -59,14 +59,13 @@ class TypedGraphHandle:
 
         policy = blosc2.jit_config.execution_options()
         if (
-            jit is not False
-            or require_jit
+            (jit is not False and jit is not True and not require_jit)
             or menudet_execution_environment()
-            or policy["jit_backend"] is not None
-            or policy["math_backend"] is not None
+            or policy["jit_backend"] not in {None, "cc", "tcc"}
+            or policy["math_backend"] not in {None, "system", "sleef", "accelerate"}
             or policy["fp_accuracy"] != blosc2.FPAccuracy.DEFAULT
         ):
-            raise NotImplementedError("Typed graph facade currently requires strict interpreter policy")
+            raise NotImplementedError("Unsupported typed graph backend or environment policy")
         _check_text(expression)
         dtypes = {name: np.dtype(dtype).newbyteorder("=") for name, dtype in input_dtypes.items()}
         if (
@@ -103,7 +102,12 @@ class TypedGraphHandle:
                 reachable.update(nodes[index][3])
         if len(reachable) != len(nodes):
             raise ValueError("unreachable graph node")
-        self._plan = prepare_typed_plan(nodes, len(names), root)
+        execution = 2 if require_jit else 1 if jit else 0
+        compiler = {None: 0, "tcc": 1, "cc": 2}[policy["jit_backend"]]
+        math_backend = {None: 0, "system": 2, "sleef": 3, "accelerate": 4}[policy["math_backend"]]
+        self._plan = prepare_typed_plan(nodes, len(names), root, execution, compiler, math_backend)
+        self._jit_backend = policy["jit_backend"]
+        self._math_backend = policy["math_backend"]
         self._names = names
         self._dtypes = dtypes
         self._expression = expression
@@ -119,7 +123,7 @@ class TypedGraphHandle:
             "inputs": dict(self._dtypes),
             "inferred_dtype": native["inferred_dtype"],
             "map_dtype": native["map_dtype"],
-            "has_jit": False,
+            "has_jit": native["has_jit"],
             "stages": 1,
             "partitionable": native["partitionable"],
             "plan_metadata_bytes": native["plan_metadata_bytes"],
@@ -163,7 +167,10 @@ class TypedGraphHandle:
         if menudet_execution_environment():
             raise NotImplementedError("Compatibility export requires the captured strict environment")
         with blosc2.jit_config.compute_options(
-            jit=False, jit_backend=None, fp_accuracy=blosc2.FPAccuracy.DEFAULT, math_backend=None
+            jit=False,
+            jit_backend=self._jit_backend,
+            fp_accuracy=blosc2.FPAccuracy.DEFAULT,
+            math_backend=self._math_backend,
         ):
             return NativeGraphHandle.from_expression(
                 self._expression.encode("utf-8"), self._dtypes, 2, False

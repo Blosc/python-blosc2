@@ -68,7 +68,8 @@ static int b2_exec_fp_end(b2_exec_fp_scope *scope, me_error *error) {
 
 static int b2_exec_available(void) { return 1; }
 static int b2_exec_prepare(const b2_exec_node *nodes, size_t count, size_t ninputs,
-                           uint32_t root, int execution, void **out, me_error *error) {
+                           uint32_t root, int execution, int compiler, int math_backend,
+                           void **out, me_error *error) {
     *out = NULL;
     if (!count || count > B2ND_EXEC_MAX_NODES) {
         return ME_ERR_INVALID_ARG;
@@ -105,6 +106,8 @@ static int b2_exec_prepare(const b2_exec_node *nodes, size_t count, size_t ninpu
     b2nd_exec_descriptor descriptor = {sizeof(descriptor), native, count, ninputs, root};
     b2nd_exec_options options = B2ND_EXEC_OPTIONS_INITIALIZER;
     options.execution = (me_execution_policy)execution;
+    options.jit_compiler = (me_jit_compiler)compiler;
+    options.math_backend = (me_math_backend)math_backend;
     b2nd_exec_plan *plan = NULL;
     int rc = b2nd_exec_prepare(&descriptor, &options, &plan, error);
     free(native);
@@ -222,7 +225,7 @@ static int b2_exec_execute_into(const void *schedule, const b2_exec_view *inputs
     b2nd_exec_report native = {0};
     b2nd_exec_jobs jobs = {sizeof(jobs), workers ? workers : 1, worker_scratch};
     int rc = b2nd_exec_execute_into(schedule, views, ninputs, &out_view, raise_mask,
-                                    max_gather_bytes, workers > 1 ? &jobs : NULL, &native, error);
+                                    max_gather_bytes, &jobs, &native, error);
     b2_exec_fill_report(report, &native);
     return rc;
 }
@@ -240,7 +243,7 @@ static int b2_exec_execute_alias(const void *schedule, const b2_exec_view *input
     b2nd_exec_report native = {0};
     b2nd_exec_jobs jobs = {sizeof(jobs), workers ? workers : 1, worker_scratch};
     int rc = b2nd_exec_execute_alias(schedule, views, ninputs, &out_view, staging_budget, raise_mask,
-                                     max_gather_bytes, workers > 1 ? &jobs : NULL, &native, error);
+                                     max_gather_bytes, &jobs, &native, error);
     b2_exec_fill_report(report, &native);
     return rc;
 }
@@ -259,8 +262,10 @@ static int b2_exec_fp_end(b2_exec_fp_scope *scope, me_error *error) {
 }
 static int b2_exec_available(void) { return 0; }
 static int b2_exec_prepare(const b2_exec_node *nodes, size_t count, size_t ninputs,
-                           uint32_t root, int execution, void **out, me_error *error) {
+                           uint32_t root, int execution, int compiler, int math_backend,
+                           void **out, me_error *error) {
     (void)nodes; (void)count; (void)ninputs; (void)root; (void)execution; (void)error;
+    (void)compiler; (void)math_backend;
     *out = NULL;
     return ME_ERR_UNSUPPORTED;
 }
