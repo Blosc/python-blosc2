@@ -9,6 +9,10 @@ cdef extern from "b2nd_exec_bridge.h":
         int args[2]
         size_t itemsize, scalar_size
         unsigned char scalar[16]
+        int has_axes, keepdims, has_initial, initial_dtype, initial_weak
+        size_t naxes, initial_size
+        int axes[16]
+        unsigned char initial_scalar[16]
     ctypedef struct b2_exec_meta:
         int dtype, ndim
         size_t itemsize
@@ -19,6 +23,10 @@ cdef extern from "b2nd_exec_bridge.h":
         size_t plan_metadata_bytes, schedule_metadata_bytes
         size_t ndim, broadcast_gather_bytes
         int64_t shape[16]
+        int has_axes, keepdims, has_initial, pairwise_sum
+        size_t naxes, output_ndim, reduction_groups, reduction_lanes
+        int axes[16]
+        int64_t output_shape[16]
     ctypedef struct me_buffer:
         const void *data
         size_t capacity
@@ -29,21 +37,29 @@ cdef extern from "b2nd_exec_bridge.h":
         size_t tiles, map_calls, direct_tiles, mapped_bytes
         me_fp_status fp
         size_t tasks, worker_bytes, gather_bytes, gathered_bytes
+        size_t staging_bytes
     ctypedef struct b2_exec_view:
         const void *base
         size_t capacity, offset
         int64_t strides[16]
         unsigned byte_order
+    ctypedef struct b2_exec_output_view:
+        void *base
+        size_t capacity, offset
+        int64_t strides[16]
     int b2_exec_available()
     int b2_exec_prepare(const b2_exec_node *, size_t, size_t, uint32_t, int, void **, me_error *) nogil
     void b2_exec_free(void *)
     void b2_exec_schedule_free(void *)
     int b2_exec_describe(const void *, b2_exec_info *)
-    int b2_exec_specialize(const void *, const b2_exec_meta *, size_t, size_t, size_t,
+    int b2_exec_specialize(const void *, const b2_exec_meta *, size_t, size_t, size_t, int,
                           void **, me_error *) nogil
     int b2_exec_schedule_describe(const void *, b2_exec_info *)
-    int b2_exec_execute_views(const void *, const b2_exec_view *, size_t, me_mut_buffer,
-                              unsigned, size_t, size_t, size_t, b2_exec_report *, me_error *) nogil
+    int b2_exec_execute_into(const void *, const b2_exec_view *, size_t, const b2_exec_output_view *,
+                             unsigned, size_t, size_t, size_t, b2_exec_report *, me_error *) nogil
+    int b2_exec_execute_alias(const void *, const b2_exec_view *, size_t, const b2_exec_output_view *,
+                              size_t, unsigned, size_t, size_t, size_t, b2_exec_report *,
+                              me_error *) nogil
 
 
 def _b2nd_exec_available():
@@ -162,17 +178,46 @@ cdef object typed_view_binding(np.ndarray array, b2_exec_view *view):
     return root
 
 
-cdef object typed_output_binding(np.ndarray array, me_mut_buffer *buffer):
-    """Validate contiguous output extent against its real owning allocation."""
+cdef object typed_output_view_binding(np.ndarray array, b2_exec_output_view *out_view):
+    """Validate writable native output view extent without requiring contiguity."""
     cdef b2_exec_view view
-    cdef object root = typed_view_binding(array, &view)
-    buffer.data = np.PyArray_DATA(array)
-    buffer.capacity = 0
-    if array.nbytes == 0:
+    cdef object root
+    cdef size_t low, high, mag, count, span
+    cdef int64_t stride
+    cdef int i
+    if not array.dtype.isnative:
+        raise ValueError("Typed output must use native byte order")
+    if not array.flags.writeable:
+        raise ValueError("Typed output must be writable storage")
+    root = typed_view_binding(array, &view)
+    memset(out_view, 0, sizeof(b2_exec_output_view))
+    for i in range(array.ndim):
+        out_view.strides[i] = view.strides[i]
+    out_view.base = <void *>view.base
+    out_view.capacity = view.capacity
+    out_view.offset = view.offset
+    if array.size == 0:
         return root
-    if <size_t>array.nbytes > view.capacity - view.offset:
+    low = view.offset
+    high = view.offset
+    for i in range(array.ndim):
+        stride = view.strides[i]
+        if array.shape[i] > 1 and stride != 0:
+            mag = (<size_t>(-(<int64_t>(stride + 1))) + 1) if stride < 0 else <size_t>stride
+            count = <size_t>(array.shape[i] - 1)
+            if count > view.capacity / mag:
+                raise ValueError("Typed buffer exceeds its allocation extent")
+            span = count * mag
+            if stride < 0:
+                if span > low:
+                    raise ValueError("Typed buffer exceeds its allocation extent")
+                low -= span
+            else:
+                if span > view.capacity - high:
+                    raise ValueError("Typed buffer exceeds its allocation extent")
+                high += span
+    if <size_t>array.dtype.itemsize > view.capacity - high:
         raise ValueError("Typed buffer exceeds its allocation extent")
-    buffer.capacity = view.capacity - view.offset
     return root
 
 
@@ -185,7 +230,7 @@ cdef class _TypedExecPlan:
         cdef me_error error
         cdef size_t count = len(nodes)
         cdef int rc, i, j
-        cdef bytes scalar
+        cdef bytes scalar, initial_scalar
         self._plan = NULL
         if not b2_exec_available():
             raise NotImplementedError("Build with the C-Blosc2 typed executor")
@@ -194,7 +239,19 @@ cdef class _TypedExecPlan:
         memset(native, 0, sizeof(native))
         memset(&error, 0, sizeof(error))
         for i, node in enumerate(nodes):
-            if node.keys() - {"op", "dtype", "slot", "args", "scalar", "weak"}:
+            if node.keys() - {
+                "op",
+                "dtype",
+                "slot",
+                "args",
+                "scalar",
+                "weak",
+                "axes",
+                "keepdims",
+                "initial_dtype",
+                "initial_scalar",
+                "initial_weak",
+            }:
                 raise ValueError("Unsupported typed node field")
             native[i].op = node["op"]
             native[i].slot = node.get("slot", 0)
@@ -216,6 +273,27 @@ cdef class _TypedExecPlan:
             native[i].scalar_size = len(scalar)
             memcpy(native[i].scalar, <const char *>scalar, len(scalar))
             native[i].weak = node.get("weak", False)
+            if "axes" in node and node["axes"] is not None:
+                axes = node["axes"]
+                if len(axes) > 16:
+                    raise ValueError("Typed reduction axes limit exceeded")
+                native[i].has_axes = 1
+                native[i].naxes = len(axes)
+                for j, axis in enumerate(axes):
+                    native[i].axes[j] = axis
+            native[i].keepdims = bool(node.get("keepdims", False))
+            if "initial_dtype" in node and node["initial_dtype"] is not None:
+                init_dtype = np.dtype(node["initial_dtype"])
+                if not init_dtype.isnative:
+                    raise ValueError("Typed descriptors require native initial bytes")
+                initial_scalar = node["initial_scalar"]
+                if len(initial_scalar) > 16 or len(initial_scalar) != init_dtype.itemsize:
+                    raise ValueError("Typed initial scalar size mismatch")
+                native[i].has_initial = 1
+                native[i].initial_dtype = _me_dtype_from_numpy_dtype(init_dtype)
+                native[i].initial_size = len(initial_scalar)
+                memcpy(native[i].initial_scalar, <const char *>initial_scalar, len(initial_scalar))
+                native[i].initial_weak = bool(node.get("initial_weak", False))
         with nogil:
             rc = b2_exec_prepare(native, count, ninputs, root, execution, &self._plan, &error)
         if rc:
@@ -227,16 +305,24 @@ cdef class _TypedExecPlan:
         b2_exec_free(self._plan)
 
     def info(self):
+        axes = (
+            tuple(self._info.axes[i] for i in range(self._info.naxes))
+            if self._info.has_axes
+            else None
+        )
         return {"inferred_dtype": _numpy_dtype_from_me_dtype(<me_dtype>self._info.dtype),
                 "map_dtype": _numpy_dtype_from_me_dtype(<me_dtype>self._info.map_dtype),
                 "plan_metadata_bytes": self._info.plan_metadata_bytes,
                 "ninputs": self._info.ninputs, "reduction": bool(self._info.reduction),
                 "identity": bool(self._info.identity),
                 "partitionable": bool(self._info.partitionable),
+                "axes": axes, "keepdims": bool(self._info.keepdims),
+                "initial": bool(self._info.has_initial),
                 "reducer": {0: None, 1: "sum", 2: "prod", 3: "min", 4: "max", 5: "any",
                             6: "all"}.get(self._info.reducer, "unknown")}
 
-    def specialize(self, inputs, size_t tile_items=1024, size_t max_mapped_bytes=65536):
+    def specialize(self, inputs, size_t tile_items=1024, size_t max_mapped_bytes=65536,
+                   bint pairwise_sum=False):
         cdef b2_exec_meta metadata[128]
         cdef size_t count = len(inputs)
         cdef int i, j, rc
@@ -257,7 +343,7 @@ cdef class _TypedExecPlan:
                 metadata[i].shape[j] = extent
         with nogil:
             rc = b2_exec_specialize(self._plan, metadata, count, tile_items, max_mapped_bytes,
-                                    &result._schedule, &error)
+                                    pairwise_sum, &result._schedule, &error)
         if rc:
             raise_exec_error(rc, &error)
         result._owner = self
@@ -285,13 +371,18 @@ cdef class _TypedExecSchedule:
                 "mapped_bytes": self._info.mapped_bytes, "reducer_bytes": self._info.reducer_bytes,
                 "output_items": self._info.output_items,
                 "shape": tuple(self._info.shape[i] for i in range(self._info.ndim)),
+                "output_shape": tuple(self._info.output_shape[i] for i in range(self._info.output_ndim)),
+                "reduction_groups": self._info.reduction_groups,
+                "reduction_lanes": self._info.reduction_lanes,
+                "pairwise_sum": bool(self._info.pairwise_sum),
                 "broadcast_gather_bytes": self._info.broadcast_gather_bytes,
                 "schedule_metadata_bytes": self._info.schedule_metadata_bytes}
 
-    def execute(self, inputs, unsigned raise_mask=0, *, out=None, size_t workers=1,
-                size_t max_worker_scratch=65536, size_t max_gather_bytes=67108864):
+    cdef object _run_into(self, object inputs, object out, bint use_alias,
+                          size_t staging_budget, unsigned raise_mask, size_t workers,
+                          size_t max_worker_scratch, size_t max_gather_bytes):
         cdef b2_exec_view views[128]
-        cdef me_mut_buffer destination
+        cdef b2_exec_output_view out_view
         cdef me_error error
         cdef b2_exec_report report
         cdef np.ndarray value, output
@@ -312,24 +403,28 @@ cdef class _TypedExecSchedule:
             if value.dtype.newbyteorder("=") != dtype or value_object.shape != shape:
                 raise ValueError("Typed input dtype/shape mismatch")
             owners.append(typed_view_binding(value, &views[i]))
-        shape = () if self._info.reduction else tuple(self._info.shape[i] for i in range(self._info.ndim))
-        dtype = _numpy_dtype_from_me_dtype(<me_dtype>self._info.dtype)
+        out_shape = tuple(self._info.output_shape[i] for i in range(self._info.output_ndim))
+        out_dtype = _numpy_dtype_from_me_dtype(<me_dtype>self._info.dtype)
         if out is None:
-            output = np.empty(shape, dtype=dtype)
+            output = np.empty(out_shape, dtype=out_dtype)
         else:
             if type(out) is not np.ndarray:
                 raise TypeError("Typed output must be an explicit NumPy buffer")
-            if out.shape != shape or out.dtype != dtype:
+            if out.shape != out_shape or out.dtype != out_dtype:
                 raise ValueError("Typed output dtype/shape mismatch")
-            if not out.flags.c_contiguous or not out.flags.aligned or not out.flags.writeable:
-                raise ValueError("Typed output must be writable aligned contiguous storage")
             output = out
-        owners.append(typed_output_binding(output, &destination))
+        owners.append(typed_output_view_binding(output, &out_view))
         memset(&error, 0, sizeof(error))
         memset(&report, 0, sizeof(report))
         with nogil:
-            rc = b2_exec_execute_views(self._schedule, views, count, destination, raise_mask,
-                                       max_gather_bytes, workers, max_worker_scratch, &report, &error)
+            if use_alias:
+                rc = b2_exec_execute_alias(
+                    self._schedule, views, count, &out_view, staging_budget, raise_mask,
+                    max_gather_bytes, workers, max_worker_scratch, &report, &error)
+            else:
+                rc = b2_exec_execute_into(
+                    self._schedule, views, count, &out_view, raise_mask,
+                    max_gather_bytes, workers, max_worker_scratch, &report, &error)
         if rc:
             raise _typed_exec_error(
                 rc, (<bytes>error.message).decode("utf-8", "replace"),
@@ -341,5 +436,19 @@ cdef class _TypedExecSchedule:
                         "input_materialization_bytes": 0,
                         "temporary_bytes": report.mapped_bytes, "reducer_bytes": self._info.reducer_bytes,
                         "gather_bytes": report.gather_bytes, "gathered_bytes": report.gathered_bytes,
+                        "staging_bytes": report.staging_bytes,
                         "tasks": report.tasks or 1, "worker_scratch_bytes": report.worker_bytes,
                         "fp_flags": report.fp.flags, "fp_supported": bool(report.fp.supported)}
+
+    def execute(self, inputs, unsigned raise_mask=0, *, out=None, size_t workers=1,
+                size_t max_worker_scratch=65536, size_t max_gather_bytes=67108864):
+        return self._run_into(inputs, out, False, 0, raise_mask, workers,
+                              max_worker_scratch, max_gather_bytes)
+
+    def execute_alias(self, inputs, size_t staging_budget, unsigned raise_mask=0, *, out,
+                      size_t workers=1, size_t max_worker_scratch=65536,
+                      size_t max_gather_bytes=67108864):
+        if out is None:
+            raise TypeError("Typed alias execution requires an explicit NumPy output buffer")
+        return self._run_into(inputs, out, True, staging_budget, raise_mask, workers,
+                              max_worker_scratch, max_gather_bytes)

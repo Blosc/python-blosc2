@@ -40,7 +40,7 @@ def _check_text(expression):
                 if mantissa.endswith(".") and len(mantissa) != len(token.string):
                     raise NotImplementedError("Unsupported decimal exponent spelling")
                 continue
-            if token.type == tokenize.OP and token.string in {"+", "-", "*", "(", ")"}:
+            if token.type == tokenize.OP and token.string in {"+", "-", "*", "(", ")", ",", "=", "[", "]"}:
                 continue
             raise NotImplementedError("Expression is outside the typed restricted-text subset")
     except tokenize.TokenError as error:
@@ -93,8 +93,8 @@ class TypedGraphHandle:
         except (TypedGraphNotAdmitted, SyntaxError, RecursionError) as error:
             raise NotImplementedError("Expression is outside the typed resident family") from error
         depths = []
-        for _, _, _, args, _, _ in nodes:
-            depths.append(1 + max((depths[arg] for arg in args), default=0))
+        for node in nodes:
+            depths.append(1 + max((depths[arg] for arg in node[3]), default=0))
         if len(nodes) > 256 or max(depths) > 64:
             raise NotImplementedError("Restricted graph resource limit exceeded")
         reachable = {root}
@@ -129,18 +129,24 @@ class TypedGraphHandle:
     def reduction_info(self):
         if self._reducer is None:
             return None
-        return {"op": self._reducer, "axes": None, "keepdims": False, "initial": False, "where": False}
+        native = self._plan.info()
+        return {
+            "op": self._reducer,
+            "axes": native["axes"],
+            "keepdims": native["keepdims"],
+            "initial": native["initial"],
+            "where": False,
+        }
 
-    def specialize(self, inputs, tile_items=1024, intermediate_budget=0):
+    def specialize(self, inputs, tile_items=1024, intermediate_budget=0, *, pairwise_sum=False):
         if set(inputs) != set(self._names):
             raise ValueError("Typed graph input names do not match the plan")
         if intermediate_budget < 0:
             raise ValueError("Invalid intermediate budget")
         metadata = tuple(inputs[name] for name in self._names)
-        native = self._plan.specialize(metadata, tile_items, 64 * 1024 * 1024)
-        return TypedGraphSchedule(
-            native, self._names, native.info()["shape"], self.info(), self._reducer is not None
-        )
+        native = self._plan.specialize(metadata, tile_items, 64 * 1024 * 1024, pairwise_sum=pairwise_sum)
+        info = native.info()
+        return TypedGraphSchedule(native, self._names, info["shape"], info["output_shape"], self.info())
 
     def resident_artifact(self):
         return None
@@ -171,9 +177,14 @@ class TypedGraphHandle:
 
 
 class TypedGraphSchedule:
-    def __init__(self, native, names, shape, plan_info, reduction):
-        self._native, self._names, self._shape, self._plan_info = native, names, shape, plan_info
-        self._output_shape = () if reduction else shape
+    def __init__(self, native, names, shape, output_shape, plan_info):
+        self._native, self._names, self._shape, self._output_shape, self._plan_info = (
+            native,
+            names,
+            shape,
+            output_shape,
+            plan_info,
+        )
 
     def info(self):
         native = self._native.info()
@@ -185,6 +196,7 @@ class TypedGraphSchedule:
             "schedule_metadata_bytes": native["schedule_metadata_bytes"],
             "iterator_scratch_bound": native["mapped_bytes"],
             "reducer_bytes": native["reducer_bytes"],
+            "pairwise_sum": native["pairwise_sum"],
         }
 
     def execute(self, inputs, raise_mask=0, *, out=None, workers=1):
@@ -196,6 +208,19 @@ class TypedGraphSchedule:
             raise ValueError("Typed graph input names do not match the schedule")
         return self._native.execute(
             tuple(inputs[name] for name in self._names), raise_mask, out=out, workers=workers
+        )
+
+    def execute_alias(self, inputs, staging_budget, raise_mask=0, *, out, workers=1):
+        if type(workers) is not int or workers < 1:
+            raise ValueError("workers must be a positive integer")
+        if set(inputs) != set(self._names):
+            raise ValueError("Typed graph input names do not match the schedule")
+        return self._native.execute_alias(
+            tuple(inputs[name] for name in self._names),
+            staging_budget,
+            raise_mask,
+            out=out,
+            workers=workers,
         )
 
     def stage_info(self, stage):

@@ -10,6 +10,10 @@ typedef struct {
     int op, dtype, slot, args[2], nargs, weak;
     size_t itemsize, scalar_size;
     unsigned char scalar[16];
+    int has_axes, keepdims, has_initial, initial_dtype, initial_weak;
+    size_t naxes, initial_size;
+    int axes[16];
+    unsigned char initial_scalar[16];
 } b2_exec_node;
 
 typedef struct {
@@ -24,12 +28,17 @@ typedef struct {
     size_t plan_metadata_bytes, schedule_metadata_bytes;
     size_t ndim, broadcast_gather_bytes;
     int64_t shape[16];
+    int has_axes, keepdims, has_initial, pairwise_sum;
+    size_t naxes, output_ndim, reduction_groups, reduction_lanes;
+    int axes[16];
+    int64_t output_shape[16];
 } b2_exec_info;
 
 typedef struct {
     size_t tiles, map_calls, direct_tiles, mapped_bytes;
     me_fp_status fp;
     size_t tasks, worker_bytes, gather_bytes, gathered_bytes;
+    size_t staging_bytes;
 } b2_exec_report;
 
 typedef struct {
@@ -38,6 +47,12 @@ typedef struct {
     int64_t strides[16];
     unsigned byte_order;
 } b2_exec_view;
+
+typedef struct {
+    void *base;
+    size_t capacity, offset;
+    int64_t strides[16];
+} b2_exec_output_view;
 
 #ifdef B2_HAVE_B2ND_EXEC
 #include "b2nd-exec.h"
@@ -74,6 +89,17 @@ static int b2_exec_prepare(const b2_exec_node *nodes, size_t count, size_t ninpu
         native[i].scalar_size = nodes[i].scalar_size;
         native[i].category = nodes[i].weak ? ME_CAPTURE_WEAK : ME_CAPTURE_TYPED;
         memcpy(native[i].scalar, nodes[i].scalar, sizeof(native[i].scalar));
+        native[i].has_axes = nodes[i].has_axes != 0;
+        native[i].naxes = nodes[i].naxes;
+        if (nodes[i].naxes && nodes[i].naxes <= B2ND_EXEC_MAX_RANK) {
+            memcpy(native[i].axes, nodes[i].axes, nodes[i].naxes * sizeof(int));
+        }
+        native[i].keepdims = nodes[i].keepdims != 0;
+        native[i].has_initial = nodes[i].has_initial != 0;
+        native[i].initial_dtype = (me_dtype)nodes[i].initial_dtype;
+        native[i].initial_category = nodes[i].initial_weak ? ME_CAPTURE_WEAK : ME_CAPTURE_TYPED;
+        native[i].initial_size = nodes[i].initial_size;
+        memcpy(native[i].initial_scalar, nodes[i].initial_scalar, sizeof(native[i].initial_scalar));
     }
     b2nd_exec_descriptor descriptor = {sizeof(descriptor), native, count, ninputs, root};
     b2nd_exec_options options = B2ND_EXEC_OPTIONS_INITIALIZER;
@@ -100,11 +126,19 @@ static int b2_exec_describe(const void *plan, b2_exec_info *out) {
         out->reducer = (int)info.reducer;
         out->partitionable = info.partitionable;
         out->plan_metadata_bytes = info.plan_metadata_bytes;
+        out->has_axes = info.has_axes;
+        out->naxes = info.naxes;
+        if (info.naxes && info.naxes <= B2ND_EXEC_MAX_RANK) {
+            memcpy(out->axes, info.axes, info.naxes * sizeof(int));
+        }
+        out->keepdims = info.keepdims;
+        out->has_initial = info.has_initial;
     }
     return rc;
 }
 static int b2_exec_specialize(const void *plan, const b2_exec_meta *inputs, size_t ninputs,
-                              size_t tile, size_t budget, void **out, me_error *error) {
+                              size_t tile, size_t budget, int pairwise_sum, void **out,
+                              me_error *error) {
     *out = NULL;
     if (ninputs > B2ND_EXEC_MAX_INPUTS) {
         return ME_ERR_INVALID_ARG;
@@ -117,7 +151,8 @@ static int b2_exec_specialize(const void *plan, const b2_exec_meta *inputs, size
         memcpy(metadata[i].shape, inputs[i].shape, sizeof(metadata[i].shape));
     }
     b2nd_exec_schedule *schedule = NULL;
-    int rc = b2nd_exec_specialize(plan, metadata, ninputs, tile, budget, &schedule, error);
+    int rc = b2nd_exec_specialize_ex(plan, metadata, ninputs, tile, budget, pairwise_sum != 0,
+                                     &schedule, error);
     *out = schedule;
     return rc;
 }
@@ -134,17 +169,16 @@ static int b2_exec_schedule_describe(const void *schedule, b2_exec_info *out) {
         out->ndim = info.ndim;
         out->broadcast_gather_bytes = info.broadcast_gather_bytes;
         memcpy(out->shape, info.shape, sizeof(out->shape));
+        out->output_ndim = info.output_ndim;
+        memcpy(out->output_shape, info.output_shape, sizeof(out->output_shape));
+        out->reduction_groups = info.reduction_groups;
+        out->reduction_lanes = info.reduction_lanes;
+        out->pairwise_sum = info.pairwise_sum;
     }
     return rc;
 }
-static int b2_exec_execute_views(const void *schedule, const b2_exec_view *inputs, size_t ninputs,
-                                 me_mut_buffer output, unsigned raise_mask,
-                                 size_t max_gather_bytes, size_t workers, size_t worker_scratch,
-                                 b2_exec_report *report, me_error *error) {
-    if (ninputs > B2ND_EXEC_MAX_INPUTS) {
-        return ME_ERR_INVALID_ARG;
-    }
-    b2nd_exec_view views[B2ND_EXEC_MAX_INPUTS] = {0};
+static void b2_exec_fill_views(b2nd_exec_view *views, const b2_exec_view *inputs, size_t ninputs,
+                               b2nd_exec_output_view *out_view, const b2_exec_output_view *output) {
     for (size_t i = 0; i < ninputs; i++) {
         views[i].struct_size = sizeof(views[i]);
         views[i].base = inputs[i].base;
@@ -153,36 +187,57 @@ static int b2_exec_execute_views(const void *schedule, const b2_exec_view *input
         views[i].byte_order = inputs[i].byte_order;
         memcpy(views[i].strides, inputs[i].strides, sizeof(views[i].strides));
     }
+    out_view->struct_size = sizeof(*out_view);
+    out_view->base = output->base;
+    out_view->capacity = output->capacity;
+    out_view->offset = output->offset;
+    memcpy(out_view->strides, output->strides, sizeof(out_view->strides));
+}
+static void b2_exec_fill_report(b2_exec_report *report, const b2nd_exec_report *native) {
+    report->tiles = native->tiles;
+    report->map_calls = native->map_calls;
+    report->direct_tiles = native->direct_tiles;
+    report->mapped_bytes = native->mapped_bytes;
+    report->fp = native->fp;
+    report->tasks = native->tasks;
+    report->worker_bytes = native->worker_bytes;
+    report->gather_bytes = native->gather_bytes;
+    report->gathered_bytes = native->gathered_bytes;
+    report->staging_bytes = native->staging_bytes;
+}
+static int b2_exec_execute_into(const void *schedule, const b2_exec_view *inputs, size_t ninputs,
+                                const b2_exec_output_view *output, unsigned raise_mask,
+                                size_t max_gather_bytes, size_t workers, size_t worker_scratch,
+                                b2_exec_report *report, me_error *error) {
+    if (ninputs > B2ND_EXEC_MAX_INPUTS || !output) {
+        return ME_ERR_INVALID_ARG;
+    }
+    b2nd_exec_view views[B2ND_EXEC_MAX_INPUTS] = {0};
+    b2nd_exec_output_view out_view = {0};
+    b2_exec_fill_views(views, inputs, ninputs, &out_view, output);
     b2nd_exec_report native = {0};
     b2nd_exec_jobs jobs = {sizeof(jobs), workers ? workers : 1, worker_scratch};
-    int rc = b2nd_exec_execute_views(schedule, views, ninputs, output, raise_mask,
-                                     max_gather_bytes, workers > 1 ? &jobs : NULL, &native, error);
-    report->tiles = native.tiles;
-    report->map_calls = native.map_calls;
-    report->direct_tiles = native.direct_tiles;
-    report->mapped_bytes = native.mapped_bytes;
-    report->fp = native.fp;
-    report->tasks = native.tasks;
-    report->worker_bytes = native.worker_bytes;
-    report->gather_bytes = native.gather_bytes;
-    report->gathered_bytes = native.gathered_bytes;
+    int rc = b2nd_exec_execute_into(schedule, views, ninputs, &out_view, raise_mask,
+                                    max_gather_bytes, workers > 1 ? &jobs : NULL, &native, error);
+    b2_exec_fill_report(report, &native);
     return rc;
 }
-static int b2_exec_execute(const void *schedule, const me_buffer *inputs, size_t ninputs,
-                           me_mut_buffer output, unsigned raise_mask,
-                           size_t workers, size_t worker_scratch,
-                           b2_exec_report *report, me_error *error) {
+static int b2_exec_execute_alias(const void *schedule, const b2_exec_view *inputs, size_t ninputs,
+                                 const b2_exec_output_view *output, size_t staging_budget,
+                                 unsigned raise_mask, size_t max_gather_bytes,
+                                 size_t workers, size_t worker_scratch,
+                                 b2_exec_report *report, me_error *error) {
+    if (ninputs > B2ND_EXEC_MAX_INPUTS || !output) {
+        return ME_ERR_INVALID_ARG;
+    }
+    b2nd_exec_view views[B2ND_EXEC_MAX_INPUTS] = {0};
+    b2nd_exec_output_view out_view = {0};
+    b2_exec_fill_views(views, inputs, ninputs, &out_view, output);
     b2nd_exec_report native = {0};
     b2nd_exec_jobs jobs = {sizeof(jobs), workers ? workers : 1, worker_scratch};
-    int rc = b2nd_exec_execute(schedule, inputs, ninputs, output, raise_mask,
-                               workers > 1 ? &jobs : NULL, &native, error);
-    report->tiles = native.tiles;
-    report->map_calls = native.map_calls;
-    report->direct_tiles = native.direct_tiles;
-    report->mapped_bytes = native.mapped_bytes;
-    report->fp = native.fp;
-    report->tasks = native.tasks;
-    report->worker_bytes = native.worker_bytes;
+    int rc = b2nd_exec_execute_alias(schedule, views, ninputs, &out_view, staging_budget, raise_mask,
+                                     max_gather_bytes, workers > 1 ? &jobs : NULL, &native, error);
+    b2_exec_fill_report(report, &native);
     return rc;
 }
 #else
@@ -211,28 +266,32 @@ static int b2_exec_describe(const void *plan, b2_exec_info *out) {
     (void)plan; (void)out; return ME_ERR_UNSUPPORTED;
 }
 static int b2_exec_specialize(const void *plan, const b2_exec_meta *inputs, size_t ninputs,
-                              size_t tile, size_t budget, void **out, me_error *error) {
-    (void)plan; (void)inputs; (void)ninputs; (void)tile; (void)budget; (void)error;
+                              size_t tile, size_t budget, int pairwise_sum, void **out,
+                              me_error *error) {
+    (void)plan; (void)inputs; (void)ninputs; (void)tile; (void)budget;
+    (void)pairwise_sum; (void)error;
     *out = NULL;
     return ME_ERR_UNSUPPORTED;
 }
 static int b2_exec_schedule_describe(const void *schedule, b2_exec_info *out) {
     (void)schedule; (void)out; return ME_ERR_UNSUPPORTED;
 }
-static int b2_exec_execute(const void *schedule, const me_buffer *inputs, size_t ninputs,
-                           me_mut_buffer output, unsigned raise_mask,
-                           size_t workers, size_t worker_scratch,
-                           b2_exec_report *report, me_error *error) {
-    (void)schedule; (void)inputs; (void)ninputs; (void)output; (void)raise_mask;
-    (void)workers; (void)worker_scratch; (void)report; (void)error;
-    return ME_ERR_UNSUPPORTED;
-}
-static int b2_exec_execute_views(const void *schedule, const b2_exec_view *inputs, size_t ninputs,
-                                 me_mut_buffer output, unsigned raise_mask,
-                                 size_t max_gather_bytes, size_t workers, size_t worker_scratch,
-                                 b2_exec_report *report, me_error *error) {
+static int b2_exec_execute_into(const void *schedule, const b2_exec_view *inputs, size_t ninputs,
+                                const b2_exec_output_view *output, unsigned raise_mask,
+                                size_t max_gather_bytes, size_t workers, size_t worker_scratch,
+                                b2_exec_report *report, me_error *error) {
     (void)schedule; (void)inputs; (void)ninputs; (void)output; (void)raise_mask;
     (void)max_gather_bytes; (void)workers; (void)worker_scratch; (void)report; (void)error;
+    return ME_ERR_UNSUPPORTED;
+}
+static int b2_exec_execute_alias(const void *schedule, const b2_exec_view *inputs, size_t ninputs,
+                                 const b2_exec_output_view *output, size_t staging_budget,
+                                 unsigned raise_mask, size_t max_gather_bytes,
+                                 size_t workers, size_t worker_scratch,
+                                 b2_exec_report *report, me_error *error) {
+    (void)schedule; (void)inputs; (void)ninputs; (void)output; (void)staging_budget;
+    (void)raise_mask; (void)max_gather_bytes; (void)workers; (void)worker_scratch;
+    (void)report; (void)error;
     return ME_ERR_UNSUPPORTED;
 }
 #endif

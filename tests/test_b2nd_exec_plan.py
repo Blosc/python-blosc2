@@ -43,6 +43,10 @@ def test_typed_prepare_copies_descriptor_and_schedule_owns_plan():
         "reducer_bytes": 8,
         "output_items": 1,
         "shape": (17,),
+        "output_shape": (),
+        "reduction_groups": 1,
+        "reduction_lanes": 17,
+        "pairwise_sum": False,
         "broadcast_gather_bytes": 0,
     }
     x = np.arange(17, dtype=np.int64)
@@ -363,7 +367,8 @@ def test_named_typed_graph_has_no_adapter_prepare_or_borrow(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "expression", ["x.min()", "x ** 2", "x + 0x10", "x + 1_000", "sum(x, axis=0)", "x + 00.1", "x + 1.e3"]
+    "expression",
+    ["x.min()", "x ** 2", "x + 0x10", "x + 1_000", "sum(x, dtype=float64)", "x + 00.1", "x + 1.e3"],
 )
 def test_named_typed_graph_restricts_grammar_and_options(expression):
     with pytest.raises(NotImplementedError):
@@ -584,6 +589,156 @@ def test_typed_strided_unaligned_and_non_native_views():
     with pytest.raises(ValueError, match="extent"):
         schedule.execute((forged_neg,), out=out)
     np.testing.assert_array_equal(out, -11)
+
+
+def test_typed_axes_keepdims_and_empty_reductions():
+    x = np.arange(24, dtype="int32").reshape(2, 3, 4)
+    cases = [
+        ("sum(x, axis=1)", x),
+        ("sum(x, axis=0, keepdims=True)", x),
+        ("prod(x, axis=(0, 2), keepdims=True)", x),
+        ("min(x, axis=-1)", x),
+        ("sum(x, axis=())", x),
+    ]
+    for expression, arr in cases:
+        typed = NativeGraph.from_expression(expression, {"x": "int32"}, jit=False, _executor="c-blosc2")
+        adapter = NativeGraph.from_expression(expression, {"x": "int32"}, jit=False, _executor="adapter")
+        assert typed.reduction_info() == adapter.reduction_info()
+        ts = typed.specialize({"x": ("int32", arr.shape)}, tile_items=3)
+        as_ = adapter.specialize({"x": ("int32", arr.shape)}, tile_items=3)
+        assert ts.info()["shape"] == as_.info()["shape"]
+        assert ts.info()["map_shape"] == as_.info()["map_shape"]
+        actual, treport = ts.execute({"x": arr}, workers=1)
+        expected = as_.execute({"x": arr})[0]
+        assert actual.shape == expected.shape
+        assert actual.dtype == expected.dtype
+        assert actual.tobytes() == expected.tobytes()
+        assert treport["route"] == "c-blosc2-typed-resident"
+
+    empty = np.empty((0, 3, 2), dtype="int32")
+    typed_e = NativeGraph.from_expression(
+        "sum(x, axis=(0, 2))", {"x": "int32"}, jit=False, _executor="c-blosc2"
+    )
+    adapter_e = NativeGraph.from_expression(
+        "sum(x, axis=(0, 2))", {"x": "int32"}, jit=False, _executor="adapter"
+    )
+    assert typed_e.evaluate({"x": empty}).tobytes() == adapter_e.evaluate({"x": empty}).tobytes()
+
+
+def test_typed_initial_values_and_runtime_conversion():
+    x = np.array([[1, 2], [3, 4]], dtype="int16")
+    for expression in (
+        "sum(x, initial=10)",
+        "sum(x, axis=0, keepdims=True, initial=5)",
+        "min(x, initial=-2.0)",
+        "max(x, initial=100)",
+    ):
+        typed = NativeGraph.from_expression(expression, {"x": "int16"}, jit=False, _executor="c-blosc2")
+        adapter = NativeGraph.from_expression(expression, {"x": "int16"}, jit=False, _executor="adapter")
+        assert typed.reduction_info() == adapter.reduction_info()
+        actual = typed.evaluate({"x": x}, tile_items=1)
+        expected = adapter.evaluate({"x": x}, tile_items=1)
+        assert actual.dtype == expected.dtype
+        assert actual.shape == expected.shape
+        assert actual.tobytes() == expected.tobytes()
+
+    empty = np.empty((0, 3), dtype="float64")
+    typed_min = NativeGraph.from_expression(
+        "min(x, axis=0, initial=7.5)", {"x": "float64"}, jit=False, _executor="c-blosc2"
+    )
+    adapter_min = NativeGraph.from_expression(
+        "min(x, axis=0, initial=7.5)", {"x": "float64"}, jit=False, _executor="adapter"
+    )
+    assert typed_min.evaluate({"x": empty}).tobytes() == adapter_min.evaluate({"x": empty}).tobytes()
+
+    bad = NativeGraph.from_expression("min(x, initial=-1)", {"x": "uint8"}, jit=False, _executor="c-blosc2")
+    sched = bad.specialize({"x": ("uint8", (1,))})
+    with pytest.raises(blosc2.MenudetError) as failure:
+        sched.execute({"x": np.array([1], dtype="uint8")})
+    assert failure.value.status == "evaluation_error"
+
+
+def test_typed_pairwise_sum_opt_in_invariance():
+    values = (np.arange(1, 301, dtype="float64") * 0.1) + 1e-7
+    for expression in ("sum(x)", "sum(x, initial=0.25)"):
+        plan = NativeGraph.from_expression(expression, {"x": "float64"}, jit=False, _executor="c-blosc2")
+        adapter = NativeGraph.from_expression(expression, {"x": "float64"}, jit=False, _executor="adapter")
+        with pytest.raises(NotImplementedError):
+            adapter.specialize({"x": ("float64", values.shape)}, pairwise_sum=True)
+        refs = []
+        for tile in (1, 7, 128, 300):
+            sched = plan.specialize({"x": ("float64", values.shape)}, tile_items=tile, pairwise_sum=True)
+            assert sched.info()["pairwise_sum"] is True
+            res, report = sched.execute({"x": values})
+            assert report["route"] == "c-blosc2-typed-resident"
+            refs.append(res)
+        for res in refs[1:]:
+            assert res.tobytes() == refs[0].tobytes()
+
+    min_plan = NativeGraph.from_expression("min(x)", {"x": "float64"}, jit=False, _executor="c-blosc2")
+    with pytest.raises(NotImplementedError, match="Pairwise sum"):
+        min_plan.specialize({"x": ("float64", (4,))}, pairwise_sum=True)
+
+
+def test_typed_disjoint_strided_outputs_and_alias_staging():
+    x = np.arange(12, dtype="int32").reshape(3, 4)
+    y = np.arange(10, 22, dtype="int32").reshape(3, 4)
+
+    # Fortran, transposed/strided and reversed disjoint outputs via typed facade and lazyexpr.
+    out_f = np.empty((3, 4), dtype="int32", order="F")
+    with blosc2.expression_evaluation("safe"):
+        expr = blosc2.lazyexpr("x + y * 2", {"x": x, "y": y})
+    actual = expr.compute(jit=False, out=out_f)
+    assert actual is out_f
+    np.testing.assert_array_equal(out_f, x + y * 2)
+    assert expr._native_execution_report["route"] == "c-blosc2-typed-resident"
+
+    backing = np.full((6, 8), -55, dtype="int32")
+    strided_out = backing[::-2, ::-2]  # shape (3, 4) reversed in both dims
+    red_plan = NativeGraph.from_expression(
+        "sum(x + 1, axis=1)", {"x": "int32"}, jit=False, _executor="c-blosc2"
+    )
+    red_sched = red_plan.specialize({"x": ("int32", x.shape)}, tile_items=2)
+    red_back = np.full(6, -9, dtype="int64")
+    red_view = red_back[::-2]
+    res, _ = red_sched.execute({"x": x}, out=red_view)
+    assert res is red_view
+    np.testing.assert_array_equal(red_view, np.sum(x + 1, axis=1, dtype="int64"))
+    assert list(red_back[::2]) == [-9, -9, -9]
+
+    map_plan = NativeGraph.from_expression(
+        "x + y * 2", {"x": "int32", "y": "int32"}, jit=False, _executor="c-blosc2"
+    )
+    map_sched = map_plan.specialize({"x": ("int32", x.shape), "y": ("int32", y.shape)}, tile_items=3)
+    res_map, _ = map_sched.execute({"x": x, "y": y}, out=strided_out)
+    assert res_map is strided_out
+    np.testing.assert_array_equal(strided_out, x + y * 2)
+
+    # Overlapping output strides rejected in typed schedule execute.
+    zero_out = np.lib.stride_tricks.as_strided(backing[:1, :1], shape=(3, 4), strides=(0, 0))
+    with pytest.raises(ValueError, match="output extent"):
+        map_sched.execute({"x": x, "y": y}, out=zero_out)
+
+    # Transactional alias staging: reverse in-place, over-budget, raise_mask unchanged.
+    buf = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float64")
+    alias_view = buf[::-1]
+    alias_plan = NativeGraph.from_expression("x + x", {"x": "float64"}, jit=False, _executor="c-blosc2")
+    alias_sched = alias_plan.specialize({"x": ("float64", buf.shape)}, tile_items=2)
+    with pytest.raises(NotImplementedError, match="Aliased"):
+        alias_sched.execute({"x": buf}, out=alias_view)
+    with pytest.raises(ValueError, match="staging budget"):
+        alias_sched.execute_alias({"x": buf}, staging_budget=39, out=alias_view)
+    np.testing.assert_array_equal(buf, [1.0, 2.0, 3.0, 4.0, 5.0])
+    out_alias, report_alias = alias_sched.execute_alias({"x": buf}, staging_budget=40, out=alias_view)
+    assert out_alias is alias_view
+    assert report_alias["staging_bytes"] == 40
+    np.testing.assert_array_equal(buf, [10.0, 8.0, 6.0, 4.0, 2.0])
+    buf[0] = np.finfo("float64").max
+    saved = buf.copy()
+    with pytest.raises(blosc2.MenudetError) as exc:
+        alias_sched.execute_alias({"x": buf}, staging_budget=40, raise_mask=4, out=alias_view)
+    assert exc.value.status == "evaluation_error"
+    np.testing.assert_array_equal(buf, saved)
 
 
 def test_typed_partitionable_metadata():

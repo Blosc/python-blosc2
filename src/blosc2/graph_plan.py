@@ -112,13 +112,17 @@ class NativeGraph:
         """Borrowed root-reduction metadata; None for non-reduction graphs."""
         return self._handle.reduction_info()
 
-    def specialize(self, inputs, tile_items=1024, *, intermediate_budget=0):
+    def specialize(self, inputs, tile_items=1024, *, intermediate_budget=0, pairwise_sum=False):
         """Bind names to ``(dtype, shape)``; return an immutable owned schedule.
 
         Schedules retain their native plan and may outlive this Python object.
         Query ``schedule.info()`` before allocating or reading numerical buffers;
         execute with a name-to-NumPy-array mapping via ``schedule.execute(inputs)``.
         """
+        if pairwise_sum:
+            if getattr(self._handle, "_executor", None) != "c-blosc2":
+                raise NotImplementedError("pairwise_sum requires the c-blosc2 typed executor")
+            return self._handle.specialize(inputs, tile_items, intermediate_budget, pairwise_sum=True)
         return self._handle.specialize(inputs, tile_items, intermediate_budget)
 
     def evaluate(
