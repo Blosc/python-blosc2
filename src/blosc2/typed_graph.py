@@ -230,6 +230,19 @@ class TypedGraphSchedule:
             **budgets,
         )
 
+    def execute_sources(self, inputs, raise_mask=0, *, out=None, sink=None, workers=1, **budgets):
+        if type(workers) is not int or workers != 1:
+            raise ValueError("Generic source/sink callbacks require workers=1")
+        if set(inputs) != set(self._names):
+            raise ValueError("Typed graph input names do not match the schedule")
+        return self._native.execute_sources(
+            tuple(inputs[name] for name in self._names),
+            raise_mask,
+            out=out,
+            sink=sink,
+            **budgets,
+        )
+
     def execute(self, inputs, raise_mask=0, *, out=None, workers=1):
         """Bind current values; ``workers`` is a request, rejected before any read
         if the contract cannot honour it (ordered sums, scratch budget)."""

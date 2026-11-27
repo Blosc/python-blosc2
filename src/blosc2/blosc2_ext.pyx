@@ -2841,6 +2841,9 @@ cdef class MenudetArtifactHandle:
             return np.dtype(f"S{width}")
         return _numpy_dtype_from_me_dtype(dtype)
 
+    def _has_core_kernel(self):
+        return bool(b2_exec_artifact_has_core(self._handle))
+
     def descriptor_info(self):
         """Authoritative draft native signature; unavailable on older pinned builds."""
         if not b2_artifact_descriptor_available():
@@ -2954,6 +2957,140 @@ cdef class MenudetArtifactHandle:
         finally:
             free(bindings)
 
+    cdef object _cblosc2_eval_array(self, inputs, shape, reduction, axes, bint keepdims,
+                                  initial, size_t tile_items):
+        cdef void *plan = NULL
+        cdef void *schedule = NULL
+        cdef b2_exec_reduce_opts opts
+        cdef b2_exec_meta metadata[128]
+        cdef b2_exec_info info
+        cdef b2_exec_view views[128]
+        cdef b2_exec_output_view out_view
+        cdef b2_exec_report report
+        cdef me_error error
+        cdef np.ndarray array, bound, output, initial_array
+        cdef size_t n = len(inputs), i, j, normalization_bytes = 0
+        cdef int rank = len(shape), rc, red_code
+        if not b2_exec_available() or n == 0 or rank > 16 or n > 128 or tile_items == 0:
+            return None
+        sig_names = [
+            (<bytes>b2_artifact_name(self._handle, k)).decode("utf-8")
+            for k in range(b2_artifact_ninputs(self._handle))
+        ]
+        if set(inputs) != set(sig_names):
+            return None
+        arrays = [np.asarray(inputs[name]) for name in sig_names]
+        if any(a.dtype.kind not in "biuf" or a.dtype.itemsize > 8 for a in arrays):
+            return None
+        try:
+            broadcast = np.broadcast_shapes(*(a.shape for a in arrays))
+        except ValueError:
+            return None
+        if tuple(shape) != broadcast:
+            return None
+        red_code = {None: 0, "sum": 1, "prod": 2, "min": 3, "max": 4, "any": 5, "all": 6}[reduction]
+        memset(&opts, 0, sizeof(opts))
+        memset(&info, 0, sizeof(info))
+        memset(&error, 0, sizeof(error))
+        if red_code:
+            opts.has_axes = 0 if axes is None else 1
+            opts.naxes = 0 if axes is None else len(axes)
+            if opts.naxes > 16:
+                raise ValueError("Too many reduction axes")
+            if axes is not None:
+                for i in range(opts.naxes):
+                    opts.axes[i] = axes[i]
+            opts.keepdims = keepdims
+            if initial is not None:
+                sig_out = self.signature_dtype(-1)
+                if reduction in ("sum", "prod") and sig_out.kind in "bi":
+                    acc_dtype = np.dtype("int64")
+                elif reduction in ("sum", "prod") and sig_out.kind == "u":
+                    acc_dtype = np.dtype("uint64")
+                else:
+                    acc_dtype = sig_out
+                initial_array = np.asarray(initial, dtype=acc_dtype)
+                if initial_array.ndim != 0:
+                    raise ValueError("initial must be a scalar")
+                opts.has_initial = 1
+                opts.initial_dtype = _me_dtype_from_numpy_dtype(initial_array.dtype)
+                opts.initial_size = initial_array.dtype.itemsize
+                opts.initial_weak = 1 if isinstance(initial, (bool, int, float, np.number)) else 0
+                memcpy(opts.initial_scalar, np.PyArray_DATA(initial_array), opts.initial_size)
+        with nogil:
+            rc = b2_exec_prepare_artifact_kernel(
+                self._handle, red_code, &opts if red_code else NULL, &plan, &error)
+        if rc == -2:
+            return None
+        if rc:
+            raise_exec_error(rc, &error)
+        try:
+            if b2_exec_describe(plan, &info):
+                return None
+            if info.ninputs != n:
+                return None
+            memset(metadata, 0, sizeof(metadata))
+            for i, array in enumerate(arrays):
+                dt = array.dtype.newbyteorder("=")
+                metadata[i].dtype = _me_dtype_from_numpy_dtype(dt)
+                metadata[i].itemsize = dt.itemsize
+                metadata[i].ndim = array.ndim
+                for j in range(array.ndim):
+                    metadata[i].shape[j] = array.shape[j]
+            with nogil:
+                rc = b2_exec_specialize(plan, metadata, n, tile_items, 64 * 1024 * 1024,
+                                          0, &schedule, &error)
+            if rc == -2:
+                return None
+            if rc:
+                msg = (<bytes>error.message).decode("utf-8", "replace")
+                if "Extremum of an empty" in msg:
+                    msg = f"{msg} (requires initial value)"
+                elif "axis" in msg and "axes" not in msg:
+                    msg = f"{msg} (invalid reduction axes)"
+                raise _typed_exec_error(rc, msg, 0, False, 0, 0)
+            if b2_exec_schedule_describe(schedule, &info):
+                raise ValueError("Cannot describe typed schedule")
+            out_shape = tuple(info.output_shape[i] for i in range(info.output_ndim))
+            out_dtype = _numpy_dtype_from_me_dtype(<me_dtype>info.dtype)
+            output = np.empty(out_shape, dtype=out_dtype)
+            memset(views, 0, sizeof(views))
+            owned = []
+            for i, array in enumerate(arrays):
+                try:
+                    bound = typed_view_binding(array, &views[i])
+                except ValueError as exc:
+                    from blosc2.menudet_kernel import MenudetError
+                    raise MenudetError(f"{exc} (allocation bounds check)", status="binding_error") from None
+                owned.append(bound)
+            out_owner = typed_output_view_binding(output, &out_view)
+            memset(&report, 0, sizeof(report))
+            memset(&error, 0, sizeof(error))
+            with nogil:
+                rc = b2_exec_execute_into(schedule, views, n, &out_view, 0,
+                                          64 * 1024 * 1024, 1, 0, 0, &report, &error)
+            if rc == -2:
+                return None
+            if rc:
+                msg = (<bytes>error.message).decode("utf-8", "replace")
+                if "extent" in msg and "bounds" not in msg:
+                    msg = f"{msg} (allocation bounds check)"
+                raise _typed_exec_error(rc, msg, report.fp.flags, report.fp.supported, 0, 0)
+            return output, {
+                "temporary_bytes": report.mapped_bytes,
+                "gathered_bytes": report.gathered_bytes,
+                "normalization_bytes": normalization_bytes,
+                "zero_copy_tiles": report.tiles if report.gathered_bytes == 0 else 0,
+                "evaluated_tiles": report.tiles,
+                "fp_flags": report.fp.flags,
+                "fp_supported": bool(report.fp.supported),
+            }
+        finally:
+            if schedule != NULL:
+                b2_exec_schedule_free(schedule)
+            if plan != NULL:
+                b2_exec_free(plan)
+
     def evaluate_array(self, inputs, shape, reduction=None, axes=None, bint keepdims=False,
                        accumulator=None, initial=None, where=None, size_t tile_items=1024):
         cdef b2_array_view *views = NULL
@@ -2976,6 +3113,11 @@ cdef class MenudetArtifactHandle:
         memset(&error, 0, sizeof(error))
         if rank > 16 or n > 128:
             raise ValueError("Native array rank/input limit exceeded")
+        if where is None and accumulator is None:
+            typed_res = self._cblosc2_eval_array(
+                inputs, shape, reduction, axes, keepdims, initial, tile_items)
+            if typed_res is not None:
+                return typed_res
         for i in range(rank):
             domain[i] = shape[i]
         options.version = 1
@@ -3210,6 +3352,131 @@ cdef class MenudetArtifactHandle:
             candidate_blocks=_candidate_blocks, prune_chunks=bool(_prune_chunks),
             pairwise_sum=bool(_pairwise_sum), identity_map=identity_map, arg_indices=_arg_indices)
 
+    cdef object _cblosc2_eval_sources(self, inputs, readers, shape, size_t tile_items):
+        cdef void *plan = NULL
+        cdef void *schedule = NULL
+        cdef b2_exec_meta metadata[128]
+        cdef b2_exec_info info
+        cdef b2_exec_source sources[128]
+        cdef b2_exec_view views[128]
+        cdef b2_exec_callback_report report
+        cdef me_error error
+        cdef np.ndarray array, output
+        cdef _TypedSourceState cb_state
+        cdef size_t n = len(inputs), i, j
+        cdef int rank = len(shape), rc, has_views = 0
+        if not b2_exec_available() or n == 0 or rank > 16 or n > 128 or tile_items == 0:
+            return None
+        sig_names = [
+            (<bytes>b2_artifact_name(self._handle, k)).decode("utf-8")
+            for k in range(b2_artifact_ninputs(self._handle))
+        ]
+        if set(inputs) != set(sig_names):
+            return None
+        in_metas = []
+        for name in sig_names:
+            value = inputs[name]
+            if name in readers:
+                rstate = readers[name]
+                dt = np.dtype(rstate.dtype).newbyteorder("=")
+                sp = tuple(rstate.reader.shape)
+            else:
+                rstate = None
+                array = np.asarray(value)
+                dt = array.dtype.newbyteorder("=")
+                sp = tuple(array.shape[k] for k in range(array.ndim))
+            if dt.kind not in "biuf" or dt.itemsize > 8 or len(sp) > 16:
+                return None
+            in_metas.append((name, value, rstate, dt, sp))
+        try:
+            broadcast = np.broadcast_shapes(*(item[4] for item in in_metas))
+        except ValueError:
+            return None
+        if tuple(shape) != broadcast:
+            return None
+        memset(&info, 0, sizeof(info))
+        memset(&report, 0, sizeof(report))
+        memset(&error, 0, sizeof(error))
+        with nogil:
+            rc = b2_exec_prepare_artifact_kernel(self._handle, 0, NULL, &plan, &error)
+        if rc == -2:
+            return None
+        if rc:
+            raise_exec_error(rc, &error)
+        try:
+            if b2_exec_describe(plan, &info) or info.ninputs != n:
+                return None
+            memset(metadata, 0, sizeof(metadata))
+            for i, (_, _, _, dt, sp) in enumerate(in_metas):
+                metadata[i].dtype = _me_dtype_from_numpy_dtype(dt)
+                metadata[i].itemsize = dt.itemsize
+                metadata[i].ndim = len(sp)
+                for j, ext in enumerate(sp):
+                    metadata[i].shape[j] = ext
+            with nogil:
+                rc = b2_exec_specialize(plan, metadata, n, tile_items, 64 * 1024 * 1024,
+                                          0, &schedule, &error)
+            if rc == -2:
+                return None
+            if rc:
+                raise_exec_error(rc, &error)
+            if b2_exec_schedule_describe(schedule, &info):
+                raise ValueError("Cannot describe typed source schedule")
+            out_shape = tuple(info.output_shape[i] for i in range(info.output_ndim))
+            out_dtype = _numpy_dtype_from_me_dtype(<me_dtype>info.dtype)
+            output = np.empty(out_shape, dtype=out_dtype)
+            memset(sources, 0, sizeof(sources))
+            memset(views, 0, sizeof(views))
+            owners = []
+            cb_states = []
+            for i, (name, value, rstate, dt, sp) in enumerate(in_metas):
+                sources[i].dtype = metadata[i].dtype
+                sources[i].itemsize = dt.itemsize
+                sources[i].ndim = len(sp)
+                for j, ext in enumerate(sp):
+                    sources[i].shape[j] = ext
+                if rstate is not None:
+                    cb_state = _TypedSourceState(rstate.reader, dt, rstate)
+                    cb_states.append(cb_state)
+                    sources[i].read = _typed_source_read_cb
+                    sources[i].context = <void *>cb_state
+                else:
+                    array = np.asarray(value)
+                    owners.append(typed_view_binding(array, &views[i]))
+                    has_views = 1
+            out_bytes = <size_t>output.nbytes
+            out_ptr = <void *>np.PyArray_DATA(output) if out_bytes else NULL
+            with nogil:
+                rc = b2_exec_execute_sources(
+                    schedule, sources, views if has_views else NULL, n,
+                    out_ptr, out_bytes, NULL, 0, 64 * 1024 * 1024, 64 * 1024 * 1024,
+                    &report, &error)
+            for cb_state in cb_states:
+                if cb_state.error is not None:
+                    raise cb_state.error
+            if rc == -2:
+                return None
+            if rc:
+                raise _typed_exec_error(
+                    rc, (<bytes>error.message).decode("utf-8", "replace"),
+                    report.execution.fp.flags, report.execution.fp.supported, 0, 0)
+            return output, {
+                "temporary_bytes": report.execution.mapped_bytes,
+                "gathered_bytes": report.execution.gathered_bytes,
+                "evaluated_tiles": report.execution.tiles,
+                "zero_copy_tiles": report.execution.tiles if report.execution.gathered_bytes == 0 else 0,
+                "fp_flags": report.execution.fp.flags,
+                "fp_supported": bool(report.execution.fp.supported),
+                "tile_items": tile_items,
+                "maximum_reader_items": report.max_read_items,
+                "reader_bytes": report.read_bytes,
+            }
+        finally:
+            if schedule != NULL:
+                b2_exec_schedule_free(schedule)
+            if plan != NULL:
+                b2_exec_free(plan)
+
     def evaluate_sources(self, inputs, readers, shape, size_t tile_items=65536):
         cdef b2_array_source *sources = NULL
         cdef b2_array_options options
@@ -3226,10 +3493,15 @@ cdef class MenudetArtifactHandle:
         cdef list names = [key.encode('utf-8') for key in inputs]
         cdef list owned = []
         cdef list states = []
-        if not b2_array_sources_available():
+        if not b2_array_sources_available() and not b2_exec_available():
             raise NotImplementedError("Native runtime does not support storage readers")
         if rank > 16 or n > 128 or tile_items == 0 or tile_items > 2147483647:
             raise ValueError("Invalid storage-reader rank, input count or tile size")
+        typed_res = self._cblosc2_eval_sources(inputs, readers, shape, tile_items)
+        if typed_res is not None:
+            return typed_res
+        if not b2_array_sources_available():
+            raise NotImplementedError("Native runtime does not support storage readers")
         memset(&options, 0, sizeof(options))
         options.version = 1
         options.tile_items = tile_items
@@ -3282,6 +3554,153 @@ cdef class MenudetArtifactHandle:
                 "reader_bytes": sum(state.read_bytes for state in states)}
         finally:
             free(sources)
+
+    def evaluate_partitions(self, inputs, domain, partitions, selection=None,
+                            unsigned raise_mask=0, size_t max_decode_bytes=67108864,
+                            size_t max_gather_bytes=67108864):
+        """Evaluate an authored Menudet kernel across immutable logical partitions."""
+        cdef void *plan = NULL
+        cdef void *schedule = NULL
+        cdef b2_exec_meta metadata[128]
+        cdef b2_exec_partition_spec spec
+        cdef b2_exec_info info
+        cdef const void *arrays[128]
+        cdef b2_exec_view views[128]
+        cdef b2_exec_source sources[128]
+        cdef b2_exec_storage_report report
+        cdef me_error error
+        cdef np.ndarray output, np_value
+        cdef _TypedSourceState cb_state
+        cdef size_t ndim = len(domain), n = len(inputs), i, j
+        cdef int rc, has_arrays = 0, has_views = 0, has_sources = 0
+        if not b2_exec_available():
+            raise NotImplementedError("Build with the C-Blosc2 typed executor")
+        if ndim > 16 or len(partitions) != ndim or n > 128:
+            raise ValueError("Invalid partition rank or input limit")
+        memset(&spec, 0, sizeof(spec))
+        memset(&info, 0, sizeof(info))
+        memset(&report, 0, sizeof(report))
+        memset(&error, 0, sizeof(error))
+        with nogil:
+            rc = b2_exec_prepare_artifact_kernel(self._handle, 0, NULL, &plan, &error)
+        if rc:
+            raise_exec_error(rc, &error)
+        try:
+            if b2_exec_describe(plan, &info):
+                raise ValueError("Cannot describe partition plan")
+            if n != info.ninputs:
+                raise ValueError("Partition input count mismatch")
+            sig_names = [
+                (<bytes>b2_artifact_name(self._handle, k)).decode("utf-8")
+                for k in range(b2_artifact_ninputs(self._handle))
+            ]
+            if set(inputs) != set(sig_names):
+                raise ValueError("Partition input names disagree with signature")
+            ordered = [inputs[name] for name in sig_names]
+            memset(metadata, 0, sizeof(metadata))
+            memset(arrays, 0, sizeof(arrays))
+            memset(views, 0, sizeof(views))
+            memset(sources, 0, sizeof(sources))
+            owners = []
+            cb_states = []
+            for i, value in enumerate(ordered):
+                if isinstance(value, NDArray):
+                    arrays[i] = <const void *>(<NDArray>value).array
+                    has_arrays = 1
+                    src_dtype = np.dtype(value.dtype).newbyteorder("=")
+                    src_shape = value.shape
+                elif type(value) is np.ndarray:
+                    np_value = value
+                    src_dtype = np_value.dtype.newbyteorder("=")
+                    src_shape = tuple(np_value.shape[k] for k in range(np_value.ndim))
+                    owners.append(typed_view_binding(np_value, &views[i]))
+                    has_views = 1
+                elif hasattr(value, "dtype") and hasattr(value, "shape") and callable(getattr(value, "read", None)):
+                    src_dtype = np.dtype(value.dtype).newbyteorder("=")
+                    src_shape = tuple(value.shape)
+                    cb_state = _TypedSourceState(value, src_dtype, None)
+                    cb_states.append(cb_state)
+                    sources[i].dtype = _me_dtype_from_numpy_dtype(src_dtype)
+                    sources[i].itemsize = src_dtype.itemsize
+                    sources[i].ndim = len(src_shape)
+                    for j, ext in enumerate(src_shape):
+                        sources[i].shape[j] = ext
+                    sources[i].read = _typed_source_read_cb
+                    sources[i].context = <void *>cb_state
+                    has_sources = 1
+                else:
+                    raise TypeError("Partition execution requires Blosc2, NumPy, or source adapter inputs")
+                if len(src_shape) > 16:
+                    raise ValueError("Partition input rank exceeded")
+                metadata[i].dtype = _me_dtype_from_numpy_dtype(src_dtype)
+                metadata[i].itemsize = src_dtype.itemsize
+                metadata[i].ndim = len(src_shape)
+                for j, ext in enumerate(src_shape):
+                    metadata[i].shape[j] = ext
+            spec.ndim = ndim
+            for i in range(ndim):
+                spec.domain[i] = domain[i]
+                spec.partitions[i] = partitions[i]
+            if selection is not None:
+                sel_start, sel_stop = selection
+                if len(sel_start) != ndim or len(sel_stop) != ndim:
+                    raise ValueError("Invalid partition selection rank")
+                spec.has_selection = 1
+                for i in range(ndim):
+                    spec.sel_start[i] = sel_start[i]
+                    spec.sel_stop[i] = sel_stop[i]
+            with nogil:
+                rc = b2_exec_specialize_partitions(
+                    plan, metadata if n else NULL, n, &spec, 64 * 1024 * 1024, &schedule, &error)
+            if rc:
+                raise_exec_error(rc, &error)
+            if b2_exec_schedule_describe(schedule, &info):
+                raise ValueError("Cannot describe partition schedule")
+            out_shape = tuple(info.output_shape[i] for i in range(info.output_ndim))
+            out_dtype = self.signature_dtype(-1)
+            output = np.empty(out_shape, dtype=out_dtype)
+            out_bytes = <size_t>output.nbytes
+            out_ptr = <void *>np.PyArray_DATA(output) if out_bytes else NULL
+            with nogil:
+                rc = b2_exec_execute_partitions(
+                    schedule, arrays if has_arrays else NULL, views if has_views else NULL,
+                    sources if has_sources else NULL, n, out_ptr, out_bytes, raise_mask,
+                    max_decode_bytes, max_gather_bytes, &report, &error)
+            for cb_state in cb_states:
+                if cb_state.error is not None:
+                    raise cb_state.error
+            if rc:
+                raise _typed_exec_error(
+                    rc, (<bytes>error.message).decode("utf-8", "replace"),
+                    report.execution.fp.flags, report.execution.fp.supported, 0, 0)
+            return output, {
+                "route": "c-blosc2-logical-partitions",
+                "logical_partitions": tuple(partitions),
+                "evaluated_groups": report.evaluated_groups,
+                "max_group_items": report.max_group_items,
+                "tiles": report.execution.tiles,
+                "map_calls": report.execution.map_calls,
+                "temporary_bytes": report.execution.mapped_bytes,
+                "gather_bytes": report.execution.gather_bytes,
+                "gathered_bytes": report.execution.gathered_bytes,
+                "decode_bytes": report.decode_bytes,
+                "decodes": report.decodes,
+                "decoded_bytes": report.decoded_bytes,
+                "decode_cache_hits": report.cache_hits,
+                "read_spans": report.read_spans,
+                "input_materialization_bytes": 0,
+                "output_copy_bytes": 0,
+                "jit_calls": report.execution.jit_calls,
+                "interpreter_calls": report.execution.interpreter_calls,
+                "has_jit": bool(report.execution.jit_calls),
+                "fp_flags": report.execution.fp.flags,
+                "fp_supported": bool(report.execution.fp.supported),
+            }
+        finally:
+            if schedule != NULL:
+                b2_exec_schedule_free(schedule)
+            if plan != NULL:
+                b2_exec_free(plan)
 
     def evaluate(self, inputs, shape):
         cdef Py_ssize_t n = len(inputs)

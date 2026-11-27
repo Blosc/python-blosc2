@@ -100,7 +100,13 @@ def test_safe_graph_native_partition_buffers_release_without_cyclic_gc(monkeypat
     try:
         for _ in range(4):
             np.testing.assert_array_equal(expr[2:5], expected[2:5])
-            assert extents
+            report = getattr(lazy, "_source_execution_report", {})
+            if report.get("route") == "c-blosc2-logical-partitions":
+                assert report["evaluated_groups"] == 3
+                assert report["max_group_items"] <= 128
+                assert report["gather_bytes"] <= 128 * data.dtype.itemsize
+            else:
+                assert extents
             assert all(ref() is None for ref in refs)
     finally:
         if enabled:
@@ -231,7 +237,12 @@ def test_contiguous_context_slices_preserve_whole_partitions(monkeypatch):
     monkeypatch.setattr(blosc2.MenudetKernel, "evaluate_block", track)
     monkeypatch.setattr(np, "ix_", no_index_grid)
     np.testing.assert_array_equal(lazy[1:4, -6:-1], expected[1:4, -6:-1])
-    assert extents == [(2, 3)] * 4
+    report = getattr(lazy, "_source_execution_report", {})
+    if report.get("route") == "c-blosc2-logical-partitions":
+        assert report["evaluated_groups"] == 4
+        assert report["max_group_items"] == 6
+    else:
+        assert extents == [(2, 3)] * 4
     np.testing.assert_array_equal(lazy[3:1, :], expected[3:1, :])
     np.testing.assert_array_equal(lazy.rechunk(chunks=(3, 4), blocks=(1, 2))[:], expected)
 

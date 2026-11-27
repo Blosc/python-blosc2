@@ -145,6 +145,49 @@ class MenudetLazyArray(LazyArray):
             return None
         return source._evaluate_b2nd_kernel_pilot(self.kernel, max_scratch=scratch, partition=partition)
 
+    def _cblosc2_partition_values(self, selection):
+        handle = getattr(self.kernel, "_cblosc2_handle", lambda: None)()
+        if handle is None:
+            return None
+        for value in self.inputs.values():
+            if isinstance(value, (np.ndarray, blosc2.NDArray)):
+                continue
+            if (
+                hasattr(value, "dtype")
+                and hasattr(value, "shape")
+                and callable(getattr(value, "read", None))
+                and not isinstance(value, LazyArray)
+            ):
+                continue
+            return None
+        sel_start, sel_stop, squeeze = [], [], []
+        for axis, (part, size) in enumerate(zip(selection, self.shape, strict=True)):
+            if isinstance(part, int):
+                index = part + size if part < 0 else part
+                if not 0 <= index < size:
+                    raise IndexError("Menudet output index out of range")
+                sel_start.append(index)
+                sel_stop.append(index + 1)
+                squeeze.append(axis)
+            else:
+                start, stop, step = part.indices(size)
+                if step != 1:
+                    return None
+                if stop < start:
+                    stop = start
+                sel_start.append(start)
+                sel_stop.append(stop)
+        full_sel = all(s == 0 and e == n for s, e, n in zip(sel_start, sel_stop, self.shape, strict=True))
+        sel_arg = None if full_sel else (tuple(sel_start), tuple(sel_stop))
+        try:
+            values, report = handle.evaluate_partitions(
+                self.inputs, self._domain, self._partitions, selection=sel_arg
+            )
+        except NotImplementedError:
+            return None
+        self._source_execution_report = report
+        return np.squeeze(values, axis=tuple(squeeze)) if squeeze else values
+
     def _values(self, selection=None):  # noqa: C901 -- bounded readers plus original partition/context paths
         if selection is None:
             selection = tuple(slice(None) for _ in self.shape)
@@ -221,6 +264,9 @@ class MenudetLazyArray(LazyArray):
         if resident is not None:
             values, self._source_execution_report = resident
             return values
+        partitioned = self._cblosc2_partition_values(selection)
+        if partitioned is not None:
+            return partitioned
         if (
             self.kernel.result_cardinality == "elementwise"
             and all(groups == 1 for groups in self._grid)

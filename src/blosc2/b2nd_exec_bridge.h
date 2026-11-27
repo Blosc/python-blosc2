@@ -44,8 +44,25 @@ typedef struct {
 } b2_exec_report;
 
 typedef struct {
+    int has_axes, keepdims, has_initial, initial_dtype, initial_weak;
+    size_t naxes, initial_size;
+    int axes[16];
+    unsigned char initial_scalar[16];
+} b2_exec_reduce_opts;
+
+typedef struct {
+    size_t ndim;
+    int64_t domain[16];
+    int64_t partitions[16];
+    int has_selection;
+    int64_t sel_start[16];
+    int64_t sel_stop[16];
+} b2_exec_partition_spec;
+
+typedef struct {
     b2_exec_report execution;
     size_t decode_bytes, storage_metadata_bytes, decodes, decoded_bytes, cache_hits, read_spans;
+    size_t evaluated_groups, max_group_items;
 } b2_exec_storage_report;
 
 typedef struct {
@@ -61,9 +78,39 @@ typedef struct {
     int64_t strides[16];
 } b2_exec_output_view;
 
+typedef int (*b2_exec_source_read_fn)(void *context, const size_t *indices, size_t count,
+                                      void *dst, size_t dst_capacity, me_error *error);
+typedef struct {
+    int dtype, ndim;
+    size_t itemsize;
+    int64_t shape[16];
+    void *context;
+    b2_exec_source_read_fn read;
+} b2_exec_source;
+
+typedef int (*b2_exec_sink_write_fn)(void *context, size_t offset_items, size_t count,
+                                      const void *src, size_t src_capacity, me_error *error);
+typedef struct {
+    int dtype, ndim;
+    size_t itemsize;
+    int64_t shape[16];
+    void *context;
+    b2_exec_sink_write_fn write;
+} b2_exec_sink;
+
+typedef struct {
+    b2_exec_report execution;
+    size_t read_calls, read_items, max_read_items, read_bytes;
+    size_t write_calls, write_items, max_write_items, written_bytes;
+    size_t index_buffer_bytes, output_buffer_bytes;
+} b2_exec_callback_report;
+
 #ifdef B2_HAVE_B2ND_EXEC
 #include "b2nd-exec.h"
 #include "b2nd-exec-storage.h"
+#ifdef B2_HAVE_MENUDET_ARTIFACT
+#include "miniexpr_artifact.h"
+#endif
 typedef me_fp_scope b2_exec_fp_scope;
 
 static int b2_exec_fp_begin(b2_exec_fp_scope *scope, me_fp_status *status, me_error *error) {
@@ -229,6 +276,8 @@ static void b2_exec_fill_storage_report(b2_exec_storage_report *report,
     report->decoded_bytes = native->decoded_bytes;
     report->cache_hits = native->cache_hits;
     report->read_spans = native->read_spans;
+    report->evaluated_groups = native->evaluated_groups;
+    report->max_group_items = native->max_group_items;
 }
 static int b2_exec_prepare_storage_views(const b2_exec_view *views, size_t ninputs,
                                          b2nd_exec_view *native_views) {
@@ -327,6 +376,194 @@ static int b2_exec_execute_alias(const void *schedule, const b2_exec_view *input
     b2_exec_fill_report(report, &native);
     return rc;
 }
+typedef struct {
+    const b2_exec_source *src;
+    const b2_exec_sink *sink;
+} b2_exec_cb_wrap;
+static me_status b2_exec_cb_source_trampoline(void *context, const size_t *indices, size_t count,
+                                              me_mut_buffer dst, me_error *error) {
+    const b2_exec_source *src = context;
+    return (me_status)src->read(src->context, indices, count, dst.data, dst.capacity, error);
+}
+static me_status b2_exec_cb_sink_trampoline(void *context, size_t offset_items, size_t count,
+                                            me_buffer src, me_error *error) {
+    const b2_exec_sink *sink = context;
+    return (me_status)sink->write(sink->context, offset_items, count, src.data, src.capacity, error);
+}
+static void b2_exec_fill_cb_report(b2_exec_callback_report *report,
+                                   const b2nd_exec_callback_report *native) {
+    b2_exec_fill_report(&report->execution, &native->execution);
+    report->read_calls = native->read_calls;
+    report->read_items = native->read_items;
+    report->max_read_items = native->max_read_items;
+    report->read_bytes = native->read_bytes;
+    report->write_calls = native->write_calls;
+    report->write_items = native->write_items;
+    report->max_write_items = native->max_write_items;
+    report->written_bytes = native->written_bytes;
+    report->index_buffer_bytes = native->index_buffer_bytes;
+    report->output_buffer_bytes = native->output_buffer_bytes;
+}
+static int b2_exec_execute_sources(const void *schedule, const b2_exec_source *sources,
+                                   const b2_exec_view *views, size_t ninputs,
+                                   void *output, size_t output_bytes,
+                                   const b2_exec_sink *sink, unsigned raise_mask,
+                                   size_t max_gather_bytes, size_t max_output_bytes,
+                                   b2_exec_callback_report *report, me_error *error) {
+    if (!sources || ninputs > B2ND_EXEC_MAX_INPUTS) {
+        return ME_ERR_INVALID_ARG;
+    }
+    b2nd_exec_view native_views[B2ND_EXEC_MAX_INPUTS] = {0};
+    int prep = b2_exec_prepare_storage_views(views, ninputs, native_views);
+    if (prep != ME_SUCCESS) {
+        return prep;
+    }
+    b2nd_exec_source native_sources[B2ND_EXEC_MAX_INPUTS] = {0};
+    for (size_t i = 0; i < ninputs; i++) {
+        native_sources[i].struct_size = sizeof(native_sources[i]);
+        native_sources[i].dtype = (me_dtype)sources[i].dtype;
+        native_sources[i].itemsize = sources[i].itemsize;
+        native_sources[i].ndim = (size_t)sources[i].ndim;
+        if (native_sources[i].ndim <= B2ND_EXEC_MAX_RANK) {
+            memcpy(native_sources[i].shape, sources[i].shape, sizeof(native_sources[i].shape));
+        }
+        if (sources[i].read) {
+            native_sources[i].context = (void *)&sources[i];
+            native_sources[i].read = b2_exec_cb_source_trampoline;
+        }
+    }
+    b2nd_exec_sink native_sink = {0};
+    if (sink) {
+        native_sink.struct_size = sizeof(native_sink);
+        native_sink.dtype = (me_dtype)sink->dtype;
+        native_sink.itemsize = sink->itemsize;
+        native_sink.ndim = (size_t)sink->ndim;
+        if (native_sink.ndim <= B2ND_EXEC_MAX_RANK) {
+            memcpy(native_sink.shape, sink->shape, sizeof(native_sink.shape));
+        }
+        native_sink.context = (void *)sink;
+        native_sink.write = sink->write ? b2_exec_cb_sink_trampoline : NULL;
+    }
+    b2nd_exec_callback_report native = {0};
+    int rc = b2nd_exec_execute_sources(
+        schedule, native_sources, views ? native_views : NULL, ninputs,
+        (me_mut_buffer){output, output_bytes}, sink ? &native_sink : NULL,
+        raise_mask, max_gather_bytes, max_output_bytes, &native, error);
+    b2_exec_fill_cb_report(report, &native);
+    return rc;
+}
+static int b2_exec_artifact_has_core(const void *artifact) {
+#ifdef B2_HAVE_MENUDET_ARTIFACT
+    return me_artifact_borrow_core((const me_artifact *)artifact) != NULL;
+#else
+    (void)artifact;
+    return 0;
+#endif
+}
+static int b2_exec_prepare_artifact_kernel(const void *artifact, int reducer,
+                                           const b2_exec_reduce_opts *opts,
+                                           void **out, me_error *error) {
+    *out = NULL;
+#ifdef B2_HAVE_MENUDET_ARTIFACT
+    const me_kernel *kernel = me_artifact_borrow_core((const me_artifact *)artifact);
+    if (!kernel) {
+        return ME_ERR_UNSUPPORTED;
+    }
+    b2nd_exec_reduce_opts native_opts = {0};
+    if (opts) {
+        native_opts.struct_size = sizeof(native_opts);
+        native_opts.has_axes = opts->has_axes != 0;
+        native_opts.naxes = opts->naxes;
+        if (opts->naxes && opts->naxes <= B2ND_EXEC_MAX_RANK) {
+            memcpy(native_opts.axes, opts->axes, opts->naxes * sizeof(int));
+        }
+        native_opts.keepdims = opts->keepdims != 0;
+        native_opts.has_initial = opts->has_initial != 0;
+        native_opts.initial_dtype = (me_dtype)opts->initial_dtype;
+        native_opts.initial_category = opts->initial_weak ? ME_CAPTURE_WEAK : ME_CAPTURE_TYPED;
+        native_opts.initial_size = opts->initial_size;
+        memcpy(native_opts.initial_scalar, opts->initial_scalar, sizeof(native_opts.initial_scalar));
+    }
+    b2nd_exec_plan *plan = NULL;
+    int rc = b2nd_exec_prepare_borrowed_kernel(kernel, (me_reduction_kind)reducer,
+                                               opts ? &native_opts : NULL, &plan, error);
+    *out = plan;
+    return rc;
+#else
+    (void)artifact; (void)reducer; (void)opts; (void)error;
+    return ME_ERR_UNSUPPORTED;
+#endif
+}
+static int b2_exec_specialize_partitions(const void *plan, const b2_exec_meta *inputs,
+                                         size_t ninputs, const b2_exec_partition_spec *spec,
+                                         size_t max_group_bytes, void **out, me_error *error) {
+    *out = NULL;
+    if (!spec || ninputs > B2ND_EXEC_MAX_INPUTS) {
+        return ME_ERR_INVALID_ARG;
+    }
+    b2nd_exec_input_meta metadata[B2ND_EXEC_MAX_INPUTS] = {0};
+    for (size_t i = 0; i < ninputs; i++) {
+        metadata[i].dtype = (me_dtype)inputs[i].dtype;
+        metadata[i].itemsize = inputs[i].itemsize;
+        metadata[i].ndim = (size_t)inputs[i].ndim;
+        if (metadata[i].ndim <= B2ND_EXEC_MAX_RANK) {
+            memcpy(metadata[i].shape, inputs[i].shape, sizeof(metadata[i].shape));
+        }
+    }
+    b2nd_exec_partition_spec native_spec = {0};
+    native_spec.struct_size = sizeof(native_spec);
+    native_spec.ndim = spec->ndim;
+    if (spec->ndim <= B2ND_EXEC_MAX_RANK) {
+        memcpy(native_spec.domain, spec->domain, sizeof(native_spec.domain));
+        memcpy(native_spec.partitions, spec->partitions, sizeof(native_spec.partitions));
+        memcpy(native_spec.sel_start, spec->sel_start, sizeof(native_spec.sel_start));
+        memcpy(native_spec.sel_stop, spec->sel_stop, sizeof(native_spec.sel_stop));
+    }
+    native_spec.has_selection = spec->has_selection != 0;
+    b2nd_exec_schedule *schedule = NULL;
+    int rc = b2nd_exec_specialize_partitions(
+        plan, ninputs ? metadata : NULL, ninputs, &native_spec, max_group_bytes, &schedule, error);
+    *out = schedule;
+    return rc;
+}
+static int b2_exec_execute_partitions(const void *schedule, const void *const *arrays,
+                                      const b2_exec_view *views, const b2_exec_source *sources,
+                                      size_t ninputs, void *output, size_t output_bytes,
+                                      unsigned raise_mask, size_t max_decode_bytes,
+                                      size_t max_gather_bytes, b2_exec_storage_report *report,
+                                      me_error *error) {
+    if (ninputs > B2ND_EXEC_MAX_INPUTS) {
+        return ME_ERR_INVALID_ARG;
+    }
+    b2nd_exec_view native_views[B2ND_EXEC_MAX_INPUTS] = {0};
+    int prep = b2_exec_prepare_storage_views(views, ninputs, native_views);
+    if (prep != ME_SUCCESS) {
+        return prep;
+    }
+    b2nd_exec_source native_sources[B2ND_EXEC_MAX_INPUTS] = {0};
+    if (sources) {
+        for (size_t i = 0; i < ninputs; i++) {
+            native_sources[i].struct_size = sizeof(native_sources[i]);
+            native_sources[i].dtype = (me_dtype)sources[i].dtype;
+            native_sources[i].itemsize = sources[i].itemsize;
+            native_sources[i].ndim = (size_t)sources[i].ndim;
+            if (native_sources[i].ndim <= B2ND_EXEC_MAX_RANK) {
+                memcpy(native_sources[i].shape, sources[i].shape, sizeof(native_sources[i].shape));
+            }
+            if (sources[i].read) {
+                native_sources[i].context = (void *)&sources[i];
+                native_sources[i].read = b2_exec_cb_source_trampoline;
+            }
+        }
+    }
+    b2nd_exec_storage_report native = {0};
+    int rc = b2nd_exec_execute_partitions(
+        schedule, (const b2nd_array_t *const *)arrays, views ? native_views : NULL,
+        sources ? native_sources : NULL, ninputs, (me_mut_buffer){output, output_bytes},
+        raise_mask, max_decode_bytes, max_gather_bytes, &native, error);
+    b2_exec_fill_storage_report(report, &native);
+    return rc;
+}
 #else
 static int b2_exec_execute_arrays(const void *schedule, const void *const *inputs,
                                   const b2_exec_view *views, size_t ninputs,
@@ -408,6 +645,47 @@ static int b2_exec_execute_alias(const void *schedule, const b2_exec_view *input
     (void)raise_mask; (void)max_gather_bytes; (void)workers;
     (void)has_worker_scratch; (void)worker_scratch;
     (void)report; (void)error;
+    return ME_ERR_UNSUPPORTED;
+}
+static int b2_exec_execute_sources(const void *schedule, const b2_exec_source *sources,
+                                   const b2_exec_view *views, size_t ninputs,
+                                   void *output, size_t output_bytes,
+                                   const b2_exec_sink *sink, unsigned raise_mask,
+                                   size_t max_gather_bytes, size_t max_output_bytes,
+                                   b2_exec_callback_report *report, me_error *error) {
+    (void)schedule; (void)sources; (void)views; (void)ninputs; (void)output; (void)output_bytes;
+    (void)sink; (void)raise_mask; (void)max_gather_bytes; (void)max_output_bytes; (void)error;
+    memset(report, 0, sizeof(*report));
+    return ME_ERR_UNSUPPORTED;
+}
+static int b2_exec_artifact_has_core(const void *artifact) {
+    (void)artifact;
+    return 0;
+}
+static int b2_exec_prepare_artifact_kernel(const void *artifact, int reducer,
+                                           const b2_exec_reduce_opts *opts,
+                                           void **out, me_error *error) {
+    (void)artifact; (void)reducer; (void)opts; (void)error;
+    *out = NULL;
+    return ME_ERR_UNSUPPORTED;
+}
+static int b2_exec_specialize_partitions(const void *plan, const b2_exec_meta *inputs,
+                                         size_t ninputs, const b2_exec_partition_spec *spec,
+                                         size_t max_group_bytes, void **out, me_error *error) {
+    (void)plan; (void)inputs; (void)ninputs; (void)spec; (void)max_group_bytes; (void)error;
+    *out = NULL;
+    return ME_ERR_UNSUPPORTED;
+}
+static int b2_exec_execute_partitions(const void *schedule, const void *const *arrays,
+                                      const b2_exec_view *views, const b2_exec_source *sources,
+                                      size_t ninputs, void *output, size_t output_bytes,
+                                      unsigned raise_mask, size_t max_decode_bytes,
+                                      size_t max_gather_bytes, b2_exec_storage_report *report,
+                                      me_error *error) {
+    (void)schedule; (void)arrays; (void)views; (void)sources; (void)ninputs;
+    (void)output; (void)output_bytes; (void)raise_mask; (void)max_decode_bytes;
+    (void)max_gather_bytes; (void)error;
+    memset(report, 0, sizeof(*report));
     return ME_ERR_UNSUPPORTED;
 }
 #endif

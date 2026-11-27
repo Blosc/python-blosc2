@@ -43,6 +43,19 @@ cdef extern from "b2nd_exec_bridge.h":
     ctypedef struct b2_exec_storage_report:
         b2_exec_report execution
         size_t decode_bytes, storage_metadata_bytes, decodes, decoded_bytes, cache_hits, read_spans
+        size_t evaluated_groups, max_group_items
+    ctypedef struct b2_exec_reduce_opts:
+        int has_axes, keepdims, has_initial, initial_dtype, initial_weak
+        size_t naxes, initial_size
+        int axes[16]
+        unsigned char initial_scalar[16]
+    ctypedef struct b2_exec_partition_spec:
+        size_t ndim
+        int64_t domain[16]
+        int64_t partitions[16]
+        int has_selection
+        int64_t sel_start[16]
+        int64_t sel_stop[16]
     ctypedef struct b2_exec_view:
         const void *base
         size_t capacity, offset
@@ -52,6 +65,25 @@ cdef extern from "b2nd_exec_bridge.h":
         void *base
         size_t capacity, offset
         int64_t strides[16]
+    ctypedef int (*b2_exec_source_read_fn)(void *, const size_t *, size_t, void *, size_t, me_error *) noexcept nogil
+    ctypedef struct b2_exec_source:
+        int dtype, ndim
+        size_t itemsize
+        int64_t shape[16]
+        void *context
+        b2_exec_source_read_fn read
+    ctypedef int (*b2_exec_sink_write_fn)(void *, size_t, size_t, const void *, size_t, me_error *) noexcept nogil
+    ctypedef struct b2_exec_sink:
+        int dtype, ndim
+        size_t itemsize
+        int64_t shape[16]
+        void *context
+        b2_exec_sink_write_fn write
+    ctypedef struct b2_exec_callback_report:
+        b2_exec_report execution
+        size_t read_calls, read_items, max_read_items, read_bytes
+        size_t write_calls, write_items, max_write_items, written_bytes
+        size_t index_buffer_bytes, output_buffer_bytes
     int b2_exec_available()
     int b2_exec_prepare(const b2_exec_node *, size_t, size_t, uint32_t, int, int, int, void **, me_error *) nogil
     void b2_exec_free(void *)
@@ -71,6 +103,18 @@ cdef extern from "b2nd_exec_bridge.h":
     int b2_exec_execute_to_array(const void *, const void *const *, const b2_exec_view *, size_t,
                                  void *, unsigned, size_t, size_t, size_t, int, size_t,
                                  b2_exec_storage_report *, me_error *) nogil
+    int b2_exec_execute_sources(const void *, const b2_exec_source *, const b2_exec_view *, size_t,
+                                void *, size_t, const b2_exec_sink *, unsigned, size_t, size_t,
+                                b2_exec_callback_report *, me_error *) nogil
+    int b2_exec_artifact_has_core(const void *)
+    int b2_exec_prepare_artifact_kernel(const void *, int, const b2_exec_reduce_opts *,
+                                        void **, me_error *) nogil
+    int b2_exec_specialize_partitions(const void *, const b2_exec_meta *, size_t,
+                                      const b2_exec_partition_spec *, size_t,
+                                      void **, me_error *) nogil
+    int b2_exec_execute_partitions(const void *, const void *const *, const b2_exec_view *,
+                                   const b2_exec_source *, size_t, void *, size_t, unsigned,
+                                   size_t, size_t, b2_exec_storage_report *, me_error *) nogil
 
 
 def _b2nd_exec_available():
@@ -230,6 +274,91 @@ cdef object typed_output_view_binding(np.ndarray array, b2_exec_output_view *out
     if <size_t>array.dtype.itemsize > view.capacity - high:
         raise ValueError("Typed buffer exceeds its allocation extent")
     return root
+
+
+cdef class _TypedSourceState:
+    cdef object reader
+    cdef object reader_state
+    cdef object dtype
+    cdef object error
+
+    def __cinit__(self, reader, dtype, reader_state=None):
+        self.reader = reader
+        self.reader_state = reader_state
+        self.dtype = dtype
+        self.error = None
+
+
+cdef class _TypedSinkState:
+    cdef object write_fn
+    cdef object dtype
+    cdef object error
+
+    def __cinit__(self, write_fn, dtype):
+        self.write_fn = write_fn
+        self.dtype = dtype
+        self.error = None
+
+
+cdef int _typed_source_read_cb(void *context, const size_t *indices, size_t count,
+                               void *dst, size_t dst_capacity, me_error *error) noexcept with gil:
+    cdef _TypedSourceState state = <_TypedSourceState>context
+    cdef np.npy_intp dimensions[1]
+    cdef np.ndarray requested, values
+    cdef bytes msg
+    cdef size_t msg_len
+    if state.error is not None:
+        return -5
+    try:
+        dimensions[0] = count
+        requested = np.PyArray_SimpleNewFromData(1, dimensions, np.NPY_UINTP, <void *>indices).copy()
+        requested.flags.writeable = False
+        values = np.ascontiguousarray(state.reader.read(requested), dtype=state.dtype)
+        if values.dtype != state.dtype or values.size != count or <size_t>values.nbytes != dst_capacity:
+            raise ValueError("Source adapter returned an invalid tile shape or dtype")
+        if dst_capacity:
+            memcpy(dst, np.PyArray_DATA(values), dst_capacity)
+        if state.reader_state is not None:
+            state.reader_state.max_items = max(state.reader_state.max_items, count)
+            state.reader_state.read_bytes += dst_capacity
+        return 0
+    except BaseException as exc:
+        state.error = exc
+        if state.reader_state is not None:
+            state.reader_state.error = exc
+        if error != NULL:
+            msg = str(exc).encode("utf-8", "replace")
+            msg_len = min(len(msg), sizeof(error.message) - 1)
+            if msg_len:
+                memcpy(error.message, <const char *>msg, msg_len)
+            error.message[msg_len] = 0
+        return -5
+
+
+cdef int _typed_sink_write_cb(void *context, size_t offset_items, size_t count,
+                              const void *src, size_t src_capacity, me_error *error) noexcept with gil:
+    cdef _TypedSinkState state = <_TypedSinkState>context
+    cdef np.ndarray values
+    cdef bytes msg
+    cdef size_t msg_len
+    if state.error is not None:
+        return -5
+    try:
+        values = np.empty((count,), dtype=state.dtype)
+        if src_capacity:
+            memcpy(np.PyArray_DATA(values), src, src_capacity)
+        values.flags.writeable = False
+        state.write_fn(offset_items, values)
+        return 0
+    except BaseException as exc:
+        state.error = exc
+        if error != NULL:
+            msg = str(exc).encode("utf-8", "replace")
+            msg_len = min(len(msg), sizeof(error.message) - 1)
+            if msg_len:
+                memcpy(error.message, <const char *>msg, msg_len)
+            error.message[msg_len] = 0
+        return -5
 
 
 cdef class _TypedExecPlan:
@@ -481,6 +610,139 @@ cdef class _TypedExecSchedule:
             "decoded_bytes": report.decoded_bytes, "decode_cache_hits": report.cache_hits,
             "read_spans": report.read_spans, "storage_metadata_bytes": report.storage_metadata_bytes,
             "input_materialization_bytes": 0, "tasks": report.execution.tasks,
+            "jit_calls": report.execution.jit_calls, "interpreter_calls": report.execution.interpreter_calls,
+            "has_jit": bool(report.execution.jit_calls),
+            "fp_flags": report.execution.fp.flags, "fp_supported": bool(report.execution.fp.supported)}
+
+    def execute_sources(self, inputs, unsigned raise_mask=0, *, out=None, sink=None,
+                        size_t max_gather_bytes=67108864, size_t max_output_bytes=67108864):
+        """Execute over metadata-only source and/or sink callbacks with bounded memory."""
+        from .storage_readers import ReaderState, StorageReader
+
+        cdef b2_exec_source sources[128]
+        cdef b2_exec_view views[128]
+        cdef b2_exec_sink c_sink
+        cdef b2_exec_callback_report report
+        cdef b2_exec_output_view output_view
+        cdef me_error error
+        cdef np.ndarray np_value, output
+        cdef _TypedSourceState cb_state
+        cdef _TypedSinkState sink_state = None
+        cdef size_t count = len(inputs)
+        cdef size_t output_bytes = 0
+        cdef void *out_ptr = NULL
+        cdef int i, j, rc, has_views = 0, use_sink = 0
+        if self._schedule == NULL or count != self._info.ninputs or count > 128:
+            raise ValueError("Invalid typed source bindings")
+        if sink is not None and out is not None:
+            raise ValueError("Specify either out or sink, not both")
+        memset(sources, 0, sizeof(sources))
+        memset(views, 0, sizeof(views))
+        memset(&c_sink, 0, sizeof(c_sink))
+        memset(&report, 0, sizeof(report))
+        memset(&error, 0, sizeof(error))
+        dom_shape = tuple(self._info.shape[i] for i in range(self._info.ndim))
+        out_shape = tuple(self._info.output_shape[i] for i in range(self._info.output_ndim))
+        out_dtype = _numpy_dtype_from_me_dtype(<me_dtype>self._info.dtype)
+        values = tuple(inputs)
+        owners = []
+        cb_states = []
+        for i, value in enumerate(values):
+            exp_dtype, exp_shape = self._metadata[i]
+            if type(value) is np.ndarray:
+                np_value = value
+                if np_value.dtype.newbyteorder("=") != exp_dtype or value.shape != exp_shape:
+                    raise ValueError("Typed input dtype/shape mismatch")
+                owners.append(typed_view_binding(np_value, &views[i]))
+                has_views = 1
+                src_dtype = exp_dtype
+                src_shape = exp_shape
+            else:
+                rstate = value if isinstance(value, ReaderState) else None
+                if isinstance(value, NDArray):
+                    reader = StorageReader(value, dom_shape)
+                    src_dtype = np.dtype(value.dtype).newbyteorder("=")
+                    src_shape = value.shape
+                elif rstate is not None and callable(getattr(rstate.reader, "read", None)):
+                    reader = rstate.reader
+                    src_dtype = np.dtype(rstate.dtype).newbyteorder("=")
+                    src_shape = tuple(reader.shape)
+                elif hasattr(value, "dtype") and hasattr(value, "shape") and callable(getattr(value, "read", None)):
+                    reader = value
+                    src_dtype = np.dtype(value.dtype).newbyteorder("=")
+                    src_shape = tuple(value.shape)
+                else:
+                    raise TypeError("Source execution requires NumPy, Blosc2, or source adapter bindings")
+                if len(src_shape) > 16:
+                    raise ValueError("Typed source rank limit exceeded")
+                cb_state = _TypedSourceState(reader, src_dtype, rstate)
+                cb_states.append(cb_state)
+                sources[i].read = _typed_source_read_cb
+                sources[i].context = <void *>cb_state
+            sources[i].dtype = _me_dtype_from_numpy_dtype(src_dtype)
+            sources[i].itemsize = src_dtype.itemsize
+            sources[i].ndim = len(src_shape)
+            for j, extent in enumerate(src_shape):
+                sources[i].shape[j] = extent
+        if sink is not None:
+            if hasattr(sink, "dtype") and np.dtype(sink.dtype).newbyteorder("=") != out_dtype:
+                raise ValueError("Typed sink dtype mismatch")
+            if hasattr(sink, "shape") and tuple(sink.shape) != out_shape:
+                raise ValueError("Typed sink shape mismatch")
+            write_fn = getattr(sink, "write", None)
+            if not callable(write_fn):
+                if callable(sink):
+                    write_fn = sink
+                else:
+                    raise TypeError("Typed sink must be callable or expose write(offset, chunk)")
+            sink_state = _TypedSinkState(write_fn, out_dtype)
+            c_sink.dtype = _me_dtype_from_numpy_dtype(out_dtype)
+            c_sink.itemsize = out_dtype.itemsize
+            c_sink.ndim = len(out_shape)
+            for j, extent in enumerate(out_shape):
+                c_sink.shape[j] = extent
+            c_sink.write = _typed_sink_write_cb
+            c_sink.context = <void *>sink_state
+            use_sink = 1
+            result = None
+        else:
+            if out is None:
+                output = np.empty(out_shape, dtype=out_dtype)
+            else:
+                if type(out) is not np.ndarray or out.shape != out_shape or out.dtype != out_dtype:
+                    raise ValueError("Typed source output dtype/shape mismatch")
+                output = out
+            if not output.flags.c_contiguous:
+                raise NotImplementedError("Typed source output must be contiguous")
+            owner = typed_output_view_binding(output, &output_view)
+            out_ptr = <char *>output_view.base + output_view.offset
+            output_bytes = output.nbytes
+            result = output
+        with nogil:
+            rc = b2_exec_execute_sources(
+                self._schedule, sources, views if has_views else NULL, count,
+                out_ptr, output_bytes, &c_sink if use_sink else NULL,
+                raise_mask, max_gather_bytes, max_output_bytes, &report, &error)
+        for cb_state in cb_states:
+            if cb_state.error is not None:
+                raise cb_state.error
+        if sink_state is not None and sink_state.error is not None:
+            raise sink_state.error
+        if rc:
+            raise _typed_exec_error(
+                rc, (<bytes>error.message).decode("utf-8", "replace"),
+                report.execution.fp.flags, report.execution.fp.supported, 0, 0)
+        return result, {
+            "route": "c-blosc2-typed-sources", "tiles": report.execution.tiles,
+            "map_calls": report.execution.map_calls, "direct_tiles": report.execution.direct_tiles,
+            "temporary_bytes": report.execution.mapped_bytes,
+            "gather_bytes": report.execution.gather_bytes, "gathered_bytes": report.execution.gathered_bytes,
+            "read_calls": report.read_calls, "read_items": report.read_items,
+            "maximum_reader_items": report.max_read_items, "reader_bytes": report.read_bytes,
+            "write_calls": report.write_calls, "write_items": report.write_items,
+            "maximum_write_items": report.max_write_items, "written_bytes": report.written_bytes,
+            "index_buffer_bytes": report.index_buffer_bytes, "output_buffer_bytes": report.output_buffer_bytes,
+            "input_materialization_bytes": 0, "tasks": report.execution.tasks or 1,
             "jit_calls": report.execution.jit_calls, "interpreter_calls": report.execution.interpreter_calls,
             "has_jit": bool(report.execution.jit_calls),
             "fp_flags": report.execution.fp.flags, "fp_supported": bool(report.execution.fp.supported)}

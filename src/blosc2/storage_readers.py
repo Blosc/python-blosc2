@@ -684,6 +684,7 @@ def evaluate_storage_sources(kernel, inputs, shape=None, selection=None, tile_it
             if isinstance(part, slice)
         )
     )
-    values, report = kernel._handle.evaluate_sources(bound, readers, result_shape, tile_items)
+    handle = getattr(kernel, "_cblosc2_handle", lambda: None)() or kernel._handle
+    values, report = handle.evaluate_sources(bound, readers, result_shape, tile_items)
     report["route"] = "bounded-readers"
     return values, report

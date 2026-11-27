@@ -155,27 +155,63 @@ class NativeGraph:
         return self._handle.map_json()
 
     def evaluate_sources(
-        self, inputs, *, tile_items=65536, raise_mask=0, return_report=False, out=None, workers=1
+        self,
+        inputs,
+        *,
+        tile_items=65536,
+        raise_mask=0,
+        return_report=False,
+        out=None,
+        sink=None,
+        workers=1,
+        **budgets,
     ):
-        """Stream a single-region graph from NumPy/Blosc2 inputs with bounded scratch.
+        """Stream a single-region graph from NumPy/Blosc2/callback sources with bounded scratch.
 
         Native traversal owns broadcasting, axes and reduction order.
-        Compressed operands are decoded only for requested tiles, never materialized.
-        Staged graphs and compressed participation masks remain unsupported.
-        The explicit C-Blosc2 selector admits in-memory non-contiguous Blosc2
-        inputs (with right-aligned N-D broadcasting, partial-axis reductions,
-        and mixed Blosc2 + native NumPy inputs) and optional compressed Blosc2
-        sinks (`out=NDArray`); unsupported bindings raise before numerical reads,
-        without adapter replay.
+        Compressed operands and metadata-only source adapters are read only for
+        requested tiles, never materialized. Optional streaming ``sink`` callbacks
+        receive bounded elementwise tiles (or completed reduction results).
+        Staged graphs and compressed/reader participation masks remain unsupported.
+        Unsupported bindings raise before numerical reads, without adapter replay.
         """
         if getattr(self._handle, "_executor", None) == "c-blosc2":
-            if any(not isinstance(value, (blosc2_ext.NDArray, np.ndarray)) for value in inputs.values()):
-                raise NotImplementedError("Typed storage execution requires Blosc2 or NumPy arrays")
-            schedule = self.specialize(
-                {name: (value.dtype, value.shape) for name, value in inputs.items()}, tile_items
+            all_native = all(
+                isinstance(value, (blosc2_ext.NDArray, np.ndarray)) for value in inputs.values()
             )
-            result, report = schedule.execute_arrays(inputs, raise_mask, out=out, workers=workers)
+            if all_native and sink is None and not budgets:
+                schedule = self.specialize(
+                    {name: (value.dtype, value.shape) for name, value in inputs.items()}, tile_items
+                )
+                result, report = schedule.execute_arrays(inputs, raise_mask, out=out, workers=workers)
+                return (result, report) if return_report else result
+            from .storage_readers import ReaderState
+
+            meta = {}
+            for name, value in inputs.items():
+                if isinstance(value, (blosc2_ext.NDArray, np.ndarray)):
+                    meta[name] = (value.dtype, value.shape)
+                elif isinstance(value, ReaderState) and callable(getattr(value.reader, "read", None)):
+                    meta[name] = (value.dtype, value.reader.shape)
+                elif (
+                    hasattr(value, "dtype")
+                    and hasattr(value, "shape")
+                    and callable(getattr(value, "read", None))
+                ):
+                    meta[name] = (np.dtype(value.dtype), tuple(value.shape))
+                else:
+                    raise NotImplementedError(
+                        "Typed storage execution requires Blosc2, NumPy, or source adapter bindings"
+                    )
+            if type(workers) is not int or workers != 1:
+                raise ValueError("Generic source/sink callbacks require workers=1")
+            schedule = self.specialize(meta, tile_items)
+            result, report = schedule.execute_sources(
+                inputs, raise_mask, out=out, sink=sink, workers=workers, **budgets
+            )
             return (result, report) if return_report else result
+        if sink is not None or budgets:
+            raise NotImplementedError("Streaming sink callbacks require the c-blosc2 typed executor")
         from .native_graph import evaluate_graph_sources
 
         result, report = evaluate_graph_sources(

@@ -1086,6 +1086,23 @@ class MenudetKernel:
             fp_raise=15 if fp_errors == "raise" else 0,
         )
 
+    def _cblosc2_handle(self):
+        from . import blosc2_ext
+
+        if not getattr(blosc2_ext, "_b2nd_exec_available", lambda: False)():
+            return None
+        if getattr(self._handle, "_has_core_kernel", lambda: False)():
+            return self._handle
+        cached = getattr(self, "_cached_cblosc2_handle", None)
+        if cached is not None:
+            return cached or None
+        try:
+            cached = MenudetKernel.from_recipe(self.to_recipe(), self.input_dtypes, jit=self.has_jit)._handle
+        except (NotImplementedError, MenudetError, ValueError, TypeError):
+            cached = False
+        self._cached_cblosc2_handle = cached
+        return cached or None
+
     def evaluate_array(
         self,
         inputs,
@@ -1132,7 +1149,8 @@ class MenudetKernel:
             raise TypeError("axis entries must be integers")
         if type(tile_items) is not int or tile_items <= 0:
             raise ValueError("tile_items must be a positive integer")
-        values, report = self._handle.evaluate_array(
+        handle = self._cblosc2_handle() or self._handle
+        values, report = handle.evaluate_array(
             arrays, shape, reduction, axes, keepdims, dtype, initial, where, tile_items
         )
         return (values, report) if return_report else values
