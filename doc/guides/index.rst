@@ -29,3 +29,4 @@ Command line tools
 
     b2view
     parquet_to_blosc2
+    b2nd_to_zarr
