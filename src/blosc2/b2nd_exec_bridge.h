@@ -19,7 +19,7 @@ typedef struct {
 } b2_exec_meta;
 
 typedef struct {
-    int dtype, reduction, identity, map_dtype;
+    int dtype, reduction, identity, map_dtype, reducer;
     size_t itemsize, ninputs, nitems, tile_items, mapped_bytes, reducer_bytes, output_items;
     size_t plan_metadata_bytes, schedule_metadata_bytes;
 } b2_exec_info;
@@ -27,6 +27,7 @@ typedef struct {
 typedef struct {
     size_t tiles, map_calls, direct_tiles, mapped_bytes;
     me_fp_status fp;
+    size_t tasks, worker_bytes;
 } b2_exec_report;
 
 #ifdef B2_HAVE_B2ND_EXEC
@@ -87,6 +88,7 @@ static int b2_exec_describe(const void *plan, b2_exec_info *out) {
         out->ninputs = info.ninputs;
         out->identity = info.identity;
         out->reduction = info.reduction;
+        out->reducer = (int)info.reducer;
         out->plan_metadata_bytes = info.plan_metadata_bytes;
     }
     return rc;
@@ -124,14 +126,19 @@ static int b2_exec_schedule_describe(const void *schedule, b2_exec_info *out) {
 }
 static int b2_exec_execute(const void *schedule, const me_buffer *inputs, size_t ninputs,
                            me_mut_buffer output, unsigned raise_mask,
+                           size_t workers, size_t worker_scratch,
                            b2_exec_report *report, me_error *error) {
     b2nd_exec_report native = {0};
-    int rc = b2nd_exec_execute(schedule, inputs, ninputs, output, raise_mask, &native, error);
+    b2nd_exec_jobs jobs = {sizeof(jobs), workers ? workers : 1, worker_scratch};
+    int rc = b2nd_exec_execute(schedule, inputs, ninputs, output, raise_mask,
+                               workers > 1 ? &jobs : NULL, &native, error);
     report->tiles = native.tiles;
     report->map_calls = native.map_calls;
     report->direct_tiles = native.direct_tiles;
     report->mapped_bytes = native.mapped_bytes;
     report->fp = native.fp;
+    report->tasks = native.tasks;
+    report->worker_bytes = native.worker_bytes;
     return rc;
 }
 #else
@@ -170,9 +177,10 @@ static int b2_exec_schedule_describe(const void *schedule, b2_exec_info *out) {
 }
 static int b2_exec_execute(const void *schedule, const me_buffer *inputs, size_t ninputs,
                            me_mut_buffer output, unsigned raise_mask,
+                           size_t workers, size_t worker_scratch,
                            b2_exec_report *report, me_error *error) {
     (void)schedule; (void)inputs; (void)ninputs; (void)output; (void)raise_mask;
-    (void)report; (void)error;
+    (void)workers; (void)worker_scratch; (void)report; (void)error;
     return ME_ERR_UNSUPPORTED;
 }
 #endif

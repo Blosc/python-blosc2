@@ -14,7 +14,7 @@ cdef extern from "b2nd_exec_bridge.h":
         size_t itemsize
         int64_t shape[16]
     ctypedef struct b2_exec_info:
-        int dtype, reduction, identity, map_dtype
+        int dtype, reduction, identity, map_dtype, reducer
         size_t itemsize, ninputs, nitems, tile_items, mapped_bytes, reducer_bytes, output_items
         size_t plan_metadata_bytes, schedule_metadata_bytes
     ctypedef struct me_buffer:
@@ -26,6 +26,7 @@ cdef extern from "b2nd_exec_bridge.h":
     ctypedef struct b2_exec_report:
         size_t tiles, map_calls, direct_tiles, mapped_bytes
         me_fp_status fp
+        size_t tasks, worker_bytes
     int b2_exec_available()
     int b2_exec_prepare(const b2_exec_node *, size_t, size_t, uint32_t, int, void **, me_error *) nogil
     void b2_exec_free(void *)
@@ -35,7 +36,7 @@ cdef extern from "b2nd_exec_bridge.h":
                           void **, me_error *) nogil
     int b2_exec_schedule_describe(const void *, b2_exec_info *)
     int b2_exec_execute(const void *, const me_buffer *, size_t, me_mut_buffer,
-                        unsigned, b2_exec_report *, me_error *) nogil
+                        unsigned, size_t, size_t, b2_exec_report *, me_error *) nogil
 
 
 def _b2nd_exec_available():
@@ -204,7 +205,9 @@ cdef class _TypedExecPlan:
                 "map_dtype": _numpy_dtype_from_me_dtype(<me_dtype>self._info.map_dtype),
                 "plan_metadata_bytes": self._info.plan_metadata_bytes,
                 "ninputs": self._info.ninputs, "reduction": bool(self._info.reduction),
-                "identity": bool(self._info.identity)}
+                "identity": bool(self._info.identity),
+                "reducer": {0: None, 1: "sum", 2: "prod", 3: "min", 4: "max", 5: "any",
+                            6: "all"}.get(self._info.reducer, "unknown")}
 
     def specialize(self, inputs, size_t tile_items=1024, size_t max_mapped_bytes=65536):
         cdef b2_exec_meta metadata[128]
@@ -258,7 +261,8 @@ cdef class _TypedExecSchedule:
                 "output_items": self._info.output_items,
                 "schedule_metadata_bytes": self._info.schedule_metadata_bytes}
 
-    def execute(self, inputs, unsigned raise_mask=0, *, out=None):
+    def execute(self, inputs, unsigned raise_mask=0, *, out=None, size_t workers=1,
+                size_t max_worker_scratch=65536):
         cdef me_buffer buffers[128]
         cdef me_mut_buffer destination
         cdef me_error error
@@ -302,7 +306,8 @@ cdef class _TypedExecSchedule:
         memset(&error, 0, sizeof(error))
         memset(&report, 0, sizeof(report))
         with nogil:
-            rc = b2_exec_execute(self._schedule, buffers, count, destination, raise_mask, &report, &error)
+            rc = b2_exec_execute(self._schedule, buffers, count, destination, raise_mask,
+                                 workers, max_worker_scratch, &report, &error)
         if rc:
             raise _typed_exec_error(
                 rc, (<bytes>error.message).decode("utf-8", "replace"),
@@ -312,4 +317,5 @@ cdef class _TypedExecSchedule:
                         "evaluated_tiles": report.map_calls, "zero_copy_tiles": report.tiles,
                         "input_materialization_bytes": 0,
                         "temporary_bytes": report.mapped_bytes, "reducer_bytes": self._info.reducer_bytes,
+                        "tasks": report.tasks or 1, "worker_scratch_bytes": report.worker_bytes,
                         "fp_flags": report.fp.flags, "fp_supported": bool(report.fp.supported)}

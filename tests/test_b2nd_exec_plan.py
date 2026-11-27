@@ -130,7 +130,7 @@ def test_typed_failure_never_replays_adapter(monkeypatch):
     from blosc2 import typed_exec
 
     class FailedSchedule:
-        def execute(self, inputs):
+        def execute(self, inputs, **kwargs):
             raise ValueError("injected typed execution failure")
 
     class Prepared:
@@ -355,8 +355,8 @@ def test_named_typed_graph_has_no_adapter_prepare_or_borrow(monkeypatch):
     actual, _ = schedule.execute({"x": np.array([1, 2, 3], dtype="int16")})
     assert actual.dtype == np.dtype("int64")
     assert actual == 12
-    with pytest.raises(NotImplementedError, match="parallel"):
-        schedule.execute({}, workers=2)
+    with pytest.raises(NotImplementedError, match="Ordered reductions"):
+        schedule.execute({"x": np.array([1, 2, 3], dtype="int16")}, workers=2)
 
 
 @pytest.mark.parametrize(
@@ -395,6 +395,49 @@ def test_named_typed_graph_fp_raise_parity():
             graph.evaluate({"x": x}, tile_items=1, raise_mask=4)
         failures.append((caught.value.status, caught.value.fp_status))
     assert failures[0] == failures[1] == ("evaluation_error", {"flags": 4, "supported": True})
+
+
+def test_typed_parallel_jobs_preserve_values_and_bound_scratch():
+    values = np.random.default_rng(7).integers(-(2**40), 2**40, size=200_003)
+    for expression in ("min(x + 1)", "max(x)", "x * 2 + 1"):
+        typed = NativeGraph.from_expression(expression, {"x": "int64"}, jit=False, _executor="c-blosc2")
+        adapter = NativeGraph.from_expression(expression, {"x": "int64"}, jit=False, _executor="adapter")
+        expected = adapter.evaluate({"x": values}, tile_items=1024)
+        for workers in (1, 3, 12):
+            result, report = typed.evaluate(
+                {"x": values}, tile_items=1024, return_report=True, workers=workers
+            )
+            np.testing.assert_array_equal(np.asarray(result), np.asarray(expected))
+            assert report["tasks"] <= workers
+            assert report["worker_scratch_bytes"] == report["tasks"] * report["temporary_bytes"]
+            assert report["worker_scratch_bytes"] <= 65536
+    # The aggregate budget caps the job count instead of growing scratch.
+    result, report = typed.evaluate({"x": values}, tile_items=1024, return_report=True, workers=12)
+    assert report["tasks"] * report["temporary_bytes"] <= 65536
+
+
+def test_typed_ordered_reduction_rejects_partitioning():
+    values = np.arange(4096, dtype="int64")
+    for expression in ("sum(x)", "prod(x + 1)"):
+        plan = NativeGraph.from_expression(expression, {"x": "int64"}, jit=False, _executor="c-blosc2")
+        schedule = plan.specialize({"x": ("int64", values.shape)}, 64)
+        with pytest.raises(NotImplementedError, match="Ordered reductions"):
+            schedule.execute({"x": values}, workers=2)
+        serial, _ = schedule.execute({"x": values}, workers=1)
+        assert serial == NativeGraph.from_expression(
+            expression, {"x": "int64"}, jit=False, _executor="adapter"
+        ).evaluate({"x": values})
+
+
+def test_typed_parallel_float_min_unions_flags():
+    values = np.array([1.0, np.nan] * 4096, dtype="float64")
+    typed = NativeGraph.from_expression("min(x)", {"x": "float64"}, jit=False, _executor="c-blosc2")
+    adapter = NativeGraph.from_expression("min(x)", {"x": "float64"}, jit=False, _executor="adapter")
+    reference, reference_report = adapter.evaluate({"x": values}, tile_items=1024, return_report=True)
+    for workers in (1, 4):
+        result, report = typed.evaluate({"x": values}, tile_items=1024, return_report=True, workers=workers)
+        assert (result == result) == (reference == reference)  # NaN propagation matches.
+        assert report["fp_flags"] == reference_report["fp_flags"]
 
 
 def test_typed_resident_rejects_mixed_storage_before_prepare(monkeypatch):

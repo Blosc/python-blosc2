@@ -184,11 +184,15 @@ class TypedGraphSchedule:
         }
 
     def execute(self, inputs, raise_mask=0, *, out=None, workers=1):
-        if workers != 1:
-            raise NotImplementedError("Typed graph parallel jobs are not qualified")
+        """Bind current values; ``workers`` is a request, rejected before any read
+        if the contract cannot honour it (ordered sums, scratch budget)."""
+        if type(workers) is not int or workers < 1:
+            raise ValueError("workers must be a positive integer")
         if set(inputs) != set(self._names):
             raise ValueError("Typed graph input names do not match the schedule")
-        return self._native.execute(tuple(inputs[name] for name in self._names), raise_mask, out=out)
+        return self._native.execute(
+            tuple(inputs[name] for name in self._names), raise_mask, out=out, workers=workers
+        )
 
     def stage_info(self, stage):
         if stage != 0:

@@ -190,10 +190,18 @@ def compute_typed_resident_if_eligible(expr, item, tile, options):
         return None
     if info["reduction"] and not info["identity"] and min(items, tile) * info["map_dtype"].itemsize > 65536:
         return None
+    # Ordered sums/products keep serial leaves in C; order-independent
+    # reducers and disjoint map tiles may use the configured worker count.
+    workers = 1 if info.get("reducer") in {"sum", "prod"} else max(1, blosc2.nthreads)
     arrays = tuple(expr.operands[name] for name in names)
     schedule = plan.specialize(tuple((value.dtype, value.shape) for value in arrays), tile, 65536)
+    max_scratch = 65536
     if output is None:
-        result, expr._native_execution_report = schedule.execute(arrays)
+        result, expr._native_execution_report = schedule.execute(
+            arrays, workers=workers, max_worker_scratch=max_scratch
+        )
     else:
-        result, expr._native_execution_report = schedule.execute(arrays, out=output)
+        result, expr._native_execution_report = schedule.execute(
+            arrays, out=output, workers=workers, max_worker_scratch=max_scratch
+        )
     return result
