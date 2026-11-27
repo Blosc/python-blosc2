@@ -126,8 +126,8 @@ static int b2_exec_fp_end(b2_exec_fp_scope *scope, me_error *error) {
 static int b2_exec_available(void) { return 1; }
 static int b2_exec_prepare_impl(const b2_exec_node *nodes, size_t count, size_t ninputs,
                             uint32_t root, int execution, int compiler, int math_backend,
-                            void **out, size_t *failed_stage, uint32_t *failed_node,
-                            me_error *error, int staged) {
+                            int integer_powers, void **out, size_t *failed_stage,
+                            uint32_t *failed_node, me_error *error, int staged) {
     *out = NULL;
     if (failed_stage) *failed_stage = SIZE_MAX;
     if (failed_node) *failed_node = UINT32_MAX;
@@ -173,6 +173,7 @@ static int b2_exec_prepare_impl(const b2_exec_node *nodes, size_t count, size_t 
     options.execution = (me_execution_policy)execution;
     options.jit_compiler = (me_jit_compiler)compiler;
     options.math_backend = (me_math_backend)math_backend;
+    options.integer_powers = integer_powers != 0;
     int rc;
     if (staged) {
         b2nd_exec_staged_plan *plan = NULL;
@@ -191,9 +192,9 @@ static int b2_exec_prepare_impl(const b2_exec_node *nodes, size_t count, size_t 
 }
 static int b2_exec_prepare(const b2_exec_node *nodes, size_t count, size_t ninputs,
                            uint32_t root, int execution, int compiler, int math_backend,
-                           void **out, me_error *error) {
+                           int integer_powers, void **out, me_error *error) {
     return b2_exec_prepare_impl(nodes, count, ninputs, root, execution, compiler, math_backend,
-                                out, NULL, NULL, error, 0);
+                                integer_powers, out, NULL, NULL, error, 0);
 }
 static void b2_exec_free(void *plan) { b2nd_exec_plan_free(plan); }
 static void b2_exec_schedule_free(void *schedule) { b2nd_exec_schedule_free(schedule); }
@@ -431,21 +432,16 @@ static void b2_exec_fill_cb_report(b2_exec_callback_report *report,
     report->index_buffer_bytes = native->index_buffer_bytes;
     report->output_buffer_bytes = native->output_buffer_bytes;
 }
-static int b2_exec_execute_sources(const void *schedule, const b2_exec_source *sources,
-                                   const b2_exec_view *views, size_t ninputs,
-                                   void *output, size_t output_bytes,
-                                   const b2_exec_sink *sink, unsigned raise_mask,
-                                   size_t max_gather_bytes, size_t max_output_bytes,
-                                   b2_exec_callback_report *report, me_error *error) {
-    if (!sources || ninputs > B2ND_EXEC_MAX_INPUTS) {
+static int b2_exec_prepare_cb_args(const b2_exec_source *sources, const b2_exec_view *views,
+                                   size_t ninputs, b2nd_exec_source *native_sources,
+                                   b2nd_exec_view *native_views) {
+    if ((!sources && ninputs) || ninputs > B2ND_EXEC_MAX_INPUTS) {
         return ME_ERR_INVALID_ARG;
     }
-    b2nd_exec_view native_views[B2ND_EXEC_MAX_INPUTS] = {0};
     int prep = b2_exec_prepare_storage_views(views, ninputs, native_views);
     if (prep != ME_SUCCESS) {
         return prep;
     }
-    b2nd_exec_source native_sources[B2ND_EXEC_MAX_INPUTS] = {0};
     for (size_t i = 0; i < ninputs; i++) {
         native_sources[i].struct_size = sizeof(native_sources[i]);
         native_sources[i].dtype = (me_dtype)sources[i].dtype;
@@ -458,6 +454,20 @@ static int b2_exec_execute_sources(const void *schedule, const b2_exec_source *s
             native_sources[i].context = (void *)&sources[i];
             native_sources[i].read = b2_exec_cb_source_trampoline;
         }
+    }
+    return ME_SUCCESS;
+}
+static int b2_exec_execute_sources(const void *schedule, const b2_exec_source *sources,
+                                   const b2_exec_view *views, size_t ninputs,
+                                   void *output, size_t output_bytes,
+                                   const b2_exec_sink *sink, unsigned raise_mask,
+                                   size_t max_gather_bytes, size_t max_output_bytes,
+                                   b2_exec_callback_report *report, me_error *error) {
+    b2nd_exec_view native_views[B2ND_EXEC_MAX_INPUTS] = {0};
+    b2nd_exec_source native_sources[B2ND_EXEC_MAX_INPUTS] = {0};
+    int prep = b2_exec_prepare_cb_args(sources, views, ninputs, native_sources, native_views);
+    if (prep != ME_SUCCESS) {
+        return prep;
     }
     b2nd_exec_sink native_sink = {0};
     if (sink) {
@@ -476,6 +486,29 @@ static int b2_exec_execute_sources(const void *schedule, const b2_exec_source *s
         schedule, native_sources, views ? native_views : NULL, ninputs,
         (me_mut_buffer){output, output_bytes}, sink ? &native_sink : NULL,
         raise_mask, max_gather_bytes, max_output_bytes, &native, error);
+    b2_exec_fill_cb_report(report, &native);
+    return rc;
+}
+static int b2_exec_execute_sources_into(const void *schedule, const b2_exec_source *sources,
+                                        const b2_exec_view *views, size_t ninputs,
+                                        const b2_exec_output_view *output, unsigned raise_mask,
+                                        size_t max_gather_bytes,
+                                        b2_exec_callback_report *report, me_error *error) {
+    if (!output) {
+        return ME_ERR_INVALID_ARG;
+    }
+    b2nd_exec_view native_views[B2ND_EXEC_MAX_INPUTS] = {0};
+    b2nd_exec_source native_sources[B2ND_EXEC_MAX_INPUTS] = {0};
+    int prep = b2_exec_prepare_cb_args(sources, views, ninputs, native_sources, native_views);
+    if (prep != ME_SUCCESS) {
+        return prep;
+    }
+    b2nd_exec_output_view out_view = {sizeof(out_view), output->base, output->capacity, output->offset, {0}};
+    memcpy(out_view.strides, output->strides, sizeof(out_view.strides));
+    b2nd_exec_callback_report native = {0};
+    int rc = b2nd_exec_execute_sources_into(
+        schedule, native_sources, views ? native_views : NULL, ninputs,
+        &out_view, raise_mask, max_gather_bytes, &native, error);
     b2_exec_fill_cb_report(report, &native);
     return rc;
 }
@@ -662,9 +695,9 @@ static int b2_exec_fp_end(b2_exec_fp_scope *scope, me_error *error) {
 static int b2_exec_available(void) { return 0; }
 static int b2_exec_prepare(const b2_exec_node *nodes, size_t count, size_t ninputs,
                            uint32_t root, int execution, int compiler, int math_backend,
-                           void **out, me_error *error) {
+                           int integer_powers, void **out, me_error *error) {
     (void)nodes; (void)count; (void)ninputs; (void)root; (void)execution; (void)error;
-    (void)compiler; (void)math_backend;
+    (void)compiler; (void)math_backend; (void)integer_powers;
     *out = NULL;
     return ME_ERR_UNSUPPORTED;
 }
@@ -713,6 +746,16 @@ static int b2_exec_execute_sources(const void *schedule, const b2_exec_source *s
                                    b2_exec_callback_report *report, me_error *error) {
     (void)schedule; (void)sources; (void)views; (void)ninputs; (void)output; (void)output_bytes;
     (void)sink; (void)raise_mask; (void)max_gather_bytes; (void)max_output_bytes; (void)error;
+    memset(report, 0, sizeof(*report));
+    return ME_ERR_UNSUPPORTED;
+}
+static int b2_exec_execute_sources_into(const void *schedule, const b2_exec_source *sources,
+                                        const b2_exec_view *views, size_t ninputs,
+                                        const b2_exec_output_view *output, unsigned raise_mask,
+                                        size_t max_gather_bytes,
+                                        b2_exec_callback_report *report, me_error *error) {
+    (void)schedule; (void)sources; (void)views; (void)ninputs; (void)output;
+    (void)raise_mask; (void)max_gather_bytes; (void)error;
     memset(report, 0, sizeof(*report));
     return ME_ERR_UNSUPPORTED;
 }

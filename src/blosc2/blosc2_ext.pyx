@@ -2664,7 +2664,7 @@ cdef class MenudetArtifactHandle:
     cdef bytes _recipe_document
     cdef object _attested_graph
     cdef object _resident_meta
-    cdef object _identity_input
+    cdef public object _identity_input
 
     def _b2nd_scalar_pilot_eligible(self):
         return bool(b2_pilot_scalar_eligible(self._handle))

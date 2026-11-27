@@ -686,7 +686,7 @@ class MenudetKernel:
     """
 
     @classmethod
-    def from_recipe(cls, recipe, input_dtypes, *, jit=None):
+    def from_recipe(cls, recipe, input_dtypes, *, jit=None, _retain_recipe=True):
         """Specialize a reusable recipe against caller-supplied input types."""
         from . import blosc2_ext, jit_config
         from .menudet_recipe import (
@@ -744,7 +744,7 @@ class MenudetKernel:
                 recipe["ndim"],
                 recipe["casting"],
                 mode,
-                recipe,
+                recipe if _retain_recipe else None,
             )
             if "math" in environment and options["math_backend"] is not None:
                 with jit_config.compute_options(math_backend=None):

@@ -87,7 +87,7 @@ cdef extern from "b2nd_exec_bridge.h":
         size_t write_calls, write_items, max_write_items, written_bytes
         size_t index_buffer_bytes, output_buffer_bytes
     int b2_exec_available()
-    int b2_exec_prepare(const b2_exec_node *, size_t, size_t, uint32_t, int, int, int, void **, me_error *) nogil
+    int b2_exec_prepare(const b2_exec_node *, size_t, size_t, uint32_t, int, int, int, int, void **, me_error *) nogil
     void b2_exec_free(void *)
     void b2_exec_schedule_free(void *)
     int b2_exec_describe(const void *, b2_exec_info *)
@@ -108,6 +108,9 @@ cdef extern from "b2nd_exec_bridge.h":
     int b2_exec_execute_sources(const void *, const b2_exec_source *, const b2_exec_view *, size_t,
                                 void *, size_t, const b2_exec_sink *, unsigned, size_t, size_t,
                                 b2_exec_callback_report *, me_error *) nogil
+    int b2_exec_execute_sources_into(const void *, const b2_exec_source *, const b2_exec_view *, size_t,
+                                     const b2_exec_output_view *, unsigned, size_t,
+                                     b2_exec_callback_report *, me_error *) nogil
     int b2_exec_artifact_has_core(const void *)
     int b2_exec_prepare_artifact_kernel(const void *, int, const b2_exec_reduce_opts *,
                                         void **, me_error *) nogil
@@ -136,7 +139,7 @@ cdef extern from "b2nd_exec_bridge.h":
         size_t entered_stages, intermediate_bytes, live_intermediate_bytes
         size_t failed_stage, failed_node
         me_fp_status fp
-    int b2_st_prepare(const b2_exec_node *, size_t, size_t, uint32_t, int, int, int,
+    int b2_st_prepare(const b2_exec_node *, size_t, size_t, uint32_t, int, int, int, int,
                       void **, b2_st_diag *, me_error *) nogil
     void b2_st_free(void *)
     void b2_st_schedule_free(void *)
@@ -152,6 +155,9 @@ cdef extern from "b2nd_exec_bridge.h":
     int b2_st_stage(const void *, size_t, b2_st_info *)
     int b2_st_execute(const void *, const b2_exec_source *, const b2_exec_view *, size_t,
                       void *, size_t, unsigned, size_t, b2_st_report *, me_error *) nogil
+    int b2_st_execute_into(const void *, const b2_exec_source *, const b2_exec_view *, size_t,
+                           const b2_exec_output_view *, unsigned, size_t, b2_st_report *,
+                           me_error *) nogil
 
 
 def _typed_exec_error(status, message, flags, supported, line, column):
@@ -173,6 +179,7 @@ def _typed_exec_error(status, message, flags, supported, line, column):
     )
     if status == -5:
         exception.fp_status = {"flags": flags, "supported": bool(supported)}
+        exception.stage = 0
     return exception
 
 
@@ -412,7 +419,8 @@ cdef class _TypedExecPlan:
     cdef bint _borrowed_plan
 
     def __cinit__(self, nodes=None, size_t ninputs=0, uint32_t root=0, int execution=0,
-                  int jit_compiler=0, int math_backend=0, bint staged=False):
+                  int jit_compiler=0, int math_backend=0, bint staged=False,
+                  bint integer_powers=False):
         cdef b2_exec_node native[1024]
         cdef me_error error
         cdef size_t count
@@ -504,10 +512,12 @@ cdef class _TypedExecPlan:
         with nogil:
             if staged:
                 rc = b2_st_prepare(native, count, ninputs, root, execution,
-                                   jit_compiler, math_backend, &self._plan, &diag, &error)
+                                   jit_compiler, math_backend, <int>integer_powers,
+                                   &self._plan, &diag, &error)
             else:
                 rc = b2_exec_prepare(native, count, ninputs, root, execution,
-                                     jit_compiler, math_backend, &self._plan, &error)
+                                     jit_compiler, math_backend, <int>integer_powers,
+                                     &self._plan, &error)
         if rc:
             if staged:
                 raise_staged_error(rc, &error, diag.stage, diag.node)
@@ -923,17 +933,18 @@ cdef class _TypedExecSchedule:
                 if type(out) is not np.ndarray or out.shape != out_shape or out.dtype != out_dtype:
                     raise ValueError("Typed source output dtype/shape mismatch")
                 output = out
-            if not output.flags.c_contiguous:
-                raise NotImplementedError("Typed source output must be contiguous")
             owner = typed_output_view_binding(output, &output_view)
-            out_ptr = <char *>output_view.base + output_view.offset
-            output_bytes = output.nbytes
             result = output
         with nogil:
-            rc = b2_exec_execute_sources(
-                self._schedule, sources, views if has_views else NULL, count,
-                out_ptr, output_bytes, &c_sink if use_sink else NULL,
-                raise_mask, max_gather_bytes, max_output_bytes, &report, &error)
+            if use_sink:
+                rc = b2_exec_execute_sources(
+                    self._schedule, sources, views if has_views else NULL, count,
+                    NULL, 0, &c_sink, raise_mask, max_gather_bytes, max_output_bytes,
+                    &report, &error)
+            else:
+                rc = b2_exec_execute_sources_into(
+                    self._schedule, sources, views if has_views else NULL, count,
+                    &output_view, raise_mask, max_gather_bytes, &report, &error)
         for cb_state in cb_states:
             if cb_state.error is not None:
                 raise cb_state.error
@@ -946,6 +957,7 @@ cdef class _TypedExecSchedule:
         return result, {
             "route": "c-blosc2-typed-sources", "tiles": report.execution.tiles,
             "map_calls": report.execution.map_calls, "direct_tiles": report.execution.direct_tiles,
+            "evaluated_tiles": report.execution.map_calls,
             "temporary_bytes": report.execution.mapped_bytes,
             "gather_bytes": report.execution.gather_bytes, "gathered_bytes": report.execution.gathered_bytes,
             "read_calls": report.read_calls, "read_items": report.read_items,
@@ -1022,7 +1034,7 @@ cdef class _TypedExecSchedule:
                 report.fp.flags, report.fp.supported, 0, 0)
         return output, {"route": "c-blosc2-typed-resident", "tiles": report.tiles,
                         "map_calls": report.map_calls, "direct_tiles": report.direct_tiles,
-                         "evaluated_tiles": report.map_calls,
+                         "evaluated_tiles": report.map_calls if report.map_calls else (report.tiles if (report.gathered_bytes and (<_TypedExecPlan>self._owner)._info.reduction) else 0),
                          "interpreter_calls": report.interpreter_calls, "jit_calls": report.jit_calls,
                          "has_jit": bool(report.jit_calls),
                         "zero_copy_tiles": report.tiles if report.gathered_bytes == 0 else 0,
@@ -1103,6 +1115,8 @@ cdef class _TypedStagedSchedule(_TypedExecSchedule):
 
     def execute_sources(self, inputs, unsigned raise_mask=0, *, out=None, sink=None,
                         size_t workers=1, size_t max_gather_bytes=67108864):
+        from .storage_readers import ReaderState
+
         cdef b2_exec_source sources[128]
         cdef b2_exec_view views[128]
         cdef b2_exec_output_view out_view
@@ -1128,23 +1142,32 @@ cdef class _TypedStagedSchedule(_TypedExecSchedule):
             dtype, shape = self._metadata[i]
             if isinstance(obj, NDArray):
                 raise NotImplementedError("Compressed staged execution is not admitted")
-            if np.dtype(obj.dtype).newbyteorder("=") != dtype or tuple(obj.shape) != shape:
-                raise ValueError("Staged input dtype/shape mismatch")
-            sources[i].dtype = _me_dtype_from_numpy_dtype(dtype)
-            sources[i].itemsize = dtype.itemsize
-            sources[i].ndim = len(shape)
-            for j, extent in enumerate(shape):
-                sources[i].shape[j] = extent
             if type(obj) is np.ndarray:
+                if obj.dtype.newbyteorder("=") != dtype or tuple(obj.shape) != shape:
+                    raise ValueError("Staged input dtype/shape mismatch")
                 value = obj
                 owners.append(typed_view_binding(value, &views[i]))
-            elif callable(getattr(obj, "read", None)):
+            elif isinstance(obj, ReaderState) and callable(getattr(obj.reader, "read", None)):
+                if np.dtype(obj.dtype).newbyteorder("=") != dtype or tuple(obj.reader.shape) != shape:
+                    raise ValueError("Staged input dtype/shape mismatch")
+                cb_state = _TypedSourceState(obj.reader, dtype, obj)
+                callbacks.append(cb_state)
+                sources[i].context = <void *>cb_state
+                sources[i].read = _typed_source_read_cb
+            elif hasattr(obj, "dtype") and hasattr(obj, "shape") and callable(getattr(obj, "read", None)):
+                if np.dtype(obj.dtype).newbyteorder("=") != dtype or tuple(obj.shape) != shape:
+                    raise ValueError("Staged input dtype/shape mismatch")
                 cb_state = _TypedSourceState(obj, dtype, None)
                 callbacks.append(cb_state)
                 sources[i].context = <void *>cb_state
                 sources[i].read = _typed_source_read_cb
             else:
                 raise TypeError("Staged inputs require NumPy buffers or source adapters")
+            sources[i].dtype = _me_dtype_from_numpy_dtype(dtype)
+            sources[i].itemsize = dtype.itemsize
+            sources[i].ndim = len(shape)
+            for j, extent in enumerate(shape):
+                sources[i].shape[j] = extent
         shape = tuple(self._info.output_shape[i] for i in range(self._info.output_ndim))
         dtype = _numpy_dtype_from_me_dtype(<me_dtype>self._info.dtype)
         if out is None:
@@ -1153,14 +1176,10 @@ cdef class _TypedStagedSchedule(_TypedExecSchedule):
             if type(out) is not np.ndarray or out.dtype != dtype or out.shape != shape:
                 raise ValueError("Staged output dtype/shape mismatch")
             output = out
-        if not output.flags.c_contiguous:
-            raise NotImplementedError("Staged output must be contiguous")
         owners.append(typed_output_view_binding(output, &out_view))
-        out_bytes = output.nbytes
-        out_ptr = <void *>np.PyArray_DATA(output) if out_bytes else NULL
         with nogil:
-            rc = b2_st_execute(self._schedule, sources, views, n, out_ptr, out_bytes,
-                               raise_mask, max_gather_bytes, &report, &error)
+            rc = b2_st_execute_into(self._schedule, sources, views, n, &out_view,
+                                    raise_mask, max_gather_bytes, &report, &error)
         for cb_state in callbacks:
             if cb_state.error is not None:
                 raise cb_state.error

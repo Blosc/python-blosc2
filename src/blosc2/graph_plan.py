@@ -11,6 +11,18 @@ from .blosc2_ext import NativeGraphHandle
 from .menudet_kernel import menudet_execution_environment
 
 
+def _use_typed_executor(_executor):
+    if _executor == "c-blosc2":
+        return True
+    if _executor == "adapter":
+        return False
+    if _executor == "auto":
+        return bool(getattr(blosc2_ext, "_b2nd_exec_available", lambda: False)()) and bool(
+            getattr(blosc2_ext, "native_graph_executor_available", lambda: True)()
+        )
+    raise ValueError("Unknown graph executor")
+
+
 class NativeGraph:
     """Immutable native graph/capture ownership, with no operand or result cache.
 
@@ -25,8 +37,9 @@ class NativeGraph:
         *,
         jit: bool | None = None,
         require_jit: bool = False,
-        _executor="adapter",
+        _executor="auto",
     ):
+        self._explicit_executor = _executor
         jit = jit_config.execution_options()["jit"] if jit is None else jit
         if isinstance(graph, dict):
             graph = json.dumps(graph, separators=(",", ":"))
@@ -42,32 +55,42 @@ class NativeGraph:
             else 2
         )
         self._capture_execution_policy()
-        if _executor == "c-blosc2":
+        use_typed = _use_typed_executor(_executor)
+        if use_typed:
             from .typed_graph import TypedGraphHandle
 
-            self._handle = TypedGraphHandle.from_json(graph, jit=jit, require_jit=require_jit)
-        elif _executor == "adapter":
-            self._handle = NativeGraphHandle(graph, mode, require_jit)
+            try:
+                self._handle = TypedGraphHandle.from_json(
+                    graph,
+                    jit=jit,
+                    require_jit=require_jit,
+                    allow_where=(_executor == "c-blosc2"),
+                )
+            except NotImplementedError:
+                if _executor == "c-blosc2":
+                    raise
+                self._handle = NativeGraphHandle(graph, mode, require_jit)
         else:
-            raise ValueError("Unknown graph executor")
+            self._handle = NativeGraphHandle(graph, mode, require_jit)
         self._info = self._handle.info()
 
     @classmethod
-    def from_json(cls, graph, *, jit=None, require_jit=False, _executor="adapter"):
+    def from_json(cls, graph, *, jit=None, require_jit=False, _executor="auto"):
         return cls(graph, jit=jit, require_jit=require_jit, _executor=_executor)
 
     @classmethod
-    def from_expression(cls, expression, input_dtypes, *, jit=None, require_jit=False, _executor="adapter"):
+    def from_expression(cls, expression, input_dtypes, *, jit=None, require_jit=False, _executor="auto"):
         """Restricted grammar, not a Python expression evaluator.
 
-        ``_executor`` explicitly selects the comparison adapter (default) or
-        the opt-in C-Blosc2 resident subset. Unsupported typed requests fail
-        before execution; there is no runtime backend fallback.
+        ``_executor`` defaults to ``"auto"``, selecting C-Blosc2 typed execution
+        whenever built and admitted and falling back to the adapter only when
+        metadata admission returns ``NotImplementedError``.
         """
         jit = jit_config.execution_options()["jit"] if jit is None else jit
         if not isinstance(expression, str):
             raise TypeError("Native expression must be text")
         result = cls.__new__(cls)
+        result._explicit_executor = _executor
         mode = (
             1
             if jit or require_jit
@@ -76,16 +99,28 @@ class NativeGraph:
             else 2
         )
         result._capture_execution_policy()
-        if _executor == "adapter":
+        use_typed = _use_typed_executor(_executor)
+        if use_typed:
+            from .typed_graph import TypedGraphHandle
+
+            try:
+                result._handle = TypedGraphHandle(
+                    expression,
+                    input_dtypes,
+                    jit=jit,
+                    require_jit=require_jit,
+                    allow_where=(_executor == "c-blosc2"),
+                )
+            except NotImplementedError:
+                if _executor == "c-blosc2":
+                    raise
+                result._handle = NativeGraphHandle.from_expression(
+                    expression.encode("utf-8"), input_dtypes, mode, require_jit
+                )
+        else:
             result._handle = NativeGraphHandle.from_expression(
                 expression.encode("utf-8"), input_dtypes, mode, require_jit
             )
-        elif _executor == "c-blosc2":
-            from .typed_graph import TypedGraphHandle
-
-            result._handle = TypedGraphHandle(expression, input_dtypes, jit=jit, require_jit=require_jit)
-        else:
-            raise ValueError("Unknown graph executor")
         result._info = result._handle.info()
         return result
 
@@ -120,7 +155,11 @@ class NativeGraph:
         return self._handle.to_json()
 
     def info(self):
-        return {**self._info, "inputs": self.input_dtypes}
+        return {
+            **self._info,
+            "inputs": self.input_dtypes,
+            "executor": getattr(self._handle, "_executor", "adapter"),
+        }
 
     def reduction_info(self):
         """Borrowed root-reduction metadata; None for non-reduction graphs."""
@@ -190,14 +229,40 @@ class NativeGraph:
         Unsupported bindings raise before numerical reads, without adapter replay.
         """
         if getattr(self._handle, "_executor", None) == "c-blosc2":
+            if (
+                getattr(self, "_explicit_executor", "auto") != "c-blosc2"
+                and self.info()["stages"] != 1
+                and any(isinstance(value, blosc2_ext.NDArray) for value in inputs.values())
+            ):
+                raise ValueError("Storage readers require a single-region graph")
             all_native = all(
                 isinstance(value, (blosc2_ext.NDArray, np.ndarray)) for value in inputs.values()
             )
-            if all_native and sink is None and not budgets:
+            if (
+                all_native
+                and sink is None
+                and not budgets
+                and (
+                    out is None
+                    or isinstance(out, blosc2_ext.NDArray)
+                    or (isinstance(out, np.ndarray) and out.flags.c_contiguous)
+                )
+            ):
                 schedule = self.specialize(
                     {name: (value.dtype, value.shape) for name, value in inputs.items()}, tile_items
                 )
                 result, report = schedule.execute_arrays(inputs, raise_mask, out=out, workers=workers)
+                report["reader_bytes"] = (
+                    sum(
+                        v.size * v.dtype.itemsize
+                        for v in inputs.values()
+                        if isinstance(v, blosc2_ext.NDArray)
+                    )
+                    if report.get("decodes", 0) > 0
+                    else 0
+                )
+                report.setdefault("maximum_reader_items", int(report.get("max_group_items", 0)))
+                report.setdefault("input_materialization_bytes", 0)
                 return (result, report) if return_report else result
             from .storage_readers import ReaderState
 

@@ -62,7 +62,9 @@ def test_original_graph_execution_retained(case):
         kwargs["_native_tile_items"] = 64
     result = expr.compute(item=item, **kwargs)
     np.testing.assert_array_equal(result, (x + (y - 1))[item])
-    if case not in {"strided", "broadcast"}:
+    if case not in {"strided", "broadcast"} and not (
+        case == "typed-capture" and getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)()
+    ):
         assert expr._native_execution_report.get("route") != "parallel-resident"
 
 
@@ -126,7 +128,7 @@ def test_graph_execution_failure_never_replays(parallel_runtime, monkeypatch):
 def test_borrowed_artifact_retains_native_owner(parallel_runtime):
     from blosc2.graph_plan import NativeGraph
 
-    plan = NativeGraph.from_expression("x + 1", {"x": np.dtype("float64")}, jit=True)
+    plan = NativeGraph.from_expression("x + 1", {"x": np.dtype("float64")}, jit=True, _executor="adapter")
     borrowed = plan._handle.resident_artifact()
     assert borrowed is not None
     del plan
@@ -140,7 +142,7 @@ def test_borrowed_artifact_retains_native_owner(parallel_runtime):
 
 def test_borrowed_artifact_collected_with_unreachable_cycle():
     def make_cycle():
-        plan = NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=False)
+        plan = NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=False, _executor="adapter")
         borrowed = plan._handle.resident_artifact()
         assert borrowed is not None
         cycle = [borrowed]

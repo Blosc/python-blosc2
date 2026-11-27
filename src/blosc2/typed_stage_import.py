@@ -114,6 +114,7 @@ def _graph(document, policy, overrides=None):
         jit_compiler=compiler,
         math_backend=math_backend,
         staged=staged,
+        integer_powers=document.get("optimization") == "aggressive",
     )
     original_inferred = plan.info()["inferred_dtype"]
     output = document["output"]
@@ -290,7 +291,7 @@ def _staged(document, policy):
     return plan, names, dtypes, None, plan.info()["inferred_dtype"]
 
 
-def prepare_typed_document(data, handle_type, *, jit, require_jit):
+def prepare_typed_document(data, handle_type, *, jit, require_jit, allow_where=True):
     """Validate an envelope once, then retain native typed ownership/metadata."""
     if not getattr(blosc2_ext, "_b2nd_exec_available", lambda: False)():
         raise NotImplementedError("Build with the C-Blosc2 typed executor")
@@ -314,6 +315,8 @@ def prepare_typed_document(data, handle_type, *, jit, require_jit):
     except (KeyError, TypeError, ValueError, RecursionError, OverflowError) as error:
         raise MenudetError(str(error) or "Invalid typed graph", status="invalid_graph") from error
     plan, names, dtypes, reduction, inferred = result
+    if not allow_where and plan.info()["stages"] == 1 and reduction and reduction["where"]:
+        raise NotImplementedError("Masked reductions keep adapter compatibility")
     handle = handle_type.__new__(handle_type)
     handle._plan, handle._names, handle._dtypes = plan, names, dtypes
     handle._staged = plan.info()["stages"] > 1
@@ -323,4 +326,5 @@ def prepare_typed_document(data, handle_type, *, jit, require_jit):
     handle._import_reduction = reduction
     handle._import_inferred_dtype = inferred
     handle._jit_backend, handle._math_backend = configured["jit_backend"], configured["math_backend"]
+    handle._integer_powers = document.get("optimization") == "aggressive"
     return handle

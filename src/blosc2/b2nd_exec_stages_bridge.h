@@ -32,9 +32,10 @@ static void b2_st_fill_plan(b2_exec_info *out, const b2nd_exec_plan_info *info) 
 }
 static int b2_st_prepare(const b2_exec_node *nodes, size_t count, size_t ninputs,
                          uint32_t root, int execution, int compiler, int math_backend,
-                         void **out, b2_st_diag *diag, me_error *error) {
+                         int integer_powers, void **out, b2_st_diag *diag, me_error *error) {
     return b2_exec_prepare_impl(nodes, count, ninputs, root, execution, compiler, math_backend,
-                                out, diag ? &diag->stage : NULL, diag ? &diag->node : NULL, error, 1);
+                                integer_powers, out, diag ? &diag->stage : NULL,
+                                diag ? &diag->node : NULL, error, 1);
 }
 static void b2_st_free(void *plan) { b2nd_exec_staged_plan_free(plan); }
 static void b2_st_schedule_free(void *schedule) { b2nd_exec_staged_schedule_free(schedule); }
@@ -147,44 +148,55 @@ static int b2_st_stage(const void *schedule, size_t stage, b2_st_info *out) {
     out->node = info.node; out->last_consumer = info.last_consumer; out->output_bytes = info.output_bytes;
     return 0;
 }
+static void b2_st_fill_report(b2_st_report *report, const b2nd_exec_staged_report *native) {
+    memset(report, 0, sizeof(*report));
+    for (size_t s = 0; s < B2ND_EXEC_MAX_STAGES; s++) {
+        b2_exec_fill_cb_report(&report->stages[s], &native->stages[s]);
+    }
+    report->entered_stages = native->entered_stages;
+    report->intermediate_bytes = native->intermediate_bytes;
+    report->live_intermediate_bytes = native->live_intermediate_bytes;
+    report->failed_stage = native->failed_stage;
+    report->failed_node = native->failed_node;
+    report->fp = native->fp;
+}
 static int b2_st_execute(const void *schedule, const b2_exec_source *sources,
                          const b2_exec_view *views, size_t ninputs,
                          void *output, size_t capacity, unsigned raise_mask,
                          size_t gather, b2_st_report *report, me_error *error) {
-    if (ninputs > B2ND_EXEC_MAX_INPUTS) return ME_ERR_INVALID_ARG;
     b2nd_exec_view native_views[B2ND_EXEC_MAX_INPUTS] = {{0}};
-    int prep = b2_exec_prepare_storage_views(views, ninputs, native_views);
-    if (prep != ME_SUCCESS) return prep;
     b2nd_exec_source native_sources[B2ND_EXEC_MAX_INPUTS] = {{0}};
-    for (size_t i = 0; i < ninputs; i++) {
-        native_sources[i].struct_size = sizeof(native_sources[i]);
-        native_sources[i].dtype = (me_dtype)sources[i].dtype;
-        native_sources[i].itemsize = sources[i].itemsize;
-        native_sources[i].ndim = (size_t)sources[i].ndim;
-        memcpy(native_sources[i].shape, sources[i].shape, sizeof(native_sources[i].shape));
-        if (sources[i].read) {
-            native_sources[i].context = (void *)&sources[i];
-            native_sources[i].read = b2_exec_cb_source_trampoline;
-        }
-    }
+    int prep = b2_exec_prepare_cb_args(sources, views, ninputs, native_sources, native_views);
+    if (prep != ME_SUCCESS) return prep;
     b2nd_exec_staged_report native = {0};
     int rc = b2nd_exec_staged_execute_sources(schedule, native_sources, native_views,
         ninputs, (me_mut_buffer){output, capacity}, raise_mask, gather, &native, error);
-    memset(report, 0, sizeof(*report));
-    for (size_t s = 0; s < B2ND_EXEC_MAX_STAGES; s++) b2_exec_fill_cb_report(&report->stages[s], &native.stages[s]);
-    report->entered_stages = native.entered_stages;
-    report->intermediate_bytes = native.intermediate_bytes;
-    report->live_intermediate_bytes = native.live_intermediate_bytes;
-    report->failed_stage = native.failed_stage; report->failed_node = native.failed_node;
-    report->fp = native.fp;
+    b2_st_fill_report(report, &native);
+    return rc;
+}
+static int b2_st_execute_into(const void *schedule, const b2_exec_source *sources,
+                              const b2_exec_view *views, size_t ninputs,
+                              const b2_exec_output_view *output, unsigned raise_mask,
+                              size_t gather, b2_st_report *report, me_error *error) {
+    if (!output) return ME_ERR_INVALID_ARG;
+    b2nd_exec_view native_views[B2ND_EXEC_MAX_INPUTS] = {{0}};
+    b2nd_exec_source native_sources[B2ND_EXEC_MAX_INPUTS] = {{0}};
+    int prep = b2_exec_prepare_cb_args(sources, views, ninputs, native_sources, native_views);
+    if (prep != ME_SUCCESS) return prep;
+    b2nd_exec_output_view out_view = {sizeof(out_view), output->base, output->capacity, output->offset, {0}};
+    memcpy(out_view.strides, output->strides, sizeof(out_view.strides));
+    b2nd_exec_staged_report native = {0};
+    int rc = b2nd_exec_staged_execute_sources_into(schedule, native_sources, native_views,
+        ninputs, &out_view, raise_mask, gather, &native, error);
+    b2_st_fill_report(report, &native);
     return rc;
 }
 #else
 static int b2_st_prepare(const b2_exec_node *nodes, size_t count, size_t ninputs,
                          uint32_t root, int execution, int compiler, int math_backend,
-                         void **out, b2_st_diag *diag, me_error *error) {
+                         int integer_powers, void **out, b2_st_diag *diag, me_error *error) {
     (void)nodes; (void)count; (void)ninputs; (void)root; (void)execution;
-    (void)compiler; (void)math_backend; (void)error;
+    (void)compiler; (void)math_backend; (void)integer_powers; (void)error;
     if (diag) {
         diag->stage = (size_t)-1;
         diag->node = (uint32_t)-1;
@@ -237,6 +249,13 @@ static int b2_st_execute(const void *schedule, const b2_exec_source *sources,
                          void *output, size_t capacity, unsigned raise_mask,
                          size_t gather, b2_st_report *report, me_error *error) {
     (void)schedule; (void)sources; (void)views; (void)ninputs; (void)output; (void)capacity;
+    (void)raise_mask; (void)gather; (void)report; (void)error; return ME_ERR_UNSUPPORTED;
+}
+static int b2_st_execute_into(const void *schedule, const b2_exec_source *sources,
+                              const b2_exec_view *views, size_t ninputs,
+                              const b2_exec_output_view *output, unsigned raise_mask,
+                              size_t gather, b2_st_report *report, me_error *error) {
+    (void)schedule; (void)sources; (void)views; (void)ninputs; (void)output;
     (void)raise_mask; (void)gather; (void)report; (void)error; return ME_ERR_UNSUPPORTED;
 }
 #endif

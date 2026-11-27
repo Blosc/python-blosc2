@@ -513,7 +513,7 @@ def test_named_typed_graph_has_no_adapter_prepare_or_borrow(monkeypatch):
 
 @pytest.mark.parametrize(
     "expression",
-    ["x.min()", "x @ x", "x + 0x10", "x + 1_000", "sum(x, dtype=float64)", "x + 00.1", "x + 1.e3"],
+    ["x.min()", "x @ x", "x + 0x10", "x + 1_000", "sum(x, dtype=complex64)", "x + 00.1", "x + 1.e3"],
 )
 def test_named_typed_graph_restricts_grammar_and_options(expression):
     with pytest.raises(NotImplementedError):
@@ -636,19 +636,21 @@ def test_typed_truth_reductions_and_empty_domains(reducer, dtype):
     expression = f"{reducer}(x * 2)"
     typed = NativeGraph.from_expression(expression, {"x": dtype}, jit=False, _executor="c-blosc2")
     adapter = NativeGraph.from_expression(expression, {"x": dtype}, jit=False, _executor="adapter")
-    # The core deliberately does not certify value-dependent narrow weak
-    # conversions yet, even when this particular capture fits.
-    partitionable = dtype != "int8"
-    assert typed.info()["partitionable"] is partitionable
-    if not partitionable:
-        with pytest.raises(NotImplementedError, match="not proven partitionable"):
-            typed.evaluate({"x": values}, tile_items=4, workers=3)
-    for workers in (1, 3) if partitionable else (1,):
+    # Weak capture `2` fits in all tested dtypes including `int8`, so partitionable is True.
+    assert typed.info()["partitionable"] is True
+    for workers in (1, 3):
         actual, report = typed.evaluate({"x": values}, tile_items=4, return_report=True, workers=workers)
         expected = adapter.evaluate({"x": values}, tile_items=4)
         assert actual.dtype == expected.dtype == np.dtype("bool")
         assert actual.tobytes() == expected.tobytes()
         assert report["tasks"] <= workers
+    if dtype == "int8":
+        unfit = NativeGraph.from_expression(
+            f"{reducer}(x * 200)", {"x": dtype}, jit=False, _executor="c-blosc2"
+        )
+        assert unfit.info()["partitionable"] is False
+        with pytest.raises(NotImplementedError, match="not proven partitionable"):
+            unfit.evaluate({"x": values}, tile_items=4, workers=3)
     empty = np.empty((2, 0, 3), dtype=dtype)
     with blosc2.expression_evaluation("safe"):
         expr = blosc2.lazyexpr(expression, {"x": empty})

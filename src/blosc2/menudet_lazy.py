@@ -118,10 +118,12 @@ class MenudetLazyArray(LazyArray):
         return self.chunks
 
     def _scalar_pilot_values(self, selection):
-        # Opt-in full reads only. Do not resize a logical partition to fit
-        # scratch or retry on execution errors after a native read has started.
+        # Retired once the general C-Blosc2 typed executor is available; retain
+        # direct pilot coverage via explicit test_b2nd_exec_* tests only.
         from . import blosc2_ext
 
+        if getattr(blosc2_ext, "_b2nd_exec_available", lambda: False)():
+            return None
         if (
             not blosc2_ext._b2nd_kernel_pilot_available()
             or self.kernel.result_cardinality != "block_scalar"

@@ -580,9 +580,11 @@ def _resident_map_min_plan(source, items, tile):
 
 
 def compute_c_blosc2_min_if_eligible(expr, item, tile, options):
-    """Opt-in whole-domain int64 min/map-min; bind fresh resident values each call."""
+    """Retired for normal callers when C-Blosc2 typed execution is built."""
     import blosc2
 
+    if getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)():
+        return None
     if (
         _NUMPY_VALUE_PROMOTION
         or not getattr(blosc2.blosc2_ext, "_b2nd_min_i64_available", lambda: False)()
@@ -1254,6 +1256,14 @@ def _compressed_execution_layout(plan, inputs, shape, *, reduction=True):
     return first, workers, op
 
 
+def _reduction_prefilter_artifact(plan):
+    artifact = plan._handle.reduction_artifact()
+    if artifact is not None:
+        return artifact
+    fallback = getattr(plan._handle, "_prefilter_artifact", None)
+    return None if fallback is None else fallback()
+
+
 def _pairwise_prefilter_kernel(plan, inputs, shape):
     """Metadata-only admission; execution failures must never replay another route."""
     import blosc2
@@ -1263,7 +1273,7 @@ def _pairwise_prefilter_kernel(plan, inputs, shape):
     first = next(value for value in inputs.values() if type(value) is blosc2.NDArray)
     if len(shape) != 1 or first.chunks[0] % first.blocks[0]:
         return None
-    artifact = plan._handle.reduction_artifact()
+    artifact = _reduction_prefilter_artifact(plan)
     if artifact is None:
         return None
     signature = artifact.descriptor_info()
@@ -1300,7 +1310,7 @@ def _prefilter_graph_reduction(plan, inputs, shape, op, first):
         # These inexpensive reducers benefit more from streaming independent
         # chunk regions than from oversubscribing each sequential chunk.
         return None
-    artifact = plan._handle.reduction_artifact()
+    artifact = _reduction_prefilter_artifact(plan)
     if artifact is None:
         return None
     signature = artifact.descriptor_info()
@@ -1413,7 +1423,7 @@ def compute_prefilter_moments_if_eligible(
         plan, inputs, reduction = lower_native_graph(expr, jit=jit is not False)
         if reduction or plan.info()["stages"] != 1:
             return None
-        artifact = plan._handle.reduction_artifact()
+        artifact = _reduction_prefilter_artifact(plan)
     except NotImplementedError:
         return None
     except blosc2.MenudetError as error:
@@ -1502,7 +1512,7 @@ def compute_prefilter_argreduce_if_eligible(  # noqa: C901 -- metadata-only admi
         plan, inputs, is_reduction = lower_native_graph(expr, jit=jit)
         if is_reduction or plan.info()["stages"] != 1:
             return None
-        artifact = plan._handle.reduction_artifact()
+        artifact = _reduction_prefilter_artifact(plan)
     except NotImplementedError:
         return None
     except blosc2.MenudetError as error:
@@ -1943,6 +1953,75 @@ def configured_map_kernel(plan, jit, configuration, environment):
     return kernel
 
 
+def _graph_manifest_to_recipe(manifest):
+    input_types = {item["name"]: item["dtype"] for item in manifest["inputs"]}
+    recipe = {
+        "version": 1,
+        "language_version": manifest["language"]["version"],
+        "source": manifest["source"],
+        "entry_point": manifest["entry_point"],
+        "inputs": list(input_types),
+        "input_constraints": {name: {"dtype": dtype} for name, dtype in input_types.items()},
+        "constants": manifest["constants"],
+        "output": {k: v for k, v in manifest["output"].items() if k != "contract"},
+        "cardinality": manifest["output"]["contract"],
+        "ndim": manifest["context"]["ndim"],
+        "casting": manifest["semantics"]["casting"],
+        "metadata": manifest.get("metadata", {}),
+        "semantics": {
+            k: manifest["semantics"][k] for k in ("integer_powers",) if k in manifest["semantics"]
+        },
+    }
+    return recipe, input_types
+
+
+def _kernel_from_graph_artifact(plan, artifact, manifest, specialize_captures, captures, capture_proof):
+    from .menudet_kernel import MenudetError, MenudetKernel
+
+    if specialize_captures and captures:
+        tree = ast.fix_missing_locations(capture_proof().visit(ast.parse(manifest["source"])))
+        manifest["source"] = ast.unparse(tree) + "\n"
+        manifest["constants"] = []
+    recipe, input_types = _graph_manifest_to_recipe(manifest)
+    try:
+        kernel = MenudetKernel.from_recipe(recipe, input_types, jit=plan.has_jit, _retain_recipe=False)
+    except MenudetError as error:
+        if not (specialize_captures and captures) or error.status not in {
+            "invalid_source",
+            "invalid_signature",
+        }:
+            raise
+        specialize_captures = False
+        raw = json.loads(artifact)
+        recipe["source"] = raw["source"]
+        recipe["constants"] = raw["constants"]
+        kernel = MenudetKernel.from_recipe(recipe, input_types, jit=plan.has_jit, _retain_recipe=False)
+    kernel._artifact = kernel._expression_artifact = artifact.encode("utf-8")
+    if not specialize_captures:
+        kernel._info["source"] = ast.unparse(capture_proof().visit(ast.parse(kernel.source)))
+    kernel.graph_partitionable = bool(plan.info().get("partitionable", False))
+    return kernel
+
+
+def _extract_weak_map_captures(artifact):
+    captures = {}
+    specialize_captures = True
+    for constant in json.loads(artifact).get("constants", []):
+        if constant["category"] != "weak":
+            return None, False
+        if constant["encoding"] == "decimal" and constant["dtype"] == "int64":
+            value = int(constant["value"])
+        elif constant["encoding"] == "boolean" and constant["dtype"] == "bool":
+            value = constant["value"]
+        elif constant["encoding"] == "ieee754-hex" and constant["dtype"] == "float64":
+            value = struct.unpack(">d", bytes.fromhex(constant["value"]))[0]
+            specialize_captures = False
+        else:
+            return None, False
+        captures[constant["name"]] = value
+    return captures, specialize_captures
+
+
 @lru_cache(maxsize=128)
 def resident_map_kernel(plan):
     from . import blosc2_ext
@@ -1963,21 +2042,9 @@ def resident_map_kernel(plan):
         kernel.graph_partitionable = bool(plan.info().get("partitionable", False))
         return kernel
     artifact = plan.map_json()
-    captures = {}
-    specialize_captures = True
-    for constant in json.loads(artifact).get("constants", []):
-        if constant["category"] != "weak":
-            return None
-        if constant["encoding"] == "decimal" and constant["dtype"] == "int64":
-            value = int(constant["value"])
-        elif constant["encoding"] == "boolean" and constant["dtype"] == "bool":
-            value = constant["value"]
-        elif constant["encoding"] == "ieee754-hex" and constant["dtype"] == "float64":
-            value = struct.unpack(">d", bytes.fromhex(constant["value"]))[0]
-            specialize_captures = False
-        else:
-            return None
-        captures[constant["name"]] = value
+    captures, specialize_captures = _extract_weak_map_captures(artifact)
+    if captures is None:
+        return None
 
     class CaptureProof(ast.NodeTransformer):
         def visit_Name(self, node):
@@ -1989,9 +2056,11 @@ def resident_map_kernel(plan):
             return node
 
     manifest = json.loads(artifact)
+    if getattr(blosc2_ext, "MenudetArtifactHandle", None) is not None:
+        return _kernel_from_graph_artifact(
+            plan, artifact, manifest, specialize_captures, captures, CaptureProof
+        )
     if specialize_captures:
-        # Integer and boolean weak captures can be represented exactly as source
-        # literals, giving graph maps the same arithmetic shape as direct kernels.
         tree = ast.fix_missing_locations(CaptureProof().visit(ast.parse(manifest["source"])))
         manifest["source"] = ast.unparse(tree) + "\n"
         manifest["constants"] = []
@@ -2003,13 +2072,9 @@ def resident_map_kernel(plan):
     except MenudetError as error:
         if not specialize_captures or error.status not in {"invalid_source", "invalid_signature"}:
             raise
-        # Literal specialization is an optimization only. Keep the original,
-        # already-validated artifact for source forms that cannot be re-imported.
         specialize_captures = False
         kernel = MenudetKernel.from_json(artifact, jit=plan.has_jit)
     if not specialize_captures:
-        # Keep IEEE payload bits in the executable artifact; the substituted
-        # source is used only by metadata-only storage eligibility checks.
         kernel._info["source"] = ast.unparse(CaptureProof().visit(ast.parse(kernel.source)))
     kernel.graph_partitionable = bool(plan.info().get("partitionable", False))
     return kernel
@@ -2085,7 +2150,9 @@ def _parallel_resident_graph(plan, inputs, shape, selection, reduction, out=None
         workers = (
             min(blosc2.nthreads, 32)
             if (
-                not blosc2.IS_WASM
+                plan.partitionable
+                and plan.info()["stages"] == 1
+                and not blosc2.IS_WASM
                 and getattr(blosc2.blosc2_ext, "menudet_resident_available", lambda: False)()
             )
             else 1
@@ -2282,11 +2349,19 @@ class GraphAdapter:
                 for keyword in node.keywords:
                     if keyword.arg in options:
                         raise ValueError("Duplicate native reduction keyword")
-                    options[keyword.arg] = (
-                        self.visit(keyword.value)
-                        if keyword.arg == "where"
-                        else ast.literal_eval(keyword.value)
-                    )
+                    if keyword.arg == "where":
+                        options[keyword.arg] = self.visit(keyword.value)
+                    elif keyword.arg == "dtype" and isinstance(keyword.value, ast.Name):
+                        options[keyword.arg] = keyword.value.id
+                    elif (
+                        keyword.arg == "dtype"
+                        and isinstance(keyword.value, ast.Attribute)
+                        and isinstance(keyword.value.value, ast.Name)
+                        and keyword.value.value.id in {"np", "numpy"}
+                    ):
+                        options[keyword.arg] = keyword.value.attr
+                    else:
+                        options[keyword.arg] = ast.literal_eval(keyword.value)
                 return self.reduction(name, value, options)
             if node.keywords:
                 raise ValueError("Native elementwise functions do not accept keywords")
@@ -2538,6 +2613,11 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
         np.copyto(output, result, casting="no")
         report = {**report, "output_copy_bytes": result.nbytes}
         result = output
+    if report.get("route") == "c-blosc2-typed-resident":
+        report = {
+            **report,
+            "route": "parallel-resident" if report.get("tasks", 1) > 1 else "native-resident",
+        }
     expr._native_execution_report = {
         **report,
         "semantic_revision": "menudet-numpy-0.1",
