@@ -39,6 +39,9 @@ cdef extern from "b2nd_exec_bridge.h":
         size_t tasks, worker_bytes, gather_bytes, gathered_bytes
         size_t staging_bytes
         size_t interpreter_calls, jit_calls
+    ctypedef struct b2_exec_storage_report:
+        b2_exec_report execution
+        size_t decode_bytes, storage_metadata_bytes, decodes, decoded_bytes, cache_hits, read_spans
     ctypedef struct b2_exec_view:
         const void *base
         size_t capacity, offset
@@ -61,6 +64,8 @@ cdef extern from "b2nd_exec_bridge.h":
     int b2_exec_execute_alias(const void *, const b2_exec_view *, size_t, const b2_exec_output_view *,
                               size_t, unsigned, size_t, size_t, int, size_t, b2_exec_report *,
                               me_error *) nogil
+    int b2_exec_execute_arrays(const void *, const void *const *, size_t, void *, size_t,
+                              unsigned, size_t, size_t, b2_exec_storage_report *, me_error *) nogil
 
 
 def _b2nd_exec_available():
@@ -380,7 +385,60 @@ cdef class _TypedExecSchedule:
                 "reduction_lanes": self._info.reduction_lanes,
                 "pairwise_sum": bool(self._info.pairwise_sum),
                 "broadcast_gather_bytes": self._info.broadcast_gather_bytes,
-                "schedule_metadata_bytes": self._info.schedule_metadata_bytes}
+                 "schedule_metadata_bytes": self._info.schedule_metadata_bytes}
+
+    def execute_arrays(self, inputs, unsigned raise_mask=0, *, out=None,
+                       size_t max_decode_bytes=67108864, size_t max_gather_bytes=67108864):
+        """Serial native compressed binding; never materializes an operand."""
+        cdef const void *arrays[128]
+        cdef b2_exec_storage_report report
+        cdef me_error error
+        cdef b2_exec_output_view output_view
+        cdef np.ndarray output
+        cdef int i, rc
+        cdef size_t count = len(inputs)
+        cdef size_t output_bytes
+        if self._schedule == NULL or count != self._info.ninputs or count > 128:
+            raise ValueError("Invalid typed storage bindings")
+        values = tuple(inputs)  # Keep every native array owner alive while nogil.
+        for i, value in enumerate(values):
+            if not isinstance(value, NDArray):
+                raise TypeError("Typed storage execution requires native Blosc2 arrays")
+            arrays[i] = <const void *>(<NDArray>value).array
+        shape = tuple(self._info.output_shape[i] for i in range(self._info.output_ndim))
+        dtype = _numpy_dtype_from_me_dtype(<me_dtype>self._info.dtype)
+        if out is None:
+            output = np.empty(shape, dtype=dtype)
+        else:
+            if type(out) is not np.ndarray or out.shape != shape or out.dtype != dtype:
+                raise ValueError("Typed storage output dtype/shape mismatch")
+            output = out
+        if not output.flags.c_contiguous:
+            raise NotImplementedError("Typed storage output must be contiguous")
+        owner = typed_output_view_binding(output, &output_view)
+        output_bytes = output.nbytes
+        memset(&report, 0, sizeof(report))
+        memset(&error, 0, sizeof(error))
+        with nogil:
+            rc = b2_exec_execute_arrays(
+                self._schedule, arrays, count, <char *>output_view.base + output_view.offset,
+                output_bytes, raise_mask, max_decode_bytes, max_gather_bytes, &report, &error)
+        if rc:
+            raise _typed_exec_error(
+                rc, (<bytes>error.message).decode("utf-8", "replace"),
+                report.execution.fp.flags, report.execution.fp.supported, 0, 0)
+        return output, {
+            "route": "c-blosc2-typed-storage", "tiles": report.execution.tiles,
+            "map_calls": report.execution.map_calls, "direct_tiles": report.execution.direct_tiles,
+            "temporary_bytes": report.execution.mapped_bytes,
+            "gather_bytes": report.execution.gather_bytes, "gathered_bytes": report.execution.gathered_bytes,
+            "decode_bytes": report.decode_bytes, "decodes": report.decodes,
+            "decoded_bytes": report.decoded_bytes, "decode_cache_hits": report.cache_hits,
+            "read_spans": report.read_spans, "storage_metadata_bytes": report.storage_metadata_bytes,
+            "input_materialization_bytes": 0, "tasks": report.execution.tasks,
+            "jit_calls": report.execution.jit_calls, "interpreter_calls": report.execution.interpreter_calls,
+            "has_jit": bool(report.execution.jit_calls),
+            "fp_flags": report.execution.fp.flags, "fp_supported": bool(report.execution.fp.supported)}
 
     cdef object _run_into(self, object inputs, object out, bint use_alias,
                           size_t staging_budget, unsigned raise_mask, size_t workers,

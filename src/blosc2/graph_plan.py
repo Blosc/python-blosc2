@@ -160,9 +160,18 @@ class NativeGraph:
         Native traversal owns broadcasting, axes and serial reduction order.
         Compressed operands are decoded only for requested tiles, never materialized.
         Staged graphs and compressed participation masks remain unsupported.
+        The explicit C-Blosc2 selector currently admits only serial, same-shape,
+        in-memory native float64 Blosc2 inputs; unsupported bindings raise
+        before numerical reads, without adapter replay.
         """
         if getattr(self._handle, "_executor", None) == "c-blosc2":
-            raise NotImplementedError("Typed source-backed execution is not yet qualified")
+            if any(not isinstance(value, blosc2_ext.NDArray) for value in inputs.values()):
+                raise NotImplementedError("Typed storage execution requires native Blosc2 arrays")
+            schedule = self.specialize(
+                {name: (value.dtype, value.shape) for name, value in inputs.items()}, tile_items
+            )
+            result, report = schedule.execute_arrays(inputs, raise_mask, out=out)
+            return (result, report) if return_report else result
         from .native_graph import evaluate_graph_sources
 
         result, report = evaluate_graph_sources(

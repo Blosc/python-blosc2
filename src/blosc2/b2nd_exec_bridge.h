@@ -43,6 +43,11 @@ typedef struct {
 } b2_exec_report;
 
 typedef struct {
+    b2_exec_report execution;
+    size_t decode_bytes, storage_metadata_bytes, decodes, decoded_bytes, cache_hits, read_spans;
+} b2_exec_storage_report;
+
+typedef struct {
     const void *base;
     size_t capacity, offset;
     int64_t strides[16];
@@ -57,6 +62,7 @@ typedef struct {
 
 #ifdef B2_HAVE_B2ND_EXEC
 #include "b2nd-exec.h"
+#include "b2nd-exec-storage.h"
 typedef me_fp_scope b2_exec_fp_scope;
 
 static int b2_exec_fp_begin(b2_exec_fp_scope *scope, me_fp_status *status, me_error *error) {
@@ -212,6 +218,22 @@ static void b2_exec_fill_report(b2_exec_report *report, const b2nd_exec_report *
     report->interpreter_calls = native->interpreter_calls;
     report->jit_calls = native->jit_calls;
 }
+static int b2_exec_execute_arrays(const void *schedule, const void *const *inputs, size_t ninputs,
+                                  void *output, size_t output_bytes, unsigned raise_mask,
+                                  size_t decode_budget, size_t gather_budget,
+                                  b2_exec_storage_report *report, me_error *error) {
+    b2nd_exec_storage_report native = {0};
+    int rc = b2nd_exec_execute_arrays(schedule, (const b2nd_array_t *const *)inputs, ninputs,
+        (me_mut_buffer){output, output_bytes}, raise_mask, decode_budget, gather_budget, &native, error);
+    b2_exec_fill_report(&report->execution, &native.execution);
+    report->decode_bytes = native.decode_bytes;
+    report->storage_metadata_bytes = native.storage_metadata_bytes;
+    report->decodes = native.decodes;
+    report->decoded_bytes = native.decoded_bytes;
+    report->cache_hits = native.cache_hits;
+    report->read_spans = native.read_spans;
+    return rc;
+}
 static int b2_exec_execute_into(const void *schedule, const b2_exec_view *inputs, size_t ninputs,
                                 const b2_exec_output_view *output, unsigned raise_mask,
                                 size_t max_gather_bytes, size_t workers,
@@ -253,6 +275,15 @@ static int b2_exec_execute_alias(const void *schedule, const b2_exec_view *input
     return rc;
 }
 #else
+static int b2_exec_execute_arrays(const void *schedule, const void *const *inputs, size_t ninputs,
+                                  void *output, size_t output_bytes, unsigned raise_mask,
+                                  size_t decode_budget, size_t gather_budget,
+                                  b2_exec_storage_report *report, me_error *error) {
+    (void)schedule; (void)inputs; (void)ninputs; (void)output; (void)output_bytes;
+    (void)raise_mask; (void)decode_budget; (void)gather_budget; (void)error;
+    memset(report, 0, sizeof(*report));
+    return ME_ERR_UNSUPPORTED;
+}
 typedef union {
     long double alignment;
     unsigned char storage[256];
