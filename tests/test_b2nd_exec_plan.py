@@ -214,3 +214,55 @@ def test_typed_large_identity_tile_and_narrow_reduction():
         report = expr._native_execution_report
         assert report["route"] == "c-blosc2-typed-resident"
         assert report["temporary_bytes"] == (0 if expression == "min(x)" else 32768)
+
+
+@pytest.mark.parametrize("shape", [(), (3, 5), (2, 3, 5), (2, 0, 3)])
+def test_typed_contiguous_ranked_domains(shape):
+    x = np.arange(np.prod(shape, dtype=int), dtype="int64").reshape(shape)
+    metadata = {"x": (x.dtype, x.shape)}
+    for expression in ("x * 3 + 1", "min(x * 3 + 1)"):
+        if expression.startswith("min") and not x.size:
+            continue  # Empty minimum retains the comparison error path.
+        baseline = NativeGraph.from_expression(expression, {"x": "int64"}, jit=False)
+        expected, _ = baseline.specialize(metadata, 4).execute({"x": x})
+        with blosc2.expression_evaluation("safe"):
+            expr = blosc2.lazyexpr(expression, {"x": x})
+        with blosc2.compute_options(jit=False):
+            actual = expr.compute(_native_tile_items=4) if expression.startswith("min") else expr[()]
+        np.testing.assert_array_equal(actual, expected)
+        assert actual.shape == expected.shape
+        assert expr._native_execution_report["route"] == "c-blosc2-typed-resident"
+
+
+def test_typed_output_identity_and_real_allocation_extents():
+    nodes = descriptor()[:-1]
+    plan = blosc2_ext._TypedExecPlan(nodes, 2, 4)
+    schedule = plan.specialize([("int64", (5,)), ("int64", (5,))], 2, 0)
+    values = np.arange(5, dtype=np.int64)
+    output = np.empty_like(values)
+    actual, report = schedule.execute((values, values), out=output)
+    assert actual is output
+    np.testing.assert_array_equal(output, 4 * values)
+    assert report["temporary_bytes"] == 0
+    with pytest.raises(NotImplementedError, match="Aliased"):
+        schedule.execute((values, values), out=values)
+    forged = np.lib.stride_tricks.as_strided(values[:1].copy(), shape=(5,), strides=(8,))
+    assert forged.flags.c_contiguous
+    output[:] = -7
+    with pytest.raises(ValueError, match="allocation extent"):
+        schedule.execute((forged, values), out=output)
+    np.testing.assert_array_equal(output, -7)
+    with pytest.raises(ValueError, match="allocation extent"):
+        schedule.execute((values, values), out=forged)
+
+
+def test_typed_public_disjoint_output():
+    values = np.arange(15, dtype="float32").reshape(3, 5)
+    with blosc2.expression_evaluation("safe"):
+        expr = blosc2.lazyexpr("x * 2 + 1", {"x": values})
+    output = np.empty_like(values)
+    actual = expr.compute(jit=False, out=output)
+    assert actual is output
+    np.testing.assert_array_equal(output, values * 2 + 1)
+    assert expr._native_execution_report["route"] == "c-blosc2-typed-resident"
+    assert expr._native_execution_report["temporary_bytes"] == 0

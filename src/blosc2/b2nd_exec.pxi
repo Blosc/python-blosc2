@@ -46,6 +46,46 @@ cdef void raise_exec_error(int status, me_error *error) except *:
     raise ValueError(message)
 
 
+cdef object typed_buffer_binding(np.ndarray array, me_buffer *buffer):
+    """Validate the real allocation, not an as_strided view's logical nbytes."""
+    cdef object owner = array
+    cdef object base
+    cdef np.ndarray root
+    cdef uintptr_t start = <uintptr_t>np.PyArray_DATA(array)
+    cdef uintptr_t origin
+    cdef size_t offset
+    cdef int depth
+    buffer.data = np.PyArray_DATA(array)
+    buffer.capacity = 0
+    if array.nbytes == 0:
+        return array
+    for depth in range(128):
+        base = getattr(owner, "base", None)
+        if base is None:
+            break
+        owner = base
+    else:
+        raise ValueError("Typed buffer owner chain limit exceeded")
+    if isinstance(owner, np.ndarray):
+        if not owner.flags.owndata:
+            raise ValueError("Typed buffer allocation extent is unknown")
+        root = owner
+    else:
+        try:
+            root = np.frombuffer(owner, dtype=np.uint8)
+        except (TypeError, ValueError, BufferError):
+            # Never normalize an operand through a whole-array copy.
+            raise ValueError("Typed buffer allocation extent is unknown") from None
+    origin = <uintptr_t>np.PyArray_DATA(root)
+    if start < origin:
+        raise ValueError("Typed buffer precedes its allocation")
+    offset = start - origin
+    if offset > <size_t>root.nbytes or <size_t>array.nbytes > <size_t>root.nbytes - offset:
+        raise ValueError("Typed buffer exceeds its allocation extent")
+    buffer.capacity = <size_t>root.nbytes - offset
+    return root
+
+
 cdef class _TypedExecPlan:
     cdef void *_plan
     cdef b2_exec_info _info
@@ -152,12 +192,13 @@ cdef class _TypedExecSchedule:
                 "mapped_bytes": self._info.mapped_bytes, "reducer_bytes": self._info.reducer_bytes,
                 "output_items": self._info.output_items}
 
-    def execute(self, inputs, unsigned raise_mask=0):
+    def execute(self, inputs, unsigned raise_mask=0, *, out=None):
         cdef me_buffer buffers[128]
         cdef me_mut_buffer destination
         cdef me_error error
         cdef b2_exec_report report
         cdef np.ndarray value, output
+        cdef me_buffer output_buffer
         cdef size_t count = len(inputs)
         cdef int i, rc
         if self._schedule == NULL:
@@ -166,6 +207,7 @@ cdef class _TypedExecSchedule:
             raise ValueError("Typed input count mismatch")
         # Retain every array while the GIL is released; no implicit conversions.
         values = tuple(inputs)
+        owners = []
         for i, value_object in enumerate(values):
             dtype, shape = self._metadata[i]
             if type(value_object) is not np.ndarray:
@@ -175,12 +217,22 @@ cdef class _TypedExecSchedule:
                 raise ValueError("Typed input dtype/shape mismatch")
             if not value.flags.c_contiguous or not value.flags.aligned or not value.dtype.isnative:
                 raise ValueError("Typed inputs must be native aligned contiguous arrays")
-            buffers[i].data = np.PyArray_DATA(value)
-            buffers[i].capacity = value.nbytes
+            owners.append(typed_buffer_binding(value, &buffers[i]))
         shape = () if self._info.reduction else self._metadata[0][1]
-        output = np.empty(shape, dtype=_numpy_dtype_from_me_dtype(<me_dtype>self._info.dtype))
+        dtype = _numpy_dtype_from_me_dtype(<me_dtype>self._info.dtype)
+        if out is None:
+            output = np.empty(shape, dtype=dtype)
+        else:
+            if type(out) is not np.ndarray:
+                raise TypeError("Typed output must be an explicit NumPy buffer")
+            if out.shape != shape or out.dtype != dtype:
+                raise ValueError("Typed output dtype/shape mismatch")
+            if not out.flags.c_contiguous or not out.flags.aligned or not out.flags.writeable:
+                raise ValueError("Typed output must be writable aligned contiguous storage")
+            output = out
+        owners.append(typed_buffer_binding(output, &output_buffer))
         destination.data = np.PyArray_DATA(output)
-        destination.capacity = output.nbytes
+        destination.capacity = output_buffer.capacity
         memset(&error, 0, sizeof(error))
         memset(&report, 0, sizeof(report))
         with nogil:

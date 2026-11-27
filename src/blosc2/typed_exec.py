@@ -6,6 +6,7 @@ metadata-only; once preparation starts, failures propagate without replay.
 """
 
 import ast
+import math
 import sys
 from functools import lru_cache
 
@@ -109,28 +110,31 @@ def compute_typed_resident_if_eligible(expr, item, tile, options):
 
     from .menudet_kernel import menudet_execution_environment
 
+    output = options.get("out", getattr(expr, "_output", None))
     if (
         _NUMPY_VALUE_PROMOTION
         or not getattr(blosc2_ext, "_b2nd_exec_available", lambda: False)()
         or type(expr) is not blosc2.LazyExpr
-        or options.keys() - {"_getitem"}
+        or options.keys() - {"_getitem", "out"}
         or type(tile) is not int
         or not 0 < tile < 2**63
-        or any(hasattr(expr, name) for name in ("_output", "_indices", "_order", "_where_args"))
+        or any(hasattr(expr, name) for name in ("_indices", "_order", "_where_args"))
         or getattr(expr, "_eval_kwargs", None) is not None
         or getattr(expr, "_optimization", "moderate") != "moderate"
         or blosc2.jit_config.execution_options()["math_backend"] is not None
         or menudet_execution_environment()
+        or (output is not None and type(output) is not np.ndarray)
+        or ("out" in options and output is None)
     ):
         return None
     selection = item if isinstance(item, tuple) else (item,)
-    if len(selection) > 1 or any(not isinstance(s, slice) or s != slice(None) for s in selection):
+    if any(not isinstance(s, slice) or s != slice(None) for s in selection):
         return None
     shape = None
     for value in expr.operands.values():
         if type(value) is np.ndarray:
             if (
-                value.ndim != 1
+                value.ndim > 16
                 or value.dtype.name not in _DTYPES
                 or not value.dtype.isnative
                 or not value.flags.aligned
@@ -140,25 +144,40 @@ def compute_typed_resident_if_eligible(expr, item, tile, options):
             if shape is not None and shape != value.shape:
                 return None
             shape = value.shape
+    if shape is None or len(selection) > len(shape):
+        return None
     try:
         nodes, names, root, reduction = _lower(expr.expression, expr.operands)
     except (_NotAdmitted, SyntaxError, RecursionError):
         return None
-    if (reduction and (selection or shape == (0,))) or (not reduction and not options.get("_getitem")):
-        return None
-    if shape is None:
+    items = math.prod(shape)
+    if (reduction and (selection or not items)) or (
+        not reduction and not options.get("_getitem") and output is None
+    ):
         return None
     plan = _prepare(nodes, len(names), root)
     # Use core-inferred width, and charge only maps feeding reductions.
     # Direct-output maps and identity reductions need no mapped scratch.
     info = plan.info()
+    if output is not None and (
+        output.shape != (() if reduction else shape)
+        or output.dtype != info["inferred_dtype"]
+        or not output.flags.c_contiguous
+        or not output.flags.aligned
+        or not output.flags.writeable
+        or any(np.may_share_memory(output, expr.operands[name]) for name in names)
+    ):
+        return None
     if (
         info["reduction"]
         and not info["identity"]
-        and min(shape[0], tile) * info["inferred_dtype"].itemsize > 65536
+        and min(items, tile) * info["inferred_dtype"].itemsize > 65536
     ):
         return None
     arrays = tuple(expr.operands[name] for name in names)
     schedule = plan.specialize(tuple((value.dtype, value.shape) for value in arrays), tile, 65536)
-    result, expr._native_execution_report = schedule.execute(arrays)
+    if output is None:
+        result, expr._native_execution_report = schedule.execute(arrays)
+    else:
+        result, expr._native_execution_report = schedule.execute(arrays, out=output)
     return result
