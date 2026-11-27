@@ -210,3 +210,87 @@ def test_storage_mixed_resident_and_parallel_execution(monkeypatch):
     sum_sched = sum_graph.specialize({"x": ("int16", (5, 7))}, 8)
     with pytest.raises(NotImplementedError, match="Ordered"):
         sum_sched.execute_arrays({"x": x16}, workers=2, max_decode_bytes=24 * 2)
+
+
+def test_storage_compressed_sink_matched_and_mismatched(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("compressed sink execution reached a Python reader/writer or adapter")
+
+    x_np = np.arange(35, dtype=np.float64).reshape(5, 7) + 10
+    y_np = np.arange(35, dtype=np.float64).reshape(5, 7) + 100
+    x_b2 = blosc2.asarray(x_np, chunks=(3, 4), blocks=(2, 3), contiguous=False)
+    y_match = blosc2.asarray(y_np, chunks=(3, 4), blocks=(2, 3), contiguous=False)
+    y_mis = blosc2.asarray(y_np, chunks=(4, 3), blocks=(3, 2), contiguous=False)
+
+    graph = NativeGraph.from_expression(
+        "x + y", {"x": "float64", "y": "float64"}, jit=False, _executor="c-blosc2"
+    )
+    out_match = blosc2.uninit((5, 7), dtype="float64", chunks=(3, 4), blocks=(2, 3), contiguous=False)
+    out_mis = blosc2.uninit((5, 7), dtype="float64", chunks=(2, 5), blocks=(2, 2), contiguous=False)
+    with monkeypatch.context() as m:
+        m.setattr(blosc2.NDArray, "__getitem__", forbidden)
+        m.setattr(blosc2.NDArray, "__setitem__", forbidden)
+        m.setattr("blosc2.native_graph.evaluate_graph_sources", forbidden)
+        res_match, rep_match = graph.evaluate_sources(
+            {"x": x_b2, "y": y_match}, tile_items=8, out=out_match, workers=3, return_report=True
+        )
+        res_mis, rep_mis = graph.evaluate_sources(
+            {"x": x_b2, "y": y_mis}, tile_items=8, out=out_mis, workers=3, return_report=True
+        )
+    assert res_match is out_match
+    assert rep_match["route"] == "c-blosc2-typed-storage-sink"
+    assert rep_match["gather_bytes"] == 0
+    assert rep_match["decodes"] > 0
+    np.testing.assert_array_equal(out_match[...], x_np + y_np)
+
+    assert res_mis is out_mis
+    assert rep_mis["route"] == "c-blosc2-typed-storage-sink"
+    assert rep_mis["gather_bytes"] > 0
+    np.testing.assert_array_equal(out_mis[...], x_np + y_np)
+
+
+def test_storage_compressed_sink_mixed_and_rejections(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("compressed sink execution replayed adapter")
+
+    monkeypatch.setattr("blosc2.native_graph.evaluate_graph_sources", forbidden)
+    x_np = (np.arange(35, dtype=np.float32).reshape(5, 7) + 1) * 0.5
+    y_np = np.arange(35, dtype=np.float32).reshape(5, 7) * 2.0
+    x_b2 = blosc2.asarray(x_np, chunks=(3, 4), blocks=(2, 3), contiguous=False)
+
+    graph = NativeGraph.from_expression(
+        "x + y", {"x": "float32", "y": "float32"}, jit=False, _executor="c-blosc2"
+    )
+    out_b2 = blosc2.uninit((5, 7), dtype="float32", chunks=(3, 4), blocks=(2, 3), contiguous=False)
+    _, rep = graph.evaluate_sources(
+        {"x": x_b2, "y": y_np.astype(">f4")}, tile_items=8, out=out_b2, workers=3, return_report=True
+    )
+    assert rep["route"] == "c-blosc2-typed-storage-sink"
+    np.testing.assert_array_equal(out_b2[...], x_np + y_np)
+
+    sched = graph.specialize({"x": ("float32", (5, 7)), "y": ("float32", (5, 7))}, 8)
+    _, rep_cap = sched.execute_arrays(
+        {"x": x_b2, "y": y_np}, out=out_b2, workers=3, max_decode_bytes=2 * 6 * 4
+    )
+    assert rep_cap["tasks"] <= 2
+
+    with pytest.raises(NotImplementedError, match="Aliased"):
+        graph.evaluate_sources({"x": out_b2, "y": y_np}, tile_items=8, out=out_b2)
+
+    contig_out = blosc2.uninit((5, 7), dtype="float32", chunks=(3, 4), blocks=(2, 3), contiguous=True)
+    with pytest.raises(NotImplementedError, match="destination"):
+        graph.evaluate_sources({"x": x_b2, "y": y_np}, tile_items=8, out=contig_out)
+
+    min_graph = NativeGraph.from_expression("min(x)", {"x": "float32"}, jit=False, _executor="c-blosc2")
+    min_out = blosc2.uninit((5, 7), dtype="float32", chunks=(3, 4), blocks=(2, 3), contiguous=False)
+    with pytest.raises(NotImplementedError, match="elementwise"):
+        min_graph.evaluate_sources({"x": x_b2}, tile_items=8, out=min_out)
+
+    x_snan = np.arange(35, dtype=np.float64).reshape(5, 7) + 1
+    x_snan.view(np.uint64).flat[-1] = 0x7FF0000000000001
+    x_snan_b2 = blosc2.asarray(x_snan, chunks=(3, 4), blocks=(2, 3), contiguous=False)
+    f64_graph = NativeGraph.from_expression("x + x", {"x": "float64"}, jit=False, _executor="c-blosc2")
+    out_snan = blosc2.uninit((5, 7), dtype="float64", chunks=(3, 4), blocks=(2, 3), contiguous=False)
+    with pytest.raises(MenudetError) as err:
+        f64_graph.evaluate_sources({"x": x_snan_b2}, tile_items=8, raise_mask=1, out=out_snan)
+    assert err.value.fp_status["flags"] & 1

@@ -67,6 +67,9 @@ cdef extern from "b2nd_exec_bridge.h":
     int b2_exec_execute_arrays(const void *, const void *const *, const b2_exec_view *, size_t,
                                void *, size_t, unsigned, size_t, size_t, size_t, int, size_t,
                                b2_exec_storage_report *, me_error *) nogil
+    int b2_exec_execute_to_array(const void *, const void *const *, const b2_exec_view *, size_t,
+                                 void *, unsigned, size_t, size_t, size_t, int, size_t,
+                                 b2_exec_storage_report *, me_error *) nogil
 
 
 def _b2nd_exec_available():
@@ -432,29 +435,41 @@ cdef class _TypedExecSchedule:
                 raise TypeError("Typed storage execution requires native Blosc2 or NumPy arrays")
         shape = tuple(self._info.output_shape[i] for i in range(self._info.output_ndim))
         dtype = _numpy_dtype_from_me_dtype(<me_dtype>self._info.dtype)
-        if out is None:
-            output = np.empty(shape, dtype=dtype)
-        else:
-            if type(out) is not np.ndarray or out.shape != shape or out.dtype != dtype:
-                raise ValueError("Typed storage output dtype/shape mismatch")
-            output = out
-        if not output.flags.c_contiguous:
-            raise NotImplementedError("Typed storage output must be contiguous")
-        owner = typed_output_view_binding(output, &output_view)
-        output_bytes = output.nbytes
         memset(&report, 0, sizeof(report))
         memset(&error, 0, sizeof(error))
-        with nogil:
-            rc = b2_exec_execute_arrays(
-                self._schedule, arrays, views if has_views else NULL, count,
-                <char *>output_view.base + output_view.offset, output_bytes, raise_mask,
-                max_decode_bytes, max_gather_bytes, workers, has_budget, budget, &report, &error)
+        if isinstance(out, NDArray):
+            sink_owner = out
+            route = "c-blosc2-typed-storage-sink"
+            with nogil:
+                rc = b2_exec_execute_to_array(
+                    self._schedule, arrays, views if has_views else NULL, count,
+                    <void *>(<NDArray>out).array, raise_mask, max_decode_bytes, max_gather_bytes,
+                    workers, has_budget, budget, &report, &error)
+            result = out
+        else:
+            route = "c-blosc2-typed-storage"
+            if out is None:
+                output = np.empty(shape, dtype=dtype)
+            else:
+                if type(out) is not np.ndarray or out.shape != shape or out.dtype != dtype:
+                    raise ValueError("Typed storage output dtype/shape mismatch")
+                output = out
+            if not output.flags.c_contiguous:
+                raise NotImplementedError("Typed storage output must be contiguous")
+            owner = typed_output_view_binding(output, &output_view)
+            output_bytes = output.nbytes
+            with nogil:
+                rc = b2_exec_execute_arrays(
+                    self._schedule, arrays, views if has_views else NULL, count,
+                    <char *>output_view.base + output_view.offset, output_bytes, raise_mask,
+                    max_decode_bytes, max_gather_bytes, workers, has_budget, budget, &report, &error)
+            result = output
         if rc:
             raise _typed_exec_error(
                 rc, (<bytes>error.message).decode("utf-8", "replace"),
                 report.execution.fp.flags, report.execution.fp.supported, 0, 0)
-        return output, {
-            "route": "c-blosc2-typed-storage", "tiles": report.execution.tiles,
+        return result, {
+            "route": route, "tiles": report.execution.tiles,
             "map_calls": report.execution.map_calls, "direct_tiles": report.execution.direct_tiles,
             "temporary_bytes": report.execution.mapped_bytes,
             "gather_bytes": report.execution.gather_bytes, "gathered_bytes": report.execution.gathered_bytes,

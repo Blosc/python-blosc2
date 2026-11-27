@@ -218,16 +218,21 @@ static void b2_exec_fill_report(b2_exec_report *report, const b2nd_exec_report *
     report->interpreter_calls = native->interpreter_calls;
     report->jit_calls = native->jit_calls;
 }
-static int b2_exec_execute_arrays(const void *schedule, const void *const *inputs,
-                                  const b2_exec_view *views, size_t ninputs,
-                                  void *output, size_t output_bytes, unsigned raise_mask,
-                                  size_t decode_budget, size_t gather_budget,
-                                  size_t workers, int has_worker_scratch, size_t worker_scratch,
-                                  b2_exec_storage_report *report, me_error *error) {
+static void b2_exec_fill_storage_report(b2_exec_storage_report *report,
+                                        const b2nd_exec_storage_report *native) {
+    b2_exec_fill_report(&report->execution, &native->execution);
+    report->decode_bytes = native->decode_bytes;
+    report->storage_metadata_bytes = native->storage_metadata_bytes;
+    report->decodes = native->decodes;
+    report->decoded_bytes = native->decoded_bytes;
+    report->cache_hits = native->cache_hits;
+    report->read_spans = native->read_spans;
+}
+static int b2_exec_prepare_storage_views(const b2_exec_view *views, size_t ninputs,
+                                         b2nd_exec_view *native_views) {
     if (ninputs > B2ND_EXEC_MAX_INPUTS) {
         return ME_ERR_INVALID_ARG;
     }
-    b2nd_exec_view native_views[B2ND_EXEC_MAX_INPUTS] = {0};
     if (views) {
         for (size_t i = 0; i < ninputs; i++) {
             native_views[i].struct_size = sizeof(native_views[i]);
@@ -238,19 +243,46 @@ static int b2_exec_execute_arrays(const void *schedule, const void *const *input
             memcpy(native_views[i].strides, views[i].strides, sizeof(native_views[i].strides));
         }
     }
+    return ME_SUCCESS;
+}
+static int b2_exec_execute_arrays(const void *schedule, const void *const *inputs,
+                                  const b2_exec_view *views, size_t ninputs,
+                                  void *output, size_t output_bytes, unsigned raise_mask,
+                                  size_t decode_budget, size_t gather_budget,
+                                  size_t workers, int has_worker_scratch, size_t worker_scratch,
+                                  b2_exec_storage_report *report, me_error *error) {
+    b2nd_exec_view native_views[B2ND_EXEC_MAX_INPUTS] = {0};
+    int prep = b2_exec_prepare_storage_views(views, ninputs, native_views);
+    if (prep != ME_SUCCESS) {
+        return prep;
+    }
     b2nd_exec_storage_report native = {0};
     b2nd_exec_jobs jobs = {sizeof(jobs), workers ? workers : 1, worker_scratch};
     int rc = b2nd_exec_execute_arrays_ex(
         schedule, (const b2nd_array_t *const *)inputs, views ? native_views : NULL, ninputs,
         (me_mut_buffer){output, output_bytes}, raise_mask, decode_budget, gather_budget,
         (workers > 1 || has_worker_scratch) ? &jobs : NULL, &native, error);
-    b2_exec_fill_report(&report->execution, &native.execution);
-    report->decode_bytes = native.decode_bytes;
-    report->storage_metadata_bytes = native.storage_metadata_bytes;
-    report->decodes = native.decodes;
-    report->decoded_bytes = native.decoded_bytes;
-    report->cache_hits = native.cache_hits;
-    report->read_spans = native.read_spans;
+    b2_exec_fill_storage_report(report, &native);
+    return rc;
+}
+static int b2_exec_execute_to_array(const void *schedule, const void *const *inputs,
+                                    const b2_exec_view *views, size_t ninputs,
+                                    void *output_array, unsigned raise_mask,
+                                    size_t decode_budget, size_t gather_budget,
+                                    size_t workers, int has_worker_scratch, size_t worker_scratch,
+                                    b2_exec_storage_report *report, me_error *error) {
+    b2nd_exec_view native_views[B2ND_EXEC_MAX_INPUTS] = {0};
+    int prep = b2_exec_prepare_storage_views(views, ninputs, native_views);
+    if (prep != ME_SUCCESS) {
+        return prep;
+    }
+    b2nd_exec_storage_report native = {0};
+    b2nd_exec_jobs jobs = {sizeof(jobs), workers ? workers : 1, worker_scratch};
+    int rc = b2nd_exec_execute_to_array(
+        schedule, (const b2nd_array_t *const *)inputs, views ? native_views : NULL, ninputs,
+        (b2nd_array_t *)output_array, raise_mask, decode_budget, gather_budget,
+        (workers > 1 || has_worker_scratch) ? &jobs : NULL, &native, error);
+    b2_exec_fill_storage_report(report, &native);
     return rc;
 }
 static int b2_exec_execute_into(const void *schedule, const b2_exec_view *inputs, size_t ninputs,
@@ -301,6 +333,18 @@ static int b2_exec_execute_arrays(const void *schedule, const void *const *input
                                   size_t workers, int has_worker_scratch, size_t worker_scratch,
                                   b2_exec_storage_report *report, me_error *error) {
     (void)schedule; (void)inputs; (void)views; (void)ninputs; (void)output; (void)output_bytes;
+    (void)raise_mask; (void)decode_budget; (void)gather_budget; (void)workers;
+    (void)has_worker_scratch; (void)worker_scratch; (void)error;
+    memset(report, 0, sizeof(*report));
+    return ME_ERR_UNSUPPORTED;
+}
+static int b2_exec_execute_to_array(const void *schedule, const void *const *inputs,
+                                    const b2_exec_view *views, size_t ninputs,
+                                    void *output_array, unsigned raise_mask,
+                                    size_t decode_budget, size_t gather_budget,
+                                    size_t workers, int has_worker_scratch, size_t worker_scratch,
+                                    b2_exec_storage_report *report, me_error *error) {
+    (void)schedule; (void)inputs; (void)views; (void)ninputs; (void)output_array;
     (void)raise_mask; (void)decode_budget; (void)gather_budget; (void)workers;
     (void)has_worker_scratch; (void)worker_scratch; (void)error;
     memset(report, 0, sizeof(*report));
