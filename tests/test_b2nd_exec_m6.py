@@ -287,3 +287,101 @@ def test_logical_partitions_0d_generator_strings_and_evaluate_array(tmp_path):
     out, rep = k_sub.evaluate_sources({"b": b, "a": ba}, tile_items=3, return_report=True)
     np.testing.assert_array_equal(out, a - b)
     assert rep["maximum_reader_items"] <= 3
+
+
+def test_partition_source_rank_rejected_before_native_shape_copy():
+    from test_menudet_descriptor import manifest
+
+    kernel = blosc2.MenudetKernel.from_json(
+        manifest(
+            "def k(x):\n    return block_sum(x)\n",
+            [{"name": "x", "dtype": "float64"}],
+            {"dtype": "float64", "contract": "block_scalar"},
+            requires=["numeric", "block-reductions"],
+        ),
+        jit=False,
+    )
+    source = _MetadataSource((1,) * 17)
+    with pytest.raises(ValueError, match="Partition input rank exceeded"):
+        kernel._cblosc2_handle().evaluate_partitions({"x": source}, (4,), (2,))
+    assert source.calls == 0
+
+
+def test_lazy_partition_reader_not_implemented_is_not_replayed():
+    from test_menudet_descriptor import manifest
+
+    kernel = blosc2.MenudetKernel.from_json(
+        manifest(
+            "def k(x):\n    return block_sum(x)\n",
+            [{"name": "x", "dtype": "float64"}],
+            {"dtype": "float64", "contract": "block_scalar"},
+            requires=["numeric", "block-reductions"],
+        ),
+        jit=False,
+    )
+    error = NotImplementedError("late reader failure, not an admission rejection")
+    source = _MetadataSource((6,), fail_on_call=2, error=error)
+    lazy = kernel.lazy({"x": source}, partitions=(2,))
+    with pytest.raises(NotImplementedError) as caught:
+        lazy[:]
+    assert caught.value is error
+    assert source.calls == 2
+    assert np.concatenate(source.seen_indices).tolist() == [0, 1]
+    np.testing.assert_array_equal(lazy[:], [1.0, 5.0, 9.0])
+    assert lazy._source_execution_report["route"] == "c-blosc2-logical-partitions"
+
+
+@pytest.mark.parametrize("binding", ["bytedelta", "postfilter"])
+def test_lazy_partition_unsupported_storage_falls_back_before_execution(binding):
+    from test_menudet_descriptor import manifest
+
+    values = np.arange(11, dtype="int64")
+    params = {"nthreads": 1}
+    if binding == "bytedelta":
+        params["filters"] = [blosc2.Filter.BYTEDELTA]
+    array = blosc2.asarray(values, chunks=(4,), blocks=(2,), cparams=params, dparams={"nthreads": 1})
+    postfilter_calls = []
+    if binding == "postfilter":
+
+        @array.schunk.postfilter(np.int64)
+        def add_ten(src, dst, offset):
+            postfilter_calls.append(offset)
+            dst[:] = src + 10
+
+        values = values + 10
+    kernel = blosc2.MenudetKernel.from_json(
+        manifest(
+            "def k(x):\n    return block_sum(x)\n",
+            [{"name": "x", "dtype": "int64"}],
+            {"dtype": "int64", "contract": "block_scalar"},
+            requires=["numeric", "block-reductions"],
+        ),
+        jit=False,
+    )
+    lazy = kernel.lazy({"x": array}, partitions=(3,))
+    # Admission reads metadata/headers only; no postfilter or kernel is entered.
+    assert lazy._cblosc2_partition_values((slice(None),)) is None
+    assert not postfilter_calls
+    expected = np.array([values[start : start + 3].sum() for start in range(0, 11, 3)])
+    np.testing.assert_array_equal(lazy[:], expected)
+    assert getattr(lazy, "_source_execution_report", {}).get("route") != "c-blosc2-logical-partitions"
+    if binding == "postfilter":
+        assert postfilter_calls
+
+
+def test_lazy_partition_non_native_unicode_admission_fallback():
+    from test_menudet_descriptor import manifest
+
+    kernel = blosc2.MenudetKernel.from_json(
+        manifest(
+            "def k(x):\n    return upper(x)\n",
+            [{"name": "x", "dtype": "unicode32", "itemsize": 16}],
+            {"dtype": "unicode32", "itemsize": 16, "contract": "elementwise"},
+            requires=["numeric", "fixed-strings"],
+        ),
+        jit=False,
+    )
+    values = np.array(["a", "b", "c", "d", "e"], dtype=np.dtype("U4").newbyteorder("S"))
+    lazy = kernel.lazy({"x": values}, partitions=(2,))
+    assert lazy._cblosc2_partition_values((slice(None),)) is None
+    np.testing.assert_array_equal(lazy[:], np.array(["A", "B", "C", "D", "E"], dtype="U4"))

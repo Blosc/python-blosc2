@@ -114,7 +114,9 @@ cdef extern from "b2nd_exec_bridge.h":
                                       void **, me_error *) nogil
     int b2_exec_execute_partitions(const void *, const void *const *, const b2_exec_view *,
                                    const b2_exec_source *, size_t, void *, size_t, unsigned,
-                                   size_t, size_t, b2_exec_storage_report *, me_error *) nogil
+                                    size_t, size_t, b2_exec_storage_report *, me_error *) nogil
+    int b2_exec_admit_partitions(const void *, const void *const *, const b2_exec_view *,
+                                const b2_exec_source *, size_t, int *, me_error *) nogil
 
 
 def _b2nd_exec_available():

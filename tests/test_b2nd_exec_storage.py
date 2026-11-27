@@ -46,7 +46,7 @@ def test_storage_same_plan_different_layouts_and_no_python_reads(monkeypatch):
     assert actual.tobytes() == expected.tobytes()
     assert report["route"] == "c-blosc2-typed-storage"
     assert report["tiles"] == report["map_calls"] == 5
-    assert report["decode_bytes"] == 2 * 4 * 6 * 8
+    assert report["decode_bytes"] == (4 + 6) * 4 * 6 * 8  # Four/six chunks, at most eight slots each.
     assert report["gather_bytes"] == 2 * 8 * 8
     assert report["gathered_bytes"] == 2 * 35 * 8
     assert report["read_spans"] == 10
@@ -115,6 +115,27 @@ def test_storage_identity_reduction_with_special_chunks():
     assert report["gathered_bytes"] == 17 * 8
 
 
+@pytest.mark.parametrize("contiguous", [False, True])
+def test_ordered_sum_chunk_lru_budgets_preserve_logical_order(contiguous):
+    values = (np.arange(17 * 19, dtype="float64") % 113 / 8).reshape(17, 19)
+    values.flat[:3] = [1e16, 1, -1e16]  # Reordering logical leaves would change the result.
+    array = blosc2.asarray(values, chunks=(5, 6), blocks=(2, 4), contiguous=contiguous)
+    graph = NativeGraph.from_expression("sum(x)", {"x": "float64"}, jit=False, _executor="c-blosc2")
+    schedule = graph.specialize({"x": ("float64", values.shape)}, 7)
+    expected, reference = schedule.execute({"x": values})
+    cache_bytes = np.prod(array.ext_chunks).item() * 8
+    decodes = []
+    for slots in (1, 2, 4, 8):
+        actual, report = schedule.execute_arrays({"x": array}, max_decode_bytes=slots * cache_bytes)
+        assert actual.tobytes() == expected.tobytes()
+        assert report["fp_flags"] == reference["fp_flags"]
+        assert report["tasks"] == 1
+        assert report["decode_bytes"] == slots * cache_bytes
+        assert report["decoded_bytes"] == report["decodes"] * cache_bytes
+        decodes.append(report["decodes"])
+    assert decodes == [68, 68, 16, 16]
+
+
 def test_storage_unsupported_bindings_do_not_replay(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("unsupported native storage binding replayed the adapter")
@@ -165,7 +186,7 @@ def test_storage_mixed_resident_and_parallel_execution(monkeypatch):
     )
     assert actual == np.float32(0.5)
     assert report["tasks"] == 3
-    assert report["decode_bytes"] == 3 * 24 * 4
+    assert report["decode_bytes"] == 3 * 4 * 24 * 4  # Four chunk slots per worker.
 
     add_graph = NativeGraph.from_expression(
         "x + y", {"x": "float32", "y": "float32"}, jit=False, _executor="c-blosc2"

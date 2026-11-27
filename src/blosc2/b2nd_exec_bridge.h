@@ -526,12 +526,12 @@ static int b2_exec_specialize_partitions(const void *plan, const b2_exec_meta *i
     *out = schedule;
     return rc;
 }
-static int b2_exec_execute_partitions(const void *schedule, const void *const *arrays,
+static int b2_exec_partitions_impl(const void *schedule, const void *const *arrays,
                                       const b2_exec_view *views, const b2_exec_source *sources,
                                       size_t ninputs, void *output, size_t output_bytes,
                                       unsigned raise_mask, size_t max_decode_bytes,
                                       size_t max_gather_bytes, b2_exec_storage_report *report,
-                                      me_error *error) {
+                                      me_error *error, int *admitted) {
     if (ninputs > B2ND_EXEC_MAX_INPUTS) {
         return ME_ERR_INVALID_ARG;
     }
@@ -556,6 +556,14 @@ static int b2_exec_execute_partitions(const void *schedule, const void *const *a
             }
         }
     }
+    if (admitted) {
+        bool native_admitted = false;
+        int rc = b2nd_exec_admit_partitions(
+            schedule, (const b2nd_array_t *const *)arrays, views ? native_views : NULL,
+            sources ? native_sources : NULL, ninputs, &native_admitted, error);
+        *admitted = native_admitted;
+        return rc;
+    }
     b2nd_exec_storage_report native = {0};
     int rc = b2nd_exec_execute_partitions(
         schedule, (const b2nd_array_t *const *)arrays, views ? native_views : NULL,
@@ -564,7 +572,30 @@ static int b2_exec_execute_partitions(const void *schedule, const void *const *a
     b2_exec_fill_storage_report(report, &native);
     return rc;
 }
+static int b2_exec_admit_partitions(const void *schedule, const void *const *arrays,
+                                    const b2_exec_view *views, const b2_exec_source *sources,
+                                    size_t ninputs, int *admitted, me_error *error) {
+    return b2_exec_partitions_impl(schedule, arrays, views, sources, ninputs,
+                                   NULL, 0, 0, 0, 0, NULL, error, admitted);
+}
+static int b2_exec_execute_partitions(const void *schedule, const void *const *arrays,
+                                      const b2_exec_view *views, const b2_exec_source *sources,
+                                      size_t ninputs, void *output, size_t output_bytes,
+                                      unsigned raise_mask, size_t max_decode_bytes,
+                                      size_t max_gather_bytes, b2_exec_storage_report *report,
+                                      me_error *error) {
+    return b2_exec_partitions_impl(schedule, arrays, views, sources, ninputs, output,
+                                   output_bytes, raise_mask, max_decode_bytes, max_gather_bytes,
+                                   report, error, NULL);
+}
 #else
+static int b2_exec_admit_partitions(const void *schedule, const void *const *arrays,
+                                    const b2_exec_view *views, const b2_exec_source *sources,
+                                    size_t ninputs, int *admitted, me_error *error) {
+    (void)schedule; (void)arrays; (void)views; (void)sources; (void)ninputs; (void)error;
+    *admitted = 0;
+    return ME_ERR_UNSUPPORTED;
+}
 static int b2_exec_execute_arrays(const void *schedule, const void *const *inputs,
                                   const b2_exec_view *views, size_t ninputs,
                                   void *output, size_t output_bytes, unsigned raise_mask,

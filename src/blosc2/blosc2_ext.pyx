@@ -3557,7 +3557,7 @@ cdef class MenudetArtifactHandle:
 
     def evaluate_partitions(self, inputs, domain, partitions, selection=None,
                             unsigned raise_mask=0, size_t max_decode_bytes=67108864,
-                            size_t max_gather_bytes=67108864):
+                            size_t max_gather_bytes=67108864, bint _allow_unsupported=False):
         """Evaluate an authored Menudet kernel across immutable logical partitions."""
         cdef void *plan = NULL
         cdef void *schedule = NULL
@@ -3572,7 +3572,7 @@ cdef class MenudetArtifactHandle:
         cdef np.ndarray output, np_value
         cdef _TypedSourceState cb_state
         cdef size_t ndim = len(domain), n = len(inputs), i, j
-        cdef int rc, has_arrays = 0, has_views = 0, has_sources = 0
+        cdef int rc, admitted = 0, has_arrays = 0, has_views = 0, has_sources = 0
         if not b2_exec_available():
             raise NotImplementedError("Build with the C-Blosc2 typed executor")
         if ndim > 16 or len(partitions) != ndim or n > 128:
@@ -3618,6 +3618,8 @@ cdef class MenudetArtifactHandle:
                 elif hasattr(value, "dtype") and hasattr(value, "shape") and callable(getattr(value, "read", None)):
                     src_dtype = np.dtype(value.dtype).newbyteorder("=")
                     src_shape = tuple(value.shape)
+                    if len(src_shape) > 16:
+                        raise ValueError("Partition input rank exceeded")
                     cb_state = _TypedSourceState(value, src_dtype, None)
                     cb_states.append(cb_state)
                     sources[i].dtype = _me_dtype_from_numpy_dtype(src_dtype)
@@ -3656,6 +3658,18 @@ cdef class MenudetArtifactHandle:
                 raise_exec_error(rc, &error)
             if b2_exec_schedule_describe(schedule, &info):
                 raise ValueError("Cannot describe partition schedule")
+            # Only this metadata/header-only admission result may select an old
+            # wrapper route. Never catch execution exceptions to infer admission.
+            with nogil:
+                rc = b2_exec_admit_partitions(
+                    schedule, arrays if has_arrays else NULL, views if has_views else NULL,
+                    sources if has_sources else NULL, n, &admitted, &error)
+            if rc:
+                raise_exec_error(rc, &error)
+            if not admitted:
+                if _allow_unsupported:
+                    return None
+                raise NotImplementedError("Partition storage binding is not admitted")
             out_shape = tuple(info.output_shape[i] for i in range(info.output_ndim))
             out_dtype = self.signature_dtype(-1)
             output = np.empty(out_shape, dtype=out_dtype)

@@ -179,12 +179,14 @@ class MenudetLazyArray(LazyArray):
                 sel_stop.append(stop)
         full_sel = all(s == 0 and e == n for s, e, n in zip(sel_start, sel_stop, self.shape, strict=True))
         sel_arg = None if full_sel else (tuple(sel_start), tuple(sel_stop))
-        try:
-            values, report = handle.evaluate_partitions(
-                self.inputs, self._domain, self._partitions, selection=sel_arg
-            )
-        except NotImplementedError:
+        # Admission above is metadata-only. Once execution starts, even a reader's
+        # NotImplementedError must propagate without trying another executor.
+        result = handle.evaluate_partitions(
+            self.inputs, self._domain, self._partitions, selection=sel_arg, _allow_unsupported=True
+        )
+        if result is None:
             return None
+        values, report = result
         self._source_execution_report = report
         return np.squeeze(values, axis=tuple(squeeze)) if squeeze else values
 
