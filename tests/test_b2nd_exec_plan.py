@@ -42,6 +42,8 @@ def test_typed_prepare_copies_descriptor_and_schedule_owns_plan():
         "mapped_bytes": 64,
         "reducer_bytes": 8,
         "output_items": 1,
+        "shape": (17,),
+        "broadcast_gather_bytes": 0,
     }
     x = np.arange(17, dtype=np.int64)
     actual, _ = schedule.execute((x, -x))
@@ -56,7 +58,7 @@ def test_typed_errors_and_metadata_only_specialization():
     plan = blosc2_ext._TypedExecPlan(descriptor(), 2, 5)
     with pytest.raises(ValueError, match="budget"):
         plan.specialize([("int64", (17,)), ("int64", (17,))], 8, 63)
-    with pytest.raises(NotImplementedError, match="same-shape"):
+    with pytest.raises(ValueError, match="broadcast"):
         plan.specialize([("int64", (17,)), ("int64", (16,))])
     with pytest.raises(ValueError, match="rank"):
         plan.specialize([("int64", (1,) * 17), ("int64", (1,) * 17)])
@@ -138,6 +140,7 @@ def test_typed_failure_never_replays_adapter(monkeypatch):
             return {
                 "reduction": True,
                 "identity": False,
+                "partitionable": True,
                 "inferred_dtype": np.dtype("int64"),
                 "map_dtype": np.dtype("int64"),
             }
@@ -256,7 +259,7 @@ def test_typed_output_identity_and_real_allocation_extents():
     forged = np.lib.stride_tricks.as_strided(values[:1].copy(), shape=(5,), strides=(8,))
     assert forged.flags.c_contiguous
     output[:] = -7
-    with pytest.raises(ValueError, match="allocation extent"):
+    with pytest.raises(ValueError, match="extent"):
         schedule.execute((forged, values), out=output)
     np.testing.assert_array_equal(output, -7)
     with pytest.raises(ValueError, match="allocation extent"):
@@ -452,3 +455,147 @@ def test_typed_resident_rejects_mixed_storage_before_prepare(monkeypatch):
 
     monkeypatch.setattr(typed_exec, "prepare_typed_plan", forbidden)
     assert typed_exec.compute_typed_resident_if_eligible(expr, (), 2, {}) is None
+
+
+@pytest.mark.parametrize(
+    ("expression", "values"),
+    [
+        ("sum(x)", np.ones(200, dtype="int8")),
+        ("sum(x)", np.ones(300, dtype="uint8")),
+        ("sum(x)", np.ones(256, dtype="bool")),
+        ("sum(x)", np.ones(40000, dtype="int16")),
+        ("prod(x)", np.full(10, 2, dtype="int8")),
+    ],
+)
+def test_typed_narrow_sum_prod_overflow_matches_adapter(expression, values):
+    expected = NativeGraph.from_expression(
+        expression, {"x": values.dtype.name}, jit=False, _executor="adapter"
+    ).evaluate({"x": values}, tile_items=64)
+    with blosc2.expression_evaluation("safe"):
+        expr = blosc2.lazyexpr(expression, {"x": values})
+    actual = expr.compute(jit=False, _native_tile_items=64)
+    assert actual.dtype == expected.dtype
+    assert actual.tobytes() == expected.tobytes()
+    assert expr._native_execution_report["route"] == "c-blosc2-typed-resident"
+
+
+@pytest.mark.parametrize("reducer", ["any", "all"])
+@pytest.mark.parametrize("dtype", ["bool", "int8", "int64", "float32", "float64"])
+def test_typed_truth_reductions_and_empty_domains(reducer, dtype):
+    values = (np.arange(15) % 3).astype(dtype).reshape(3, 5)
+    expression = f"{reducer}(x * 2)"
+    typed = NativeGraph.from_expression(expression, {"x": dtype}, jit=False, _executor="c-blosc2")
+    adapter = NativeGraph.from_expression(expression, {"x": dtype}, jit=False, _executor="adapter")
+    assert typed.info()["partitionable"] is True
+    for workers in (1, 3):
+        actual, report = typed.evaluate({"x": values}, tile_items=4, return_report=True, workers=workers)
+        expected = adapter.evaluate({"x": values}, tile_items=4)
+        assert actual.dtype == expected.dtype == np.dtype("bool")
+        assert actual.tobytes() == expected.tobytes()
+        assert report["tasks"] <= workers
+    empty = np.empty((2, 0, 3), dtype=dtype)
+    with blosc2.expression_evaluation("safe"):
+        expr = blosc2.lazyexpr(expression, {"x": empty})
+    res = expr.compute(jit=False)
+    assert res.dtype == np.dtype("bool")
+    assert bool(res) is (reducer == "all")
+    assert expr._native_execution_report["route"] == "c-blosc2-typed-resident"
+
+
+def test_typed_truth_non_short_circuit_fp_flags():
+    for reducer, init_val in (("any", 1.0), ("all", 0.0)):
+        x = np.full(16, init_val, dtype="float64")
+        y = np.ones(16, dtype="float64")
+        x[12] = np.inf
+        y[12] = 0.0
+        typed = NativeGraph.from_expression(
+            f"{reducer}(x * y)", {"x": "float64", "y": "float64"}, jit=False, _executor="c-blosc2"
+        )
+        adapter = NativeGraph.from_expression(
+            f"{reducer}(x * y)", {"x": "float64", "y": "float64"}, jit=False, _executor="adapter"
+        )
+        expected, exp_report = adapter.evaluate({"x": x, "y": y}, tile_items=4, return_report=True)
+        for workers in (1, 4):
+            actual, report = typed.evaluate(
+                {"x": x, "y": y}, tile_items=4, return_report=True, workers=workers
+            )
+            assert actual.tobytes() == expected.tobytes()
+            assert report["fp_flags"] == exp_report["fp_flags"]
+            assert report["fp_flags"] & 1
+
+
+@pytest.mark.parametrize(
+    ("shape_a", "shape_b"),
+    [((), (2, 3)), ((3, 1), (1, 5)), ((2, 0, 3), (3,))],
+)
+def test_typed_resident_broadcast_maps_and_reductions(shape_a, shape_b):
+    a = np.arange(np.prod(shape_a, dtype=int), dtype="int64").reshape(shape_a)
+    b = (np.arange(np.prod(shape_b, dtype=int), dtype="int64") + 1).reshape(shape_b)
+    for expression in ("a + b * 2", "sum(a + b * 2)", "any(a + b * 2)"):
+        typed = NativeGraph.from_expression(
+            expression, {"a": "int64", "b": "int64"}, jit=False, _executor="c-blosc2"
+        )
+        adapter = NativeGraph.from_expression(
+            expression, {"a": "int64", "b": "int64"}, jit=False, _executor="adapter"
+        )
+        expected = adapter.evaluate({"a": a, "b": b}, tile_items=4)
+        actual, report = typed.evaluate({"a": a, "b": b}, tile_items=4, return_report=True)
+        assert actual.shape == expected.shape
+        assert actual.dtype == expected.dtype
+        assert actual.tobytes() == expected.tobytes()
+        assert report["route"] == "c-blosc2-typed-resident"
+        with blosc2.expression_evaluation("safe"):
+            expr = blosc2.lazyexpr(expression, {"a": a, "b": b})
+        with blosc2.compute_options(jit=False):
+            lazy_res = expr.compute(_native_tile_items=4) if expression != "a + b * 2" else expr[:]
+        assert lazy_res.tobytes() == expected.tobytes()
+        assert expr._native_execution_report["route"] == "c-blosc2-typed-resident"
+
+
+def test_typed_strided_unaligned_and_non_native_views():
+    base_x = np.arange(24, dtype=">f8").reshape(4, 6)
+    raw = bytearray(1 + 24 * 4)
+    unaligned = np.frombuffer(raw, dtype="<i4", count=24, offset=1).reshape(4, 6)
+    unaligned[:] = np.arange(24, dtype="<i4").reshape(4, 6)
+    vx = base_x[::-1, ::2].T  # shape (3, 4), reversed, strided, transposed, big-endian!
+    vy = unaligned[:, 1::2].T  # shape (3, 4), unaligned + strided + transposed!
+    for expression in ("x + y", "min(x + y)", "sum(x)", "all(x + y)"):
+        case_inputs = {"x": vx} if "y" not in expression else {"x": vx, "y": vy}
+        case_dtypes = {name: arr.dtype.newbyteorder("=").name for name, arr in case_inputs.items()}
+        adapter = NativeGraph.from_expression(expression, case_dtypes, jit=False, _executor="adapter")
+        expected = adapter.evaluate(case_inputs, tile_items=4)
+        with blosc2.expression_evaluation("safe"):
+            expr = blosc2.lazyexpr(expression, case_inputs)
+        with blosc2.compute_options(jit=False):
+            actual = expr.compute(_native_tile_items=4) if "(" in expression else expr[:]
+        assert actual.dtype == expected.dtype
+        assert actual.shape == expected.shape
+        assert actual.tobytes() == expected.tobytes()
+        report = expr._native_execution_report
+        assert report["route"] == "c-blosc2-typed-resident"
+        assert report["gathered_bytes"] > 0
+
+    # Forged negative-stride view must fail before output writes.
+    buf = np.arange(4, dtype="int64")
+    forged_neg = np.lib.stride_tricks.as_strided(buf[:1], shape=(4,), strides=(-8,))
+    out = np.full(4, -11, dtype="int64")
+    plan = blosc2_ext._TypedExecPlan([{"op": 0, "dtype": "int64", "slot": 0}], 1, 0)
+    schedule = plan.specialize([("int64", (4,))], 4, 0)
+    with pytest.raises(ValueError, match="extent"):
+        schedule.execute((forged_neg,), out=out)
+    np.testing.assert_array_equal(out, -11)
+
+
+def test_typed_partitionable_metadata():
+    assert NativeGraph.from_expression(
+        "min(x)", {"x": "int64"}, jit=False, _executor="c-blosc2"
+    ).partitionable
+    assert NativeGraph.from_expression(
+        "any(x)", {"x": "int64"}, jit=False, _executor="c-blosc2"
+    ).partitionable
+    assert not NativeGraph.from_expression(
+        "sum(x)", {"x": "int64"}, jit=False, _executor="c-blosc2"
+    ).partitionable
+    assert not NativeGraph.from_expression(
+        "prod(x)", {"x": "int64"}, jit=False, _executor="c-blosc2"
+    ).partitionable

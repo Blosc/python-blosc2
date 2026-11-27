@@ -635,10 +635,16 @@ def test_resident_min_pilot_against_graph():
     with blosc2.expression_evaluation("safe"):
         strided = blosc2.lazyexpr("min(x)", {"x": values[::2]})
     assert strided.compute(jit=False) == values[::2].min()
-    assert strided._native_execution_report.get("route") not in {
-        "c-blosc2-resident-min",
-        "c-blosc2-typed-resident",
-    }
+    if getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)():
+        report = strided._native_execution_report
+        assert report["route"] == "c-blosc2-typed-resident"
+        assert report["input_materialization_bytes"] == 0
+        assert report["gathered_bytes"] == values[::2].nbytes
+    else:
+        assert strided._native_execution_report.get("route") not in {
+            "c-blosc2-resident-min",
+            "c-blosc2-typed-resident",
+        }
 
 
 @pytest.mark.skipif(

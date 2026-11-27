@@ -14,9 +14,11 @@ cdef extern from "b2nd_exec_bridge.h":
         size_t itemsize
         int64_t shape[16]
     ctypedef struct b2_exec_info:
-        int dtype, reduction, identity, map_dtype, reducer
+        int dtype, reduction, identity, map_dtype, reducer, partitionable
         size_t itemsize, ninputs, nitems, tile_items, mapped_bytes, reducer_bytes, output_items
         size_t plan_metadata_bytes, schedule_metadata_bytes
+        size_t ndim, broadcast_gather_bytes
+        int64_t shape[16]
     ctypedef struct me_buffer:
         const void *data
         size_t capacity
@@ -26,7 +28,12 @@ cdef extern from "b2nd_exec_bridge.h":
     ctypedef struct b2_exec_report:
         size_t tiles, map_calls, direct_tiles, mapped_bytes
         me_fp_status fp
-        size_t tasks, worker_bytes
+        size_t tasks, worker_bytes, gather_bytes, gathered_bytes
+    ctypedef struct b2_exec_view:
+        const void *base
+        size_t capacity, offset
+        int64_t strides[16]
+        unsigned byte_order
     int b2_exec_available()
     int b2_exec_prepare(const b2_exec_node *, size_t, size_t, uint32_t, int, void **, me_error *) nogil
     void b2_exec_free(void *)
@@ -35,8 +42,8 @@ cdef extern from "b2nd_exec_bridge.h":
     int b2_exec_specialize(const void *, const b2_exec_meta *, size_t, size_t, size_t,
                           void **, me_error *) nogil
     int b2_exec_schedule_describe(const void *, b2_exec_info *)
-    int b2_exec_execute(const void *, const me_buffer *, size_t, me_mut_buffer,
-                        unsigned, size_t, size_t, b2_exec_report *, me_error *) nogil
+    int b2_exec_execute_views(const void *, const b2_exec_view *, size_t, me_mut_buffer,
+                              unsigned, size_t, size_t, size_t, b2_exec_report *, me_error *) nogil
 
 
 def _b2nd_exec_available():
@@ -110,8 +117,8 @@ cdef class _TypedFPScope:
             b2_exec_fp_end(&self._scope, NULL)
 
 
-cdef object typed_buffer_binding(np.ndarray array, me_buffer *buffer):
-    """Validate the real allocation, not an as_strided view's logical nbytes."""
+cdef object typed_view_binding(np.ndarray array, b2_exec_view *view):
+    """Validate the real owning allocation without normalizing strided views."""
     cdef object owner = array
     cdef object base
     cdef np.ndarray root
@@ -119,9 +126,12 @@ cdef object typed_buffer_binding(np.ndarray array, me_buffer *buffer):
     cdef uintptr_t origin
     cdef size_t offset
     cdef int depth
-    buffer.data = np.PyArray_DATA(array)
-    buffer.capacity = 0
-    if array.nbytes == 0:
+    cdef int i
+    memset(view, 0, sizeof(b2_exec_view))
+    view.byte_order = 0 if array.dtype.isnative else (1 if array.dtype.byteorder == "<" else 2)
+    for i in range(array.ndim):
+        view.strides[i] = array.strides[i]
+    if array.size == 0:
         return array
     for depth in range(128):
         base = getattr(owner, "base", None)
@@ -144,9 +154,25 @@ cdef object typed_buffer_binding(np.ndarray array, me_buffer *buffer):
     if start < origin:
         raise ValueError("Typed buffer precedes its allocation")
     offset = start - origin
-    if offset > <size_t>root.nbytes or <size_t>array.nbytes > <size_t>root.nbytes - offset:
+    if offset > <size_t>root.nbytes:
         raise ValueError("Typed buffer exceeds its allocation extent")
-    buffer.capacity = <size_t>root.nbytes - offset
+    view.base = <const void *>origin
+    view.capacity = <size_t>root.nbytes
+    view.offset = offset
+    return root
+
+
+cdef object typed_output_binding(np.ndarray array, me_mut_buffer *buffer):
+    """Validate contiguous output extent against its real owning allocation."""
+    cdef b2_exec_view view
+    cdef object root = typed_view_binding(array, &view)
+    buffer.data = np.PyArray_DATA(array)
+    buffer.capacity = 0
+    if array.nbytes == 0:
+        return root
+    if <size_t>array.nbytes > view.capacity - view.offset:
+        raise ValueError("Typed buffer exceeds its allocation extent")
+    buffer.capacity = view.capacity - view.offset
     return root
 
 
@@ -206,6 +232,7 @@ cdef class _TypedExecPlan:
                 "plan_metadata_bytes": self._info.plan_metadata_bytes,
                 "ninputs": self._info.ninputs, "reduction": bool(self._info.reduction),
                 "identity": bool(self._info.identity),
+                "partitionable": bool(self._info.partitionable),
                 "reducer": {0: None, 1: "sum", 2: "prod", 3: "min", 4: "max", 5: "any",
                             6: "all"}.get(self._info.reducer, "unknown")}
 
@@ -220,9 +247,7 @@ cdef class _TypedExecPlan:
         memset(metadata, 0, sizeof(metadata))
         memset(&error, 0, sizeof(error))
         for i, (dtype, shape) in enumerate(inputs):
-            dtype = np.dtype(dtype)
-            if not dtype.isnative:
-                raise ValueError("Typed inputs require native metadata")
+            dtype = np.dtype(dtype).newbyteorder("=")
             metadata[i].dtype = _me_dtype_from_numpy_dtype(dtype)
             metadata[i].itemsize = dtype.itemsize
             if len(shape) > 16:
@@ -236,7 +261,7 @@ cdef class _TypedExecPlan:
         if rc:
             raise_exec_error(rc, &error)
         result._owner = self
-        result._metadata = tuple((np.dtype(dtype), tuple(shape)) for dtype, shape in inputs)
+        result._metadata = tuple((np.dtype(dtype).newbyteorder("="), tuple(shape)) for dtype, shape in inputs)
         result._info = self._info
         if b2_exec_schedule_describe(result._schedule, &result._info):
             raise ValueError("Cannot describe typed schedule")
@@ -259,16 +284,17 @@ cdef class _TypedExecSchedule:
         return {"items": self._info.nitems, "tile_items": self._info.tile_items,
                 "mapped_bytes": self._info.mapped_bytes, "reducer_bytes": self._info.reducer_bytes,
                 "output_items": self._info.output_items,
+                "shape": tuple(self._info.shape[i] for i in range(self._info.ndim)),
+                "broadcast_gather_bytes": self._info.broadcast_gather_bytes,
                 "schedule_metadata_bytes": self._info.schedule_metadata_bytes}
 
     def execute(self, inputs, unsigned raise_mask=0, *, out=None, size_t workers=1,
-                size_t max_worker_scratch=65536):
-        cdef me_buffer buffers[128]
+                size_t max_worker_scratch=65536, size_t max_gather_bytes=67108864):
+        cdef b2_exec_view views[128]
         cdef me_mut_buffer destination
         cdef me_error error
         cdef b2_exec_report report
         cdef np.ndarray value, output
-        cdef me_buffer output_buffer
         cdef size_t count = len(inputs)
         cdef int i, rc
         if self._schedule == NULL:
@@ -283,12 +309,10 @@ cdef class _TypedExecSchedule:
             if type(value_object) is not np.ndarray:
                 raise TypeError("Typed execution requires explicit NumPy buffers")
             value = value_object
-            if value.dtype != dtype or value_object.shape != shape:
+            if value.dtype.newbyteorder("=") != dtype or value_object.shape != shape:
                 raise ValueError("Typed input dtype/shape mismatch")
-            if not value.flags.c_contiguous or not value.flags.aligned or not value.dtype.isnative:
-                raise ValueError("Typed inputs must be native aligned contiguous arrays")
-            owners.append(typed_buffer_binding(value, &buffers[i]))
-        shape = () if self._info.reduction else self._metadata[0][1]
+            owners.append(typed_view_binding(value, &views[i]))
+        shape = () if self._info.reduction else tuple(self._info.shape[i] for i in range(self._info.ndim))
         dtype = _numpy_dtype_from_me_dtype(<me_dtype>self._info.dtype)
         if out is None:
             output = np.empty(shape, dtype=dtype)
@@ -300,22 +324,22 @@ cdef class _TypedExecSchedule:
             if not out.flags.c_contiguous or not out.flags.aligned or not out.flags.writeable:
                 raise ValueError("Typed output must be writable aligned contiguous storage")
             output = out
-        owners.append(typed_buffer_binding(output, &output_buffer))
-        destination.data = np.PyArray_DATA(output)
-        destination.capacity = output_buffer.capacity
+        owners.append(typed_output_binding(output, &destination))
         memset(&error, 0, sizeof(error))
         memset(&report, 0, sizeof(report))
         with nogil:
-            rc = b2_exec_execute(self._schedule, buffers, count, destination, raise_mask,
-                                 workers, max_worker_scratch, &report, &error)
+            rc = b2_exec_execute_views(self._schedule, views, count, destination, raise_mask,
+                                       max_gather_bytes, workers, max_worker_scratch, &report, &error)
         if rc:
             raise _typed_exec_error(
                 rc, (<bytes>error.message).decode("utf-8", "replace"),
                 report.fp.flags, report.fp.supported, 0, 0)
         return output, {"route": "c-blosc2-typed-resident", "tiles": report.tiles,
                         "map_calls": report.map_calls, "direct_tiles": report.direct_tiles,
-                        "evaluated_tiles": report.map_calls, "zero_copy_tiles": report.tiles,
+                        "evaluated_tiles": report.map_calls,
+                        "zero_copy_tiles": report.tiles if report.gathered_bytes == 0 else 0,
                         "input_materialization_bytes": 0,
                         "temporary_bytes": report.mapped_bytes, "reducer_bytes": self._info.reducer_bytes,
+                        "gather_bytes": report.gather_bytes, "gathered_bytes": report.gathered_bytes,
                         "tasks": report.tasks or 1, "worker_scratch_bytes": report.worker_bytes,
                         "fp_flags": report.fp.flags, "fp_supported": bool(report.fp.supported)}

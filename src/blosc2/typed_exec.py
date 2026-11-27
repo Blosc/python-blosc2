@@ -39,8 +39,10 @@ _OPS = {
     "sum": 7,
     "prod": 8,
     "max": 9,
+    "any": 10,
+    "all": 11,
 }
-_REDUCERS = {"min", "sum", "prod", "max"}
+_REDUCERS = {"min", "sum", "prod", "max", "any", "all"}
 
 
 class TypedGraphNotAdmitted(Exception):
@@ -117,6 +119,52 @@ def prepare_typed_plan(nodes, ninputs, root):
     return blosc2_ext._TypedExecPlan(descriptor, ninputs, root)
 
 
+def _resident_broadcast_shape(operands, selection):
+    array_shapes = []
+    for value in operands.values():
+        if type(value) is not np.ndarray and not (
+            type(value) in {int, float, bool} or isinstance(value, (np.integer, np.floating, np.bool_))
+        ):
+            # Shared GraphAdapter also knows compressed arrays. They are not
+            # resident buffers and must retain storage admission before prepare.
+            return None
+        if type(value) is np.ndarray:
+            if value.ndim > 16 or value.dtype.newbyteorder("=").name not in TYPED_RESIDENT_DTYPES:
+                return None
+            array_shapes.append(value.shape)
+    if not array_shapes or len(selection) > max(len(s) for s in array_shapes):
+        return None
+    try:
+        return np.broadcast_shapes(*array_shapes)
+    except ValueError:
+        return None
+
+
+def _resident_scratch_fits(info, nodes, root, reduction, arrays, bcast_shape, items, tile):
+    tile_lanes = min(items, tile)
+    mapped_bytes = (
+        tile_lanes * info["map_dtype"].itemsize if (info["reduction"] and not info["identity"]) else 0
+    )
+    if mapped_bytes > 65536:
+        return False
+    map_id = nodes[root][3][0] if reduction else root
+    direct_slot = nodes[map_id][2]
+    gather_bytes = 0
+    if items:
+        for index, arr in enumerate(arrays):
+            if info["identity"] and index != direct_slot:
+                continue
+            is_direct = (
+                arr.shape == bcast_shape
+                and arr.dtype.isnative
+                and arr.flags.c_contiguous
+                and arr.flags.aligned
+            )
+            if not is_direct:
+                gather_bytes += tile_lanes * arr.dtype.itemsize
+    return gather_bytes <= 65536 and mapped_bytes + gather_bytes <= 65536
+
+
 def compute_typed_resident_if_eligible(expr, item, tile, options):
     import blosc2
 
@@ -142,33 +190,14 @@ def compute_typed_resident_if_eligible(expr, item, tile, options):
     selection = item if isinstance(item, tuple) else (item,)
     if any(not isinstance(s, slice) or s != slice(None) for s in selection):
         return None
-    shape = None
-    for value in expr.operands.values():
-        if type(value) is not np.ndarray and not (
-            type(value) in {int, float, bool} or isinstance(value, (np.integer, np.floating, np.bool_))
-        ):
-            # Shared GraphAdapter also knows compressed arrays. They are not
-            # resident buffers and must retain storage admission before prepare.
-            return None
-        if type(value) is np.ndarray:
-            if (
-                value.ndim > 16
-                or value.dtype.name not in TYPED_RESIDENT_DTYPES
-                or not value.dtype.isnative
-                or not value.flags.aligned
-                or not value.flags.c_contiguous
-            ):
-                return None
-            if shape is not None and shape != value.shape:
-                return None
-            shape = value.shape
-    if shape is None or len(selection) > len(shape):
+    bcast_shape = _resident_broadcast_shape(expr.operands, selection)
+    if bcast_shape is None:
         return None
     try:
         nodes, names, root, reduction = lower_typed_graph(expr.expression, expr.operands)
     except (TypedGraphNotAdmitted, SyntaxError, RecursionError):
         return None
-    items = math.prod(shape)
+    items = math.prod(bcast_shape)
     if (
         (reduction and selection)
         or (not items and nodes[root][0] in {6, 9})
@@ -180,7 +209,7 @@ def compute_typed_resident_if_eligible(expr, item, tile, options):
     # Direct-output maps and identity reductions need no mapped scratch.
     info = plan.info()
     if output is not None and (
-        output.shape != (() if reduction else shape)
+        output.shape != (() if reduction else bcast_shape)
         or output.dtype != info["inferred_dtype"]
         or not output.flags.c_contiguous
         or not output.flags.aligned
@@ -188,20 +217,20 @@ def compute_typed_resident_if_eligible(expr, item, tile, options):
         or any(np.may_share_memory(output, expr.operands[name]) for name in names)
     ):
         return None
-    if info["reduction"] and not info["identity"] and min(items, tile) * info["map_dtype"].itemsize > 65536:
-        return None
-    # Ordered sums/products keep serial leaves in C; order-independent
-    # reducers and disjoint map tiles may use the configured worker count.
-    workers = 1 if info.get("reducer") in {"sum", "prod"} else max(1, blosc2.nthreads)
     arrays = tuple(expr.operands[name] for name in names)
+    if not _resident_scratch_fits(info, nodes, root, reduction, arrays, bcast_shape, items, tile):
+        return None
+    # Ordered sums/products keep serial leaves in C; proven partitionable
+    # reducers and disjoint map tiles may use the configured worker count.
+    workers = max(1, blosc2.nthreads) if info.get("partitionable", False) else 1
     schedule = plan.specialize(tuple((value.dtype, value.shape) for value in arrays), tile, 65536)
     max_scratch = 65536
     if output is None:
         result, expr._native_execution_report = schedule.execute(
-            arrays, workers=workers, max_worker_scratch=max_scratch
+            arrays, workers=workers, max_worker_scratch=max_scratch, max_gather_bytes=65536
         )
     else:
         result, expr._native_execution_report = schedule.execute(
-            arrays, out=output, workers=workers, max_worker_scratch=max_scratch
+            arrays, out=output, workers=workers, max_worker_scratch=max_scratch, max_gather_bytes=65536
         )
     return result

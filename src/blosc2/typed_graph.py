@@ -107,7 +107,11 @@ class TypedGraphHandle:
         self._names = names
         self._dtypes = dtypes
         self._expression = expression
-        self._reducer = {6: "min", 7: "sum", 8: "prod", 9: "max"}.get(nodes[root][0]) if reduction else None
+        self._reducer = (
+            {6: "min", 7: "sum", 8: "prod", 9: "max", 10: "any", 11: "all"}.get(nodes[root][0])
+            if reduction
+            else None
+        )
 
     def info(self):
         native = self._plan.info()
@@ -117,7 +121,7 @@ class TypedGraphHandle:
             "map_dtype": native["map_dtype"],
             "has_jit": False,
             "stages": 1,
-            "partitionable": False,
+            "partitionable": native["partitionable"],
             "plan_metadata_bytes": native["plan_metadata_bytes"],
             "executor": self._executor,
         }
@@ -133,9 +137,9 @@ class TypedGraphHandle:
         if intermediate_budget < 0:
             raise ValueError("Invalid intermediate budget")
         metadata = tuple(inputs[name] for name in self._names)
-        native = self._plan.specialize(metadata, tile_items)
+        native = self._plan.specialize(metadata, tile_items, 64 * 1024 * 1024)
         return TypedGraphSchedule(
-            native, self._names, tuple(metadata[0][1]), self.info(), self._reducer is not None
+            native, self._names, native.info()["shape"], self.info(), self._reducer is not None
         )
 
     def resident_artifact(self):

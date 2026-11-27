@@ -19,16 +19,25 @@ typedef struct {
 } b2_exec_meta;
 
 typedef struct {
-    int dtype, reduction, identity, map_dtype, reducer;
+    int dtype, reduction, identity, map_dtype, reducer, partitionable;
     size_t itemsize, ninputs, nitems, tile_items, mapped_bytes, reducer_bytes, output_items;
     size_t plan_metadata_bytes, schedule_metadata_bytes;
+    size_t ndim, broadcast_gather_bytes;
+    int64_t shape[16];
 } b2_exec_info;
 
 typedef struct {
     size_t tiles, map_calls, direct_tiles, mapped_bytes;
     me_fp_status fp;
-    size_t tasks, worker_bytes;
+    size_t tasks, worker_bytes, gather_bytes, gathered_bytes;
 } b2_exec_report;
+
+typedef struct {
+    const void *base;
+    size_t capacity, offset;
+    int64_t strides[16];
+    unsigned byte_order;
+} b2_exec_view;
 
 #ifdef B2_HAVE_B2ND_EXEC
 #include "b2nd-exec.h"
@@ -89,6 +98,7 @@ static int b2_exec_describe(const void *plan, b2_exec_info *out) {
         out->identity = info.identity;
         out->reduction = info.reduction;
         out->reducer = (int)info.reducer;
+        out->partitionable = info.partitionable;
         out->plan_metadata_bytes = info.plan_metadata_bytes;
     }
     return rc;
@@ -121,7 +131,41 @@ static int b2_exec_schedule_describe(const void *schedule, b2_exec_info *out) {
         out->reducer_bytes = info.reducer_bytes;
         out->output_items = info.output_items;
         out->schedule_metadata_bytes = info.schedule_metadata_bytes;
+        out->ndim = info.ndim;
+        out->broadcast_gather_bytes = info.broadcast_gather_bytes;
+        memcpy(out->shape, info.shape, sizeof(out->shape));
     }
+    return rc;
+}
+static int b2_exec_execute_views(const void *schedule, const b2_exec_view *inputs, size_t ninputs,
+                                 me_mut_buffer output, unsigned raise_mask,
+                                 size_t max_gather_bytes, size_t workers, size_t worker_scratch,
+                                 b2_exec_report *report, me_error *error) {
+    if (ninputs > B2ND_EXEC_MAX_INPUTS) {
+        return ME_ERR_INVALID_ARG;
+    }
+    b2nd_exec_view views[B2ND_EXEC_MAX_INPUTS] = {0};
+    for (size_t i = 0; i < ninputs; i++) {
+        views[i].struct_size = sizeof(views[i]);
+        views[i].base = inputs[i].base;
+        views[i].capacity = inputs[i].capacity;
+        views[i].offset = inputs[i].offset;
+        views[i].byte_order = inputs[i].byte_order;
+        memcpy(views[i].strides, inputs[i].strides, sizeof(views[i].strides));
+    }
+    b2nd_exec_report native = {0};
+    b2nd_exec_jobs jobs = {sizeof(jobs), workers ? workers : 1, worker_scratch};
+    int rc = b2nd_exec_execute_views(schedule, views, ninputs, output, raise_mask,
+                                     max_gather_bytes, workers > 1 ? &jobs : NULL, &native, error);
+    report->tiles = native.tiles;
+    report->map_calls = native.map_calls;
+    report->direct_tiles = native.direct_tiles;
+    report->mapped_bytes = native.mapped_bytes;
+    report->fp = native.fp;
+    report->tasks = native.tasks;
+    report->worker_bytes = native.worker_bytes;
+    report->gather_bytes = native.gather_bytes;
+    report->gathered_bytes = native.gathered_bytes;
     return rc;
 }
 static int b2_exec_execute(const void *schedule, const me_buffer *inputs, size_t ninputs,
@@ -181,6 +225,14 @@ static int b2_exec_execute(const void *schedule, const me_buffer *inputs, size_t
                            b2_exec_report *report, me_error *error) {
     (void)schedule; (void)inputs; (void)ninputs; (void)output; (void)raise_mask;
     (void)workers; (void)worker_scratch; (void)report; (void)error;
+    return ME_ERR_UNSUPPORTED;
+}
+static int b2_exec_execute_views(const void *schedule, const b2_exec_view *inputs, size_t ninputs,
+                                 me_mut_buffer output, unsigned raise_mask,
+                                 size_t max_gather_bytes, size_t workers, size_t worker_scratch,
+                                 b2_exec_report *report, me_error *error) {
+    (void)schedule; (void)inputs; (void)ninputs; (void)output; (void)raise_mask;
+    (void)max_gather_bytes; (void)workers; (void)worker_scratch; (void)report; (void)error;
     return ME_ERR_UNSUPPORTED;
 }
 #endif
