@@ -1,0 +1,221 @@
+name: Execution migration
+
+on:
+  push:
+    branches: [next]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: execution-migration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checkpoint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      miniexpr: ${{ steps.refs.outputs.miniexpr }}
+      blosc2: ${{ steps.refs.outputs.blosc2 }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Qualification harness tests
+        run: python scripts/test_execution_qualification.py
+      - id: refs
+        shell: python
+        run: |
+          import json, os, re
+          refs = json.load(open(".github/execution-native-refs.json"))
+          assert all(re.fullmatch(r"[0-9a-f]{40}", sha) for sha in refs.values())
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              print("miniexpr=" + refs["miniexpr"], file=out)
+              print("blosc2=" + refs["c-blosc2"], file=out)
+          print(json.dumps({"python-blosc2": os.environ["GITHUB_SHA"], **refs}, indent=2))
+
+  native:
+    needs: checkpoint
+    name: C4 ${{ matrix.os }} ${{ matrix.cc }} ${{ matrix.mode }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, cc: gcc, cxx: g++, mode: release}
+          - {os: ubuntu-latest, cc: clang, cxx: clang++, mode: sanitizer}
+          - {os: windows-latest, cc: cl, cxx: cl, mode: release}
+          - {os: windows-latest, cc: clang-cl, cxx: clang-cl, mode: release}
+          - {os: macos-14, cc: clang, cxx: clang++, mode: release}
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: sources/python-blosc2
+      - uses: actions/checkout@v7
+        with:
+          repository: Blosc/miniexpr
+          ref: ${{ needs.checkpoint.outputs.miniexpr }}
+          path: sources/miniexpr
+      - uses: actions/checkout@v7
+        with:
+          repository: Blosc/c-blosc2
+          ref: ${{ needs.checkpoint.outputs.blosc2 }}
+          path: sources/c-blosc2
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - name: Build tools
+        run: python -m pip install ninja cmake
+      - name: Native install, public API, consumers and compression-only stubs
+        shell: bash
+        run: |
+          extra=()
+          if [ "${{ matrix.mode }}" = sanitizer ]; then extra+=(--sanitizers); fi
+          python sources/python-blosc2/scripts/qualify_execution_platform.py \
+            --sources "$GITHUB_WORKSPACE/sources" --work "$RUNNER_TEMP/execution-native" \
+            --results "$RUNNER_TEMP/execution-results" --compiler "${{ matrix.cc }}" \
+            --phase public-api --phase consumers --phase compression "${extra[@]}"
+      - name: Upload native evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: execution-native-${{ matrix.os }}-${{ matrix.cc }}-${{ matrix.mode }}
+          path: ${{ runner.temp }}/execution-results
+
+  python:
+    needs: checkpoint
+    name: Python ${{ matrix.os }} ${{ matrix.cc }} artifact-${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, cc: gcc, cxx: g++, artifact: off}
+          - {os: ubuntu-latest, cc: gcc, cxx: g++, artifact: on}
+          - {os: windows-latest, cc: cl, cxx: cl, artifact: off}
+          - {os: windows-latest, cc: cl, cxx: cl, artifact: on}
+          - {os: windows-latest, cc: clang-cl, cxx: clang-cl, artifact: off}
+          - {os: windows-latest, cc: clang-cl, cxx: clang-cl, artifact: on}
+          - {os: macos-14, cc: clang, cxx: clang++, artifact: off}
+          - {os: macos-14, cc: clang, cxx: clang++, artifact: on}
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
+      CMAKE_GENERATOR: Ninja
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: sources/python-blosc2
+      - uses: actions/checkout@v7
+        with:
+          repository: Blosc/miniexpr
+          ref: ${{ needs.checkpoint.outputs.miniexpr }}
+          path: sources/miniexpr
+      - uses: actions/checkout@v7
+        with:
+          repository: Blosc/c-blosc2
+          ref: ${{ needs.checkpoint.outputs.blosc2 }}
+          path: sources/c-blosc2
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - name: Build and test dependencies
+        working-directory: sources/python-blosc2
+        run: python -m pip install --upgrade pip ninja cmake scikit-build-core cython "numpy>=2.1" --group test
+      - name: Isolated installed wheel qualification
+        shell: bash
+        run: |
+          python sources/python-blosc2/scripts/qualify_execution_platform.py \
+            --sources "$GITHUB_WORKSPACE/sources" --work "$RUNNER_TEMP/execution-python" \
+            --results "$RUNNER_TEMP/execution-results" --compiler "${{ matrix.cc }}" \
+            --phase wheel-${{ matrix.artifact }}
+      - name: Upload Python evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: execution-python-${{ matrix.os }}-${{ matrix.cc }}-${{ matrix.artifact }}
+          path: |
+            ${{ runner.temp }}/execution-results
+            ${{ runner.temp }}/execution-python/wheels-*/*.whl
+
+  wasm:
+    needs: checkpoint
+    name: WASM runtime artifact-${{ matrix.artifact }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        artifact: [off, on]
+    env:
+      CIBW_BUILD: cp314-*
+      CIBW_PYODIDE_VERSION: '314.0.0'
+      CIBW_BUILD_VERBOSITY: 1
+      CIBW_TEST_COMMAND: >-
+        python -c "import blosc2; assert blosc2.blosc2_ext._b2nd_exec_available();
+        assert blosc2.blosc2_ext.menudet_legacy_adapter_available() == ('${{ matrix.artifact }}' == 'on')" &&
+        pytest -o addopts= -q
+        {project}/tests/test_b2nd_exec_plan.py
+        {project}/tests/test_b2nd_exec_m6.py
+        {project}/tests/test_b2nd_exec_m8.py
+        {project}/tests/test_b2nd_exec_stages.py
+        {project}/tests/test_execution_cleanup.py
+        {project}/tests/test_resident_prefilter.py
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: Blosc/miniexpr
+          ref: ${{ needs.checkpoint.outputs.miniexpr }}
+          path: ci-native
+      - uses: actions/checkout@v7
+        with:
+          repository: Blosc/c-blosc2
+          ref: ${{ needs.checkpoint.outputs.blosc2 }}
+          path: ci-blosc2
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Configure exact WASM dependency pair
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          args = [
+              "-DB2_EXPERIMENTAL_SHARED_MINIEXPR_CORE=ON",
+              "-DMINIEXPR_BUILD_ARTIFACT=${{ matrix.artifact }}",
+              "-DFETCHCONTENT_SOURCE_DIR_MINIEXPR=" + str(Path("ci-native").resolve()),
+              "-DFETCHCONTENT_SOURCE_DIR_BLOSC2=" + str(Path("ci-blosc2").resolve()),
+              "-DWITH_ZLIB_OPTIM=OFF", "-DWITH_OPTIM=OFF",
+              "-DWITH_RUNTIME_CPU_DETECTION=OFF",
+          ]
+          with open(os.environ["GITHUB_ENV"], "a") as out:
+              print("CMAKE_ARGS=" + " ".join(args), file=out)
+          print(args)
+      - run: python -m pip install "cibuildwheel==4.1.*"
+      - name: Build and run bounded Pyodide selection
+        shell: bash
+        run: |
+          set -o pipefail
+          cibuildwheel --platform pyodide 2>&1 | tee wasm-migration.log
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: execution-wasm-${{ matrix.artifact }}
+          path: |
+            wasm-migration.log
+            wheelhouse/*.whl

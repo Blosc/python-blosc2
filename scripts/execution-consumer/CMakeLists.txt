@@ -1,0 +1,33 @@
+cmake_minimum_required(VERSION 3.20)
+project(execution_installed_consumer LANGUAGES C CXX)
+enable_testing()
+find_package(Blosc2 CONFIG REQUIRED)
+option(EXPECT_EXECUTION "Require numerical execution instead of stubs" ON)
+
+# These consumers use installed public headers only, including for a DLL build.
+foreach(standard 99 11)
+    add_library(header_c${standard} OBJECT header.c)
+    set_target_properties(header_c${standard} PROPERTIES C_STANDARD ${standard} C_STANDARD_REQUIRED YES)
+    target_link_libraries(header_c${standard} PRIVATE Blosc2::blosc2_shared)
+endforeach()
+add_library(header_cpp OBJECT header.cpp)
+set_target_properties(header_cpp PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES)
+target_link_libraries(header_cpp PRIVATE Blosc2::blosc2_shared)
+
+add_executable(execution_consumer main.c)
+target_link_libraries(execution_consumer PRIVATE Blosc2::blosc2_shared)
+target_compile_definitions(execution_consumer PRIVATE EXPECT_EXECUTION=$<BOOL:${EXPECT_EXECUTION}>)
+foreach(target header_c99 header_c11 header_cpp execution_consumer)
+    set_property(TARGET ${target} PROPERTY NO_SYSTEM_FROM_IMPORTED TRUE)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /WX)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
+    endif()
+endforeach()
+if(WIN32)
+    add_custom_command(TARGET execution_consumer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:Blosc2::blosc2_shared> $<TARGET_FILE_DIR:execution_consumer>)
+endif()
+add_test(NAME installed_shared_execution COMMAND execution_consumer)

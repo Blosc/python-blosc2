@@ -17,6 +17,7 @@ def main():
     parser.add_argument("--package", type=Path, required=True)
     parser.add_argument("--artifact", choices=("on", "off"), required=True)
     parser.add_argument("--test", action="append", default=[])
+    parser.add_argument("--junit", type=Path)
     args = parser.parse_args()
     package = args.package.resolve()
     repo = Path(__file__).resolve().parents[1]
@@ -32,6 +33,8 @@ def main():
                 "test_lazyexpr*.py",
                 "test_expression_graph*.py",
                 "test_storage_readers.py",
+                "test_execution_cleanup.py",
+                "test_resident_prefilter.py",
             )
             for path in (repo / "tests").glob(pattern)
         }
@@ -51,7 +54,9 @@ assert blosc2.blosc2_ext.menudet_legacy_adapter_available() is {args.artifact ==
 print("Python package:", blosc2.__file__, flush=True)
 print("Native module:", blosc2.blosc2_ext.__file__, flush=True)
 raise SystemExit(pytest.main(
-    ["-n", "0", "--override-ini=addopts=", "--tb=short", "-q"] + {tests!r}
+    ["-n", "0", "--override-ini=addopts=", "--tb=short", "-q"]
+    + {["--junitxml=" + str(args.junit.resolve())] if args.junit else []!r}
+    + {tests!r}
 ))
 """
     result = subprocess.run([sys.executable, "-S", "-c", code], cwd=repo)
