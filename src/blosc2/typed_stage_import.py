@@ -153,9 +153,10 @@ def _graph(document, policy, overrides=None):
                 compiler=compiler,
                 math_backend=math_backend,
             )
-            children, bindings = plan.components()
             plan = blosc2_ext._TypedExecPlan.assemble(
-                (*children, conversion), (*bindings, (len(children) - 1,)), len(names)
+                (plan, conversion),
+                (tuple(-1 - i for i in range(len(names))), (0,)),
+                len(names),
             )
     root_record = records[root]
     reduction = None

@@ -158,7 +158,7 @@ cdef extern from "b2nd_exec_bridge.h":
     int b2_st_describe(const void *, b2_exec_info *)
     int b2_st_assemble(const void *const *, const int *, const size_t *, size_t, size_t,
                        void **, b2_st_diag *, me_error *) nogil
-    int b2_st_child(const void *, size_t, void **, int *, size_t *, size_t *)
+    int b2_st_child_info(const void *, size_t, b2_exec_info *, int *, size_t *, size_t *)
     int b2_st_source(const char *, const char *, const me_signature *, int, int, int, int, int,
                      void **, me_error *) nogil
     int b2_st_specialize(const void *, const b2_exec_meta *, size_t, size_t, size_t, size_t,
@@ -559,8 +559,10 @@ cdef class _TypedExecPlan:
             if not isinstance(obj, _TypedExecPlan):
                 raise TypeError("Explicit stages require typed plans")
             child = obj
-            if child._staged or len(bindings[s]) != child._info.ninputs:
-                raise ValueError("Nested explicit stage plan or binding count mismatch")
+            if child._plan == NULL:
+                raise ValueError("Stage component descriptor cannot be re-assembled directly")
+            if len(bindings[s]) != child._info.ninputs:
+                raise ValueError("Explicit stage binding count mismatch")
             plans[s] = child._plan
             offsets[s] = used
             for value in bindings[s]:
@@ -653,10 +655,8 @@ cdef class _TypedExecPlan:
             child = _TypedExecPlan()
             child._borrowed_plan = True
             child._borrowed_owners = self
-            if b2_st_child(self._plan, stage, &child._plan, sources, &count, &node):
+            if b2_st_child_info(self._plan, stage, &child._info, sources, &count, &node):
                 raise ValueError("Cannot inspect typed stage components")
-            if b2_exec_describe(child._plan, &child._info):
-                raise ValueError("Cannot inspect borrowed typed stage")
             children.append(child)
             bindings.append(tuple(sources[i] for i in range(count)))
         return tuple(children), tuple(bindings)
