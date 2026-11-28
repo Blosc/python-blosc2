@@ -255,3 +255,26 @@ def test_authored_block_scalar_persisted_partitions_fp_and_empty(chunk, block, t
     empty_lazy = partition_sum.specialize(empty_source).lazy({"x": empty_source}, partitions=(3,))
     np.testing.assert_array_equal(empty_lazy[:], np.empty(0, dtype=np.float64), strict=True)
     assert empty_lazy._source_execution_report["fp_flags"] == 0
+
+
+def test_compressed_sink_scales_workers_without_explicit_scratch_cap():
+    x = np.arange(131073, dtype=np.float64)
+    bx = blosc2.asarray(x, chunks=(65536,), blocks=(4096,))
+    plan = NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=True)
+    schedule = plan.specialize({"x": (x.dtype, x.shape)}, 4096)
+
+    out_default = blosc2.uninit(x.shape, dtype=x.dtype, chunks=(65536,), blocks=(4096,))
+    res, report = schedule.execute_arrays({"x": bx}, out=out_default, workers=8)
+    assert res is out_default
+    np.testing.assert_array_equal(out_default[:], x + 1)
+    assert report["route"] == "c-blosc2-typed-storage-sink"
+    assert report["tasks"] == (1 if blosc2.IS_WASM else 8)
+
+    out_capped = blosc2.uninit(x.shape, dtype=x.dtype, chunks=(65536,), blocks=(4096,))
+    res_capped, report_capped = schedule.execute_arrays(
+        {"x": bx}, out=out_capped, workers=8, max_worker_scratch=65536
+    )
+    assert res_capped is out_capped
+    np.testing.assert_array_equal(out_capped[:], x + 1)
+    assert report_capped["tasks"] == (1 if blosc2.IS_WASM else 2)
+    assert report_capped["worker_scratch_bytes"] <= 65536

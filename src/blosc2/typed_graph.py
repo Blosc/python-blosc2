@@ -739,6 +739,7 @@ class TypedGraphSchedule:
             and "max_worker_scratch" not in budgets
             and (
                 self._native.info()["mapped_bytes"] > 32768
+                or isinstance(out, blosc2_ext.NDArray)
                 or (out is not None and isinstance(out, np.ndarray) and not out.flags.c_contiguous)
             )
         ):
