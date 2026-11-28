@@ -5,7 +5,7 @@ import pytest
 
 import blosc2
 from blosc2.graph_plan import NativeGraph
-from conftest import orthogonal_cases
+from conftest import orthogonal_cases, typed_graph_route
 
 
 @pytest.fixture(autouse=True)
@@ -80,7 +80,7 @@ def test_required_compressed_graph_is_serial_and_bounded(monkeypatch):
     result = expr.sum(_require_native=True, jit=True)
     np.testing.assert_allclose(result, np.sum(values + 1), rtol=1e-12)
     report = expr._native_execution_report
-    assert report["route"] == "graph-bounded-readers"
+    assert report["route"] == typed_graph_route("graph-bounded-readers", storage=True)
     assert report["input_materialization_bytes"] == 0
     assert report["maximum_reader_items"] <= report["tile_items"]
 
@@ -116,6 +116,12 @@ def test_automatic_compressed_graph_parallel_sum(
         result = expr.sum(keepdims=keepdims)
         np.testing.assert_allclose(result, np.sum(values + 1, keepdims=keepdims), rtol=1e-12)
         report = expr._native_execution_report
+        if report["route"] == "c-blosc2-typed-storage":
+            # Ordered sums retain their C-owned serial leaf/combine order.
+            assert report["tasks"] == 1
+            assert report["input_materialization_bytes"] == 0
+            assert report["maximum_reader_items"] <= report["tile_items"]
+            return
         pairwise = getattr(blosc2.blosc2_ext, "menudet_pairwise_sum_available", lambda: False)()
         assert report["route"] == (
             "parallel-prefilter-pairwise-sum" if pairwise else "parallel-graph-bounded-readers"
@@ -157,6 +163,10 @@ def test_graph_sources_reader_failure_is_not_replayed(monkeypatch):
         raise OSError("Storage read failed")
 
     monkeypatch.setattr(StorageReader, "read", failure)
+    if getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)():
+        from blosc2.typed_graph import TypedGraphSchedule
+
+        monkeypatch.setattr(TypedGraphSchedule, "execute_arrays", failure)
     expr = blosc2.lazyexpr("x + 1", {"x": blosc2.asarray(np.ones(20))})
     with pytest.raises(OSError, match="Storage read failed"):
         expr.sum(_require_native=True)
@@ -210,7 +220,9 @@ def test_automatic_compressed_graph_persisted_native_readers(
         monkeypatch.setattr(StorageReader, "read", forbidden)
         for _ in range(2):
             np.testing.assert_allclose(expr.sum(), np.sum(values + 1), rtol=1e-12)
-        assert expr._native_execution_report["route"] == "parallel-graph-bounded-readers"
+        assert expr._native_execution_report["route"] == typed_graph_route(
+            "parallel-graph-bounded-readers", storage=True
+        )
         assert expr._native_execution_report["input_materialization_bytes"] == 0
     finally:
         blosc2.set_nthreads(previous)
@@ -261,6 +273,7 @@ def test_graph_sources_empty_domain_does_not_read(monkeypatch):
 def test_automatic_compressed_worker_failure_is_not_replayed(monkeypatch, parallel_sources_runtime):
     import blosc2.native_graph as native
     import blosc2.resident_execution as resident
+
     # Exercise the bounded-reader worker route; prefilter failures have their
     # own callback/merge propagation test.
     monkeypatch.setattr(native, "_pairwise_prefilter_kernel", lambda *args: None)
@@ -278,6 +291,13 @@ def test_automatic_compressed_worker_failure_is_not_replayed(monkeypatch, parall
 
     monkeypatch.setattr(native, "MINIMUM_COMPRESSED_GRAPH_ITEMS", 4_000_000)
     monkeypatch.setattr(resident, "resident_pool", lambda: FailedPool())
+    if getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)():
+        from blosc2.typed_graph import TypedGraphSchedule
+
+        def fail(*args, **kwargs):
+            raise OSError("Compressed worker failed")
+
+        monkeypatch.setattr(TypedGraphSchedule, "execute_arrays", fail)
     monkeypatch.setattr(blosc2.LazyExpr, "_compute_expr", forbidden)
     x = blosc2.asarray(np.ones(4_200_003), chunks=(1_000_000,), blocks=(6250,))
     previous = blosc2.set_nthreads(2)

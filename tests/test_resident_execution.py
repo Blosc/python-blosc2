@@ -25,6 +25,17 @@ def kernel(source="def k(x, y):\n    return x + (y - 1)\n", dtype="float64", out
     return blosc2.MenudetKernel.from_json(author.export({"x": dtype, "y": dtype}, output or dtype), jit=jit)
 
 
+def assert_parallel_owner(report):
+    if getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)():
+        assert report["route"] == "c-blosc2-typed-storage"
+        assert report["tasks"] == 4
+        assert report["gathered_bytes"] == 0
+    else:
+        assert report["route"] == "parallel-resident"
+        assert report["threads"] == 4
+        assert report["input_buffer_bytes"] == 0
+
+
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 @pytest.mark.parametrize("jit", [False, True])
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Parallel resident execution requires host threads")
@@ -33,9 +44,7 @@ def test_full_read_parallel(dtype, jit):
     lazy = kernel(dtype=dtype, jit=jit).lazy({"x": values, "y": values})
     np.testing.assert_array_equal(lazy[:], values + (values - 1))
     report = lazy._source_execution_report
-    assert report["route"] == "parallel-resident"
-    assert report["threads"] == 4
-    assert report["input_buffer_bytes"] == 0
+    assert_parallel_owner(report)
 
 
 @pytest.mark.parametrize("dtype", ["int8", "int64", "uint64"])
@@ -52,8 +61,7 @@ def test_integer_modular_full_read(dtype, jit, monkeypatch):
     lazy = native.lazy({"x": values, "y": values})
     expected = values + (values - 1)
     np.testing.assert_array_equal(lazy[:], expected)
-    assert lazy._source_execution_report["route"] == "parallel-resident"
-    assert lazy._source_execution_report["threads"] == 4
+    assert_parallel_owner(lazy._source_execution_report)
 
 
 @pytest.mark.parametrize(
@@ -208,7 +216,7 @@ def test_boolean_output():
     native = kernel("def k(x, y):\n    return x > y\n", output="bool")
     lazy = native.lazy({"x": values, "y": np.zeros_like(values)})
     np.testing.assert_array_equal(lazy[:], values > 0)
-    assert lazy._source_execution_report["route"] == "parallel-resident"
+    assert_parallel_owner(lazy._source_execution_report)
 
 
 @pytest.mark.parametrize("dtype", ["int64", "float64"])
@@ -229,6 +237,7 @@ def test_selected_resident_views(dtype, monkeypatch):
         assert lazy._source_execution_report["route"] in (
             "resident-selection",
             "parallel-resident-selection",
+            "c-blosc2-logical-partitions",
         )
 
 
@@ -240,7 +249,7 @@ def test_integer_comparison_parallel_and_selected(monkeypatch):
         {"x": values, "y": values[::-1].copy()}
     )
     np.testing.assert_array_equal(lazy[:], values < values[::-1])
-    assert lazy._source_execution_report["route"] == "parallel-resident"
+    assert_parallel_owner(lazy._source_execution_report)
     np.testing.assert_array_equal(lazy[::2], (values < values[::-1])[::2])
     assert lazy._source_execution_report["route"] == "parallel-resident-selection"
 

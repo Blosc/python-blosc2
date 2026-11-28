@@ -5,6 +5,7 @@ import pytest
 
 import blosc2
 from blosc2.native_graph import prepare_native_first
+from conftest import typed_graph_route
 
 
 @pytest.fixture(autouse=True)
@@ -62,7 +63,7 @@ def test_parallel_resident_extrema(op, dtype, backend, keepdims, monkeypatch):
         np.testing.assert_array_equal(result, expected)
         assert result.shape == expected.shape
         assert result.dtype == expected.dtype
-        assert expr._native_execution_report["route"] == "parallel-resident-reduction"
+        assert expr._native_execution_report["route"] == typed_graph_route("parallel-resident-reduction")
         assert expr._native_execution_report["threads"] == 2
         serial = getattr(expr, op)(axis=(0, 1), keepdims=keepdims, _require_native=True, jit=True)
         assert result.tobytes() == serial.tobytes()
@@ -87,7 +88,7 @@ def test_parallel_extrema_special_values_match_serial(op, dtype, backend, case, 
         serial = getattr(expr, op)(_require_native=True, jit=True)
         serial_flags = expr._native_execution_report["fp_flags"]
         parallel = getattr(expr, op)()
-        assert expr._native_execution_report["route"] == "parallel-resident-reduction"
+        assert expr._native_execution_report["route"] == typed_graph_route("parallel-resident-reduction")
         assert parallel.tobytes() == serial.tobytes()
         assert expr._native_execution_report["fp_flags"] == serial_flags
         if case == "zeros":
@@ -150,8 +151,8 @@ def test_parallel_compressed_extrema(op, dtype, backend, root_expression, case, 
         assert result.tobytes() == serial.tobytes()
         report = expr._native_execution_report
         shared = blosc2.blosc2_ext.menudet_shared_reduction_rules_available()
-        assert report["route"] == (
-            "parallel-prefilter-reduction" if shared else "parallel-graph-bounded-readers"
+        assert report["route"] == typed_graph_route(
+            "parallel-prefilter-reduction" if shared else "parallel-graph-bounded-readers", storage=True
         )
         assert report["fp_flags"] == serial_flags
         assert report["threads"] == 2

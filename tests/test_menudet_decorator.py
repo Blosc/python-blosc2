@@ -300,7 +300,10 @@ def test_native_execution_error_not_replayed(native_graph_runtime, monkeypatch, 
         raise blosc2.MenudetError("Invocation failed", status="evaluation_error")
 
     if route == "resident":
-        monkeypatch.setattr("blosc2.native_graph.execute_resident", failed)
+        if getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)():
+            monkeypatch.setattr("blosc2.typed_graph.TypedGraphSchedule.execute_arrays", failed)
+        else:
+            monkeypatch.setattr("blosc2.native_graph.execute_resident", failed)
     else:
         monkeypatch.delattr(lazy.kernel, "_resident_plan")
         monkeypatch.setattr(lazy.kernel, "_cblosc2_handle", lambda: None)
@@ -336,12 +339,13 @@ def test_arithmetic_resident_rebinds_and_reuses_schedule(native_graph_runtime, m
     lazy = author(x, y)
     monkeypatch.setattr(blosc2, "nthreads", 2)
     first = lazy[:]
-    schedule = lazy._resident_native[2]
+    typed = getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)()
+    schedule = lazy._borrowed_native[1] if typed else lazy._resident_native[2]
     lazy.inputs["x"] = x + 10
     monkeypatch.setattr(blosc2, "nthreads", 4)
     second = lazy[:]
-    assert lazy._resident_native[2] is schedule
-    assert lazy._source_execution_report["threads"] == 4
+    assert (lazy._borrowed_native[1] if typed else lazy._resident_native[2]) is schedule
+    assert lazy._source_execution_report["tasks" if typed else "threads"] == 4
     assert not np.shares_memory(first, second)
     np.testing.assert_array_equal(first, x + (y - 1))
     np.testing.assert_array_equal(second, x + 10 + (y - 1))

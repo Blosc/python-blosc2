@@ -69,7 +69,6 @@ add_custom_command(
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/pairwise_sum_bridge.h"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_array_bridge.h"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/dsl_artifact_bridge.h"
-          "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/b2nd_kernel_pilot.h"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/b2nd_exec_bridge.h"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/b2nd_exec_stages_bridge.h"
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/b2nd_exec.pxi"
@@ -316,20 +315,20 @@ else()
     FetchContent_MakeAvailable(blosc2)
     if(B2_EXPERIMENTAL_SHARED_MINIEXPR_CORE)
         target_include_directories(blosc2_ext PRIVATE "${blosc2_SOURCE_DIR}/blosc")
-        target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_B2ND_KERNEL_PILOT)
-        if(EXISTS "${blosc2_SOURCE_DIR}/blosc/b2nd-exec.h")
-            file(STRINGS "${blosc2_SOURCE_DIR}/blosc/b2nd-exec.h" B2_BORROWED_REDUCTION_API
-                REGEX "^#define B2ND_EXEC_BORROWED_REDUCTION_API 1")
-            if(NOT B2_BORROWED_REDUCTION_API)
-                message(FATAL_ERROR "Update C-Blosc2: borrowed mask/accumulator execution API is required")
-            endif()
-            file(STRINGS "${blosc2_SOURCE_DIR}/blosc/b2nd-exec.h" B2_EXEC_FP_POLICY_API
-                REGEX "^#define B2ND_EXEC_FP_POLICY_API 1")
-            if(NOT B2_EXEC_FP_POLICY_API)
-                message(FATAL_ERROR "Update C-Blosc2: typed FP preparation policy API is required")
-            endif()
-            target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_B2ND_EXEC)
+        if(NOT EXISTS "${blosc2_SOURCE_DIR}/blosc/b2nd-exec.h")
+            message(FATAL_ERROR "Update C-Blosc2: b2nd-exec.h is required when B2_EXPERIMENTAL_SHARED_MINIEXPR_CORE is enabled")
         endif()
+        file(STRINGS "${blosc2_SOURCE_DIR}/blosc/b2nd-exec.h" B2_BORROWED_REDUCTION_API
+            REGEX "^#define B2ND_EXEC_BORROWED_REDUCTION_API 1")
+        if(NOT B2_BORROWED_REDUCTION_API)
+            message(FATAL_ERROR "Update C-Blosc2: borrowed mask/accumulator execution API is required")
+        endif()
+        file(STRINGS "${blosc2_SOURCE_DIR}/blosc/b2nd-exec.h" B2_EXEC_FP_POLICY_API
+            REGEX "^#define B2ND_EXEC_FP_POLICY_API 1")
+        if(NOT B2_EXEC_FP_POLICY_API)
+            message(FATAL_ERROR "Update C-Blosc2: typed FP preparation policy API is required")
+        endif()
+        target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_B2ND_EXEC)
     endif()
     file(STRINGS "${blosc2_SOURCE_DIR}/include/blosc2.h" _blosc2_version_line
          REGEX "^#define[ \t]+BLOSC2_VERSION_STRING")

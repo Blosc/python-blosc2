@@ -7,6 +7,7 @@ import pytest
 
 import blosc2
 from blosc2.graph_plan import NativeGraph
+from conftest import typed_graph_route
 
 
 @pytest.fixture(autouse=True)
@@ -106,7 +107,7 @@ def test_numpy_output_native_parallel_map(monkeypatch, parallel_threads, explici
         result = expr[:]
         assert isinstance(result, np.ndarray)
     np.testing.assert_array_equal(result, expected)
-    assert expr._native_execution_report["route"] == "menudet-prefilter"
+    assert expr._native_execution_report["route"] == typed_graph_route("menudet-prefilter", storage=True)
 
 
 @pytest.mark.parametrize("clevel", [0, 1])

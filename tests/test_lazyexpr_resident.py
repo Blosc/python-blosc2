@@ -5,6 +5,7 @@ import pytest
 
 import blosc2
 from blosc2.graph_plan import NativeGraph
+from conftest import typed_graph_route
 
 
 @pytest.fixture(autouse=True)
@@ -38,7 +39,7 @@ def test_native_graph_parallel(parallel_runtime, dtype, expression):
     with blosc2.jit_options(jit=True):
         np.testing.assert_array_equal(expr[:], expected)
     report = expr._native_execution_report
-    assert report["route"] == "parallel-resident"
+    assert report["route"] == typed_graph_route("parallel-resident")
     assert report["backend"] == "menudet-jit"
     assert report["threads"] == 4
     assert report["input_materialization_bytes"] == 0
@@ -109,7 +110,7 @@ def test_lazy_map_participation_mask_preserved(parallel_runtime):
     expected = expr.compute(_require_native=True, jit=True, _native_tile_items=1023, _getitem=True)
     result = expr.compute(_require_native=True, jit=True, _getitem=True)
     np.testing.assert_array_equal(result, expected)
-    assert expr._native_execution_report["route"] == "parallel-resident"
+    assert expr._native_execution_report["route"] == typed_graph_route("parallel-resident")
     assert expr._native_execution_report["fp_flags"] == 0
 
 
@@ -117,8 +118,11 @@ def test_graph_execution_failure_never_replays(parallel_runtime, monkeypatch):
     def fail(*args, **kwargs):
         raise ArithmeticError("Parallel graph failed")
 
-    monkeypatch.setattr("blosc2.native_graph._parallel_resident_graph", fail)
-    monkeypatch.setattr("blosc2.native_graph.prepare_resident", lambda *args, **kwargs: None)
+    if getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)():
+        monkeypatch.setattr("blosc2.typed_graph.TypedGraphSchedule.execute", fail)
+    else:
+        monkeypatch.setattr("blosc2.native_graph._parallel_resident_graph", fail)
+        monkeypatch.setattr("blosc2.native_graph.prepare_resident", lambda *args, **kwargs: None)
     x = np.ones(600_003)
     expr = blosc2.lazyexpr("x + 1", {"x": x})
     with pytest.raises(ArithmeticError, match="Parallel graph failed"):

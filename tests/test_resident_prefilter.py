@@ -26,6 +26,13 @@ def prepared(inputs, expression="x*x - 1"):
     return result[2]
 
 
+def legacy_graph_handle(plan):
+    handle = plan._handle
+    if isinstance(handle, blosc2.blosc2_ext.NativeGraphHandle):
+        return handle
+    return None
+
+
 @pytest.mark.parametrize(
     ("dtype", "expression"), [("float64", "x*x - 1"), ("float32", "x < 2"), ("int64", "x + 1")]
 )
@@ -33,7 +40,7 @@ def test_direct_resident_prefilter_tail_grid_and_rebinding(dtype, expression):
     x = (np.arange(471) % 3).astype(dtype).reshape(3, 157)
     schedule = prepared({"x": x}, expression)
     executor = schedule.kernel._handle.resident_prefilter(
-        x.shape, workers=2, block_items=128, chunk_items=256, graph=schedule.plan._handle
+        x.shape, workers=2, block_items=128, chunk_items=256, graph=legacy_graph_handle(schedule.plan)
     )
     first, report = executor.evaluate({"x": x})
     np.testing.assert_array_equal(first, eval(expression, {"x": x}))
@@ -126,7 +133,8 @@ def test_configured_resident_uses_no_python_tile_scheduler(monkeypatch):
     monkeypatch.setattr("blosc2.resident_execution.run_dynamic", forbidden)
     result, report = schedule.execute({"x": x}, workers=2)
     np.testing.assert_array_equal(result, x * x - 1)
-    assert report["route"] == "resident-prefilter"
+    typed = getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)()
+    assert report["route"] == ("c-blosc2-typed-resident" if typed else "resident-prefilter")
     assert report["tasks"] == 2
     assert report["interpreter_stages"] == 1
 
@@ -134,6 +142,7 @@ def test_configured_resident_uses_no_python_tile_scheduler(monkeypatch):
 def test_contexts_are_per_calling_thread():
     shape = (300003,)
     schedule = prepared({"x": np.zeros(shape)})
+    typed = getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)()
     barrier = threading.Barrier(3)
 
     def run(value):
@@ -143,27 +152,36 @@ def test_contexts_are_per_calling_thread():
         second, warm = schedule.execute({"x": x}, workers=2)
         np.testing.assert_array_equal(first, x * x - 1)
         np.testing.assert_array_equal(second, first)
+        if typed:
+            assert cold["route"] == warm["route"] == "c-blosc2-typed-resident"
+            return cold["tasks"], warm["tasks"]
         return cold["context_reused"], warm["context_reused"]
 
     with ThreadPoolExecutor(max_workers=3) as pool:
-        assert list(pool.map(run, [2, 3, 4])) == [(False, True)] * 3
+        assert list(pool.map(run, [2, 3, 4])) == ([(2, 2)] * 3 if typed else [(False, True)] * 3)
 
 
 def test_native_workspaces_are_bounded_per_caller():
     import blosc2.native_graph as native
 
     native.clear_resident_prefilter_cache()
+    typed = getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)()
     x = np.arange(300003, dtype="float64")
     seen_contexts = set()
     for expression in ("x*x - 1", "x + 2", "x - 3"):
         schedule = prepared({"x": x}, expression)
         result, _ = schedule.execute({"x": x}, workers=2)
         np.testing.assert_array_equal(result, eval(expression, {"x": x}))
-        assert len(native._resident_prefilter_contexts.contexts) <= 2
-        seen_contexts.update(id(ctx) for ctx in native._resident_prefilter_contexts.contexts.values())
-    # The third expression rebinds the evicted idle context in-place without
-    # allocating a third blosc2_context/thread pool.
-    assert len(seen_contexts) <= 2
+        contexts = getattr(native._resident_prefilter_contexts, "contexts", {})
+        if typed:
+            assert not contexts
+        else:
+            assert len(contexts) <= 2
+            seen_contexts.update(id(ctx) for ctx in contexts.values())
+    if not typed:
+        # The third expression rebinds the evicted idle context in-place without
+        # allocating a third blosc2_context/thread pool.
+        assert len(seen_contexts) <= 2
     native.clear_resident_prefilter_cache()
     assert not native._resident_prefilter_contexts.contexts
 
@@ -173,7 +191,7 @@ def test_multi_chunk_tail_reuse_preserves_block_geometry(size):
     x = np.arange(size, dtype="float64")
     schedule = prepared({"x": x}, "x + 1")
     context = schedule.kernel._handle.resident_prefilter(
-        x.shape, workers=2, block_items=128, chunk_items=256, graph=schedule.plan._handle
+        x.shape, workers=2, block_items=128, chunk_items=256, graph=legacy_graph_handle(schedule.plan)
     )
     first, first_report = context.evaluate({"x": x})
     second, second_report = context.evaluate({"x": x + 10})
@@ -202,16 +220,25 @@ def test_native_scheduler_errors_are_not_replayed(monkeypatch):
     schedule = prepared({"x": np.zeros(300003)})
     calls = []
 
-    class FailedContext:
-        def evaluate(self, *args, **kwargs):
+    if getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)():
+
+        def fail(*args, **kwargs):
             calls.append(1)
             raise ArithmeticError("native scheduling failed")
 
-    class Handle:
-        def resident_prefilter(self, *args, **kwargs):
-            return FailedContext()
+        monkeypatch.setattr(schedule.typed, "execute", fail)
+    else:
 
-    monkeypatch.setattr(schedule.kernel, "_handle", Handle())
+        class FailedContext:
+            def evaluate(self, *args, **kwargs):
+                calls.append(1)
+                raise ArithmeticError("native scheduling failed")
+
+        class Handle:
+            def resident_prefilter(self, *args, **kwargs):
+                return FailedContext()
+
+        monkeypatch.setattr(schedule.kernel, "_handle", Handle())
     monkeypatch.setattr(
         "blosc2.resident_execution.evaluate_resident", lambda *a, **k: pytest.fail("Replayed")
     )
@@ -228,21 +255,28 @@ def test_graph_rejection_remains_authoritative(monkeypatch):
 
 
 def test_graph_proof_cannot_attest_changed_captures():
+    if not getattr(blosc2.blosc2_ext, "menudet_legacy_adapter_available", lambda: True)():
+        pytest.skip("Requires legacy NativeGraphHandle adapter")
+    from blosc2.graph_plan import NativeGraph
+
     x = np.arange(257, dtype="int64")
     schedule = prepared({"x": x}, "x + 1")
+    adapter_plan = NativeGraph.from_expression("x + 1", {"x": "int64"}, jit=False, _executor="adapter")
     document = json.loads(schedule.plan.map_json())
     assert document["constants"]
     document["constants"][0]["value"] = "2"
     altered = blosc2.MenudetKernel.from_json(json.dumps(document), jit=False)
     with pytest.raises(ValueError, match="documents disagree"):
-        altered._handle.resident_prefilter(x.shape, workers=2, graph=schedule.plan._handle)
+        altered._handle.resident_prefilter(x.shape, workers=2, graph=adapter_plan._handle)
 
 
 def test_native_graph_rejection_overrides_artifact_proof():
+    if not getattr(blosc2.blosc2_ext, "menudet_legacy_adapter_available", lambda: True)():
+        pytest.skip("Requires legacy NativeGraphHandle adapter")
     from blosc2.graph_plan import NativeGraph
 
     x = np.ones(257)
     schedule = prepared({"x": x})
-    rejected = NativeGraph.from_expression("x + sum(x)", {"x": "float64"}, jit=False)
+    rejected = NativeGraph.from_expression("x + sum(x)", {"x": "float64"}, jit=False, _executor="adapter")
     with pytest.raises(NotImplementedError, match="graph rejected"):
         schedule.kernel._handle.resident_prefilter(x.shape, workers=2, graph=rejected._handle)

@@ -9,7 +9,7 @@ import pytest
 import blosc2
 from blosc2.dsl_kernel import SourceKernel
 from blosc2.graph_plan import NativeGraph
-from conftest import orthogonal_cases
+from conftest import orthogonal_cases, typed_graph_route
 
 
 @pytest.fixture(autouse=True)
@@ -51,21 +51,26 @@ def test_parallel_compressed_map(backend, dtype, mixed, comparison, monkeypatch)
     result = expression[:]
     np.testing.assert_array_equal(result, expected)
     report = expression._native_execution_report
-    assert report["route"] == "menudet-prefilter"
+    assert report["route"] == typed_graph_route("menudet-prefilter", storage=True)
     assert report["threads"] == 2
     # Dynamic jobs can all finish on one worker before another starts. Only
     # workers that actually decode a block need per-input native contexts.
     compressed_inputs = 1 if mixed else 2
-    contexts = report["native_decoder_contexts"]
-    assert compressed_inputs <= contexts <= report["threads"] * compressed_inputs
-    assert contexts % compressed_inputs == 0
+    if report["route"] == "c-blosc2-typed-storage":
+        assert report["worker_scratch_bytes"] <= 64 * 1024**2
+        assert report["decode_bytes"] <= 64 * 1024**2
+    else:
+        contexts = report["native_decoder_contexts"]
+        assert compressed_inputs <= contexts <= report["threads"] * compressed_inputs
+        assert contexts % compressed_inputs == 0
     assert report["reader_bytes"] == values.nbytes * (1 if mixed else 2)
     assert report["maximum_reader_items"] <= report["tile_items"]
     # Prefilter scratch contains only compressed input values, even when the
     # final output is Boolean; resident operands are borrowed without copying.
-    assert report["input_buffer_bytes"] == (
-        report["tile_items"] * report["threads"] * (1 if mixed else 2) * values.itemsize
-    )
+    if report["route"] != "c-blosc2-typed-storage":
+        assert report["input_buffer_bytes"] == (
+            report["tile_items"] * report["threads"] * (1 if mixed else 2) * values.itemsize
+        )
     assert report["temporary_bytes"] <= 32 * 1024**2
     assert report["output_copy_bytes"] == report["output_zero_fill_bytes"] == 0
     again = blosc2.evaluate(source, local_dict={"x": x, "y": y})
@@ -78,7 +83,9 @@ def test_parallel_map_persisted_sources(tmp_path):
     x = blosc2.asarray(values, chunks=(65536,), blocks=(8192,), urlpath=str(tmp_path / "x.b2nd"))
     expression = blosc2.lazyexpr("x + 1", {"x": x})
     np.testing.assert_array_equal(expression[:], values + 1)
-    assert expression._native_execution_report["route"] == "parallel-graph-bounded-map"
+    assert expression._native_execution_report["route"] == typed_graph_route(
+        "parallel-graph-bounded-map", storage=True
+    )
 
 
 @pytest.mark.parametrize("mixed", [False, True])
@@ -102,7 +109,12 @@ def test_integer_prefilter_avoids_gather_indices(monkeypatch, mixed):
     assert blosc2.evaluate("x + (y - 1)", local_dict={"x": x, "y": y}, out=output) is output
     np.testing.assert_array_equal(output, expected)
     report = expr._native_execution_report
-    assert report["route"] == "menudet-prefilter"
+    assert report["route"] == typed_graph_route("menudet-prefilter", storage=True)
+    if report["route"] == "c-blosc2-typed-storage":
+        assert report["tasks"] == 2
+        assert report["worker_scratch_bytes"] <= 64 * 1024**2
+        assert report["input_materialization_bytes"] == 0
+        return
     assert report["gathered_bytes"] == report["output_copy_bytes"] == 0
     assert report["temporary_bytes"] <= 2048
     assert report["evaluated_tiles"] == 4 * (256 // report["tile_items"]) + 1
@@ -170,7 +182,11 @@ def test_integer_prefilter_keeps_wide_inputs_parallel(monkeypatch):
     monkeypatch.setattr("blosc2.native_graph._compressed_map_schedules", forbidden)
     np.testing.assert_array_equal(expr[:], values + (values - 1))
     report = expr._native_execution_report
-    assert report["route"] == "menudet-prefilter"
+    assert report["route"] == typed_graph_route("menudet-prefilter", storage=True)
+    if report["route"] == "c-blosc2-typed-storage":
+        assert report["tasks"] == 2
+        assert report["worker_scratch_bytes"] <= 64 * 1024**2
+        return
     assert report["threads"] == 2
     assert report["tile_items"] == 64
     assert report["temporary_bytes"] <= 4608
@@ -182,7 +198,9 @@ def test_parallel_map_padded_chunk_layout():
     x = blosc2.asarray(values, chunks=(60000,), blocks=(4096,))
     expression = blosc2.lazyexpr("x + 1", {"x": x})
     np.testing.assert_array_equal(expression[:], values + 1)
-    assert expression._native_execution_report["route"] == "parallel-graph-bounded-map"
+    assert expression._native_execution_report["route"] == typed_graph_route(
+        "parallel-graph-bounded-map", storage=True
+    )
 
 
 def test_parallel_map_keeps_compressed_compute_and_serial_fallback():
@@ -241,11 +259,21 @@ def test_parallel_map_worker_failure_is_not_replayed(monkeypatch):
 
     x = blosc2.asarray(np.ones(4 * 65536), chunks=(65536,), blocks=(4096,))
     monkeypatch.setattr(resident, "resident_pool", lambda: FailedPool())
+    typed = getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)()
+    if typed:
+        from blosc2.typed_graph import TypedGraphSchedule
+
+        def fail(*args, **kwargs):
+            submissions.append(True)
+            raise OSError("map worker failed")
+
+        monkeypatch.setattr(TypedGraphSchedule, "execute_arrays", fail)
     monkeypatch.setattr(blosc2.LazyExpr, "_compute_expr", forbidden)
     with pytest.raises(OSError, match="map worker failed"):
         blosc2.lazyexpr("x + 1", {"x": x})[:]
-    assert len(submissions) == 2
-    assert submissions[0] is submissions[1]
+    assert len(submissions) == (1 if typed else 2)
+    if not typed:
+        assert submissions[0] is submissions[1]
 
 
 def test_graph_sources_explicit_output_validation():
@@ -294,7 +322,9 @@ def test_map_crossover_policy(dtype, threads, size, monkeypatch):
         result = expr[:]
         np.testing.assert_array_equal(result, values + 1)
         assert expr._native_execution_report["threads"] > x.schunk.nchunks
-        assert expr._native_execution_report["tile_items"] == x.blocks[0]
+        assert expr._native_execution_report["tile_items"] == (
+            4096 if expr._native_execution_report["route"] == "c-blosc2-typed-storage" else x.blocks[0]
+        )
     # Reductions keep their old floor even for the new map crossover.
     assert native.prepare_native_first(blosc2.lazyexpr("sum(x + 1)", {"x": x}), ()) is None
 
@@ -309,12 +339,16 @@ def test_map_schedules_are_immutable_and_operand_free(tmp_path):
     values = np.arange(4 * 65536, dtype=np.float64)
     x = blosc2.asarray(values, chunks=(4 * 65536,), blocks=(4096,), urlpath=str(tmp_path / "source.b2nd"))
     reference = weakref.ref(x)
-    # Immutable gather schedules remain the fallback for persisted operands.
+    # Typed plans bind persisted operands natively, without Python job schedules.
     expr = blosc2.lazyexpr("x + y", {"x": x, "y": np.ones_like(values)})
     np.testing.assert_array_equal(expr[:], values + 1)
     hits = native._compressed_map_schedules.cache_info().hits
     np.testing.assert_array_equal(expr[:], values + 1)
-    assert native._compressed_map_schedules.cache_info().hits > hits
+    if getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)():
+        assert expr._native_execution_report["route"] == "c-blosc2-typed-storage"
+        assert native._compressed_map_schedules.cache_info().currsize == 0
+    else:
+        assert native._compressed_map_schedules.cache_info().hits > hits
     del x, expr
     gc.collect()
     assert reference() is None
@@ -344,6 +378,6 @@ def test_map_groups_tiny_blocks_to_amortize_dispatch(padded):
     expr = blosc2.lazyexpr("x + 1", {"x": x})
     np.testing.assert_array_equal(expr[:], values + 1)
     assert expr._native_execution_report["tile_items"] == 4096
-    assert expr._native_execution_report["route"] == (
-        "parallel-graph-bounded-map" if padded else "menudet-prefilter"
+    assert expr._native_execution_report["route"] == typed_graph_route(
+        "parallel-graph-bounded-map" if padded else "menudet-prefilter", storage=True
     )

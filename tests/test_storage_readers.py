@@ -62,7 +62,12 @@ def test_lazy_and_compute_use_readers(storage_runtime, monkeypatch):
 
     monkeypatch.setattr(blosc2.MenudetKernel, "evaluate_block", forbidden)
     np.testing.assert_array_equal(lazy[:], x_np)
-    assert lazy._source_execution_report["maximum_reader_items"] <= 65536
+    report = lazy._source_execution_report
+    if report["route"] == "c-blosc2-typed-storage":
+        assert report["input_materialization_bytes"] == 0
+        assert report["tiles"] > 0
+    else:
+        assert report["maximum_reader_items"] <= 65536
     np.testing.assert_array_equal(lazy.compute(chunks=(8192,), blocks=(1024,))[:], x_np)
 
 
@@ -346,7 +351,10 @@ def test_row_slab_prefilter_preserves_order_and_tail(prefilter_runtime, monkeypa
         live = np.prod(shape) - (stored.schunk.nchunks - 1) * np.prod(stored.chunks)
         np.testing.assert_array_equal(tail[live:], False)
     np.testing.assert_array_equal(lazy[:], expected)
-    assert lazy._source_execution_report["route"] in ("menudet-prefilter", "single-chunk")
+    typed = getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)()
+    assert lazy._source_execution_report["route"] in (
+        ("c-blosc2-typed-storage",) if typed else ("menudet-prefilter", "single-chunk")
+    )
     # Partial selections must retain coordinate-aware fallback semantics.
     np.testing.assert_array_equal(lazy[::-2, ...], expected[::-2, ...])
 
@@ -523,7 +531,9 @@ def test_compute_other_layouts_and_selections_keep_fallback(storage_runtime, par
     np.testing.assert_array_equal(result[:], expected[item] if partial else expected)
     assert result.chunks == (64,)
     assert result.blocks == (16,)
-    assert lazy._source_execution_report["route"] == "bounded-readers"
+    typed = getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)()
+    expected_route = "c-blosc2-logical-partitions" if typed and not partial else "bounded-readers"
+    assert lazy._source_execution_report["route"] == expected_route
 
 
 def test_compute_prefilter_fp_status(storage_runtime):
@@ -616,4 +626,7 @@ def test_wasm_compute_keeps_bounded_reader_fallback(storage_runtime, monkeypatch
     monkeypatch.setattr(blosc2.NDArray, "_execute_menudet_prefilter", forbidden)
     result = lazy.compute(chunks=(128,), blocks=(32,), cparams={"clevel": 0, "nthreads": 1})
     np.testing.assert_array_equal(result[:], values * 2 - 1)
-    assert lazy._source_execution_report["route"] == "bounded-readers"
+    typed = getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)()
+    assert lazy._source_execution_report["route"] == (
+        "c-blosc2-logical-partitions" if typed else "bounded-readers"
+    )

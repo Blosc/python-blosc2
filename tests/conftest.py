@@ -19,6 +19,14 @@ import pytest
 import blosc2
 from blosc2.graph_plan import NativeGraph
 
+
+def typed_graph_route(compatibility_route, *, storage=False):
+    """Assert the current owner while retaining adapter-only qualification."""
+    if getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)():
+        return "c-blosc2-typed-storage" if storage else "c-blosc2-typed-resident"
+    return compatibility_route
+
+
 _NETWORK_ERRORS = (httpx.HTTPError,)
 try:
     from botocore.exceptions import ProfileNotFound

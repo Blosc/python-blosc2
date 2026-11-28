@@ -327,15 +327,19 @@ def test_m8_core_array_accumulator_and_mask():
     assert values == 14
 
 
-def test_m8_retires_single_case_pilots(monkeypatch):
+def test_m8_retires_single_case_pilots():
+    for attr in (
+        "_ResidentMinI64Plan",
+        "_ResidentMapMinI64Plan",
+        "_b2nd_kernel_pilot_available",
+        "_b2nd_min_i64_available",
+        "_b2nd_map_min_i64_available",
+    ):
+        assert not hasattr(blosc2.blosc2_ext, attr)
+    assert not hasattr(blosc2.NDArray, "_evaluate_b2nd_kernel_pilot")
+
     if not _exec_available():
         pytest.skip("Requires opt-in C-Blosc2 typed executor")
-
-    def forbid_i64_pilot(*args, **kwargs):
-        raise AssertionError("Retired _ResidentMinI64Plan pilot was entered")
-
-    monkeypatch.setattr(blosc2.blosc2_ext, "_ResidentMinI64Plan", forbid_i64_pilot, raising=False)
-    monkeypatch.setattr(blosc2.blosc2_ext, "_ResidentMapMinI64Plan", forbid_i64_pilot, raising=False)
 
     data = np.arange(1024, dtype=np.int64)[::-1].copy()
     assert blosc2.lazyexpr("min(x)", {"x": data}).compute() == 0
@@ -346,10 +350,6 @@ def test_m8_retires_single_case_pilots(monkeypatch):
     def my_sum(x):
         return block_sum(x)  # noqa: F821
 
-    def forbid_kernel_pilot(*args, **kwargs):
-        raise AssertionError("Retired _evaluate_b2nd_kernel_pilot was entered")
-
-    monkeypatch.setattr(blosc2.NDArray, "_evaluate_b2nd_kernel_pilot", forbid_kernel_pilot, raising=False)
     lazy = my_sum(bdata)
     np.testing.assert_allclose(
         lazy[:], [np.sum(np.arange(i, i + 256, dtype=np.float64)) for i in range(0, 1024, 256)]
@@ -452,11 +452,7 @@ def test_m8_core_menudet_v1_parity_and_execution():
     assert err_info.value.status == "invalid_source"
     assert err_info.value.line <= 2
 
-    # 4. Resident prefilter & kernel pilot work through core handles when eligible.
+    # 4. Resident prefilter works through core handles when eligible.
     res_np = np.empty(16, dtype=np.float64)
     recipe_kernel._handle.evaluate_prefilter({"x": src}, numpy_out=res_np)
     np.testing.assert_array_equal(res_np, np.arange(16, dtype=np.float64) * 1.5 + 2.0)
-
-    if blosc2_ext._b2nd_kernel_pilot_available():
-        pilot_out = src._evaluate_b2nd_kernel_pilot(recipe_kernel, max_scratch=65536)
-        np.testing.assert_array_equal(pilot_out, np.arange(16, dtype=np.float64) * 1.5 + 2.0)

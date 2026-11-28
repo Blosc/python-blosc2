@@ -14,6 +14,30 @@ MINIMUM_WORKER_ITEMS = 128 * 1024
 MAXIMUM_WORKERS = 32
 
 
+def typed_storage_inputs_eligible(inputs):
+    """Metadata-only check matching C-Blosc2 storage_validate constraints."""
+    import blosc2
+
+    if not inputs:
+        return False
+    max_codec = blosc2.Codec.ZSTD.value
+    max_filter = blosc2.Filter.DELTA.value
+    for value in inputs.values():
+        if type(value) is np.ndarray:
+            continue
+        if type(value) is not blosc2.NDArray:
+            return False
+        if not value.dtype.isnative or value.schunk._has_postfilter:
+            return False
+        cparams = value.schunk.cparams
+        codec = getattr(cparams.codec, "value", cparams.codec)
+        if codec > max_codec:
+            return False
+        if any(getattr(flt, "value", flt) > max_filter for flt in cparams.filters):
+            return False
+    return True
+
+
 class WorkQueue:
     """Invocation-local dynamic jobs, including on free-threaded Python."""
 
@@ -41,6 +65,44 @@ def work_indices(count, workers):
 def resident_pool():
     # Reuse threads across warm reads. The executor joins them at interpreter exit.
     return ThreadPoolExecutor(max_workers=MAXIMUM_WORKERS, thread_name_prefix="menudet-resident")
+
+
+def prepare_kernel_schedule(kernel, inputs, tile_items=65536):
+    """Borrow an already compiled lane-local kernel, without recompiling its policy.
+
+    Context, reductions and nonnumeric contracts retain logical-partition
+    traversal; their groups must never be redefined as whole-domain map tiles.
+    """
+    from . import blosc2_ext
+    from .typed_graph import TypedGraphSchedule
+
+    if (
+        not getattr(blosc2_ext, "_b2nd_exec_available", lambda: False)()
+        or kernel.result_cardinality != "elementwise"
+        or kernel.context_ndim
+        or kernel.native_partitionable is not True
+        or kernel.output_dtype.kind not in "biuf"
+        or any(dtype.kind not in "biuf" for dtype in kernel.input_dtypes.values())
+    ):
+        return None
+    handle = kernel._cblosc2_handle()
+    if handle is None:
+        return None
+    native_plan = handle.typed_plan()
+    names = tuple(kernel.input_dtypes)
+    # Reserve space for mapped output plus worst-case input gathering across the
+    # maximum worker request. Decode buffers remain independently bounded.
+    width = kernel.output_dtype.itemsize + sum(dtype.itemsize for dtype in kernel.input_dtypes.values())
+    tile_items = min(tile_items, max(1, 64 * 1024 * 1024 // MAXIMUM_WORKERS // width))
+    native = native_plan.specialize(
+        tuple((inputs[name].dtype, inputs[name].shape) for name in names),
+        tile_items,
+        64 * 1024 * 1024,
+    )
+    info = native_plan.info()
+    info.update(stages=1, inferred_dtype=kernel.output_dtype)
+    geometry = native.info()
+    return TypedGraphSchedule(native, names, geometry["shape"], geometry["output_shape"], info)
 
 
 def run_dynamic(jobs, workers, execute):

@@ -369,22 +369,31 @@ def _execute_resident_kernel(kernel, inputs, shape, workers, *, out=None, plan=N
 class _ConfiguredResidentSchedule:
     """Keep graph validation, but execute the option-aware map artifact directly."""
 
-    def __init__(self, schedule, kernel, *, plan):
+    def __init__(self, schedule, kernel, *, plan, inputs):
+        from . import blosc2_ext
+
         self.schedule = schedule
         self.kernel = kernel
         self.plan = plan
         self.partitionable = plan.partitionable
         self._info = schedule.info()
         self.shape = self._info["shape"]
+        self.typed = None
+        if getattr(blosc2_ext, "_b2nd_exec_available", lambda: False)():
+            from .resident_execution import prepare_kernel_schedule
+
+            self.typed = prepare_kernel_schedule(kernel, inputs)
 
     def info(self):
         return self._info
 
     def execute(self, inputs, *, out=None, workers=1):
         shape = self.shape
+        if workers > 1 and not self.partitionable:
+            raise ValueError("A rejected graph cannot use partitioned resident execution")
+        if self.typed is not None:
+            return self.typed.execute(inputs, out=out, workers=workers, max_worker_scratch=64 * 1024 * 1024)
         if workers > 1:
-            if not self.partitionable:
-                raise ValueError("A rejected graph cannot use partitioned resident execution")
             result, report = _execute_resident_kernel(
                 self.kernel, inputs, shape, workers, out=out, plan=self.plan
             )
@@ -473,7 +482,7 @@ def prepare_resident(
             kernel = configured_map_kernel(plan, jit, tuple(policy.items()), _graph_configuration(jit))
             if kernel.output_dtype != info["dtype"]:
                 return None
-            schedule = _ConfiguredResidentSchedule(schedule, kernel, plan=plan)
+            schedule = _ConfiguredResidentSchedule(schedule, kernel, plan=plan, inputs=inputs)
     except (NotImplementedError, blosc2.MenudetError, TypeError, ValueError):
         return None
     return signature, plan, schedule
@@ -563,90 +572,6 @@ def _native_cached_output_ok(expr, schedule, output):
         return False
     operands = expr.values() if isinstance(expr, dict) else expr.operands.values()
     return not any(type(value) is np.ndarray and np.shares_memory(output, value) for value in operands)
-
-
-@lru_cache(maxsize=32)
-def _resident_min_plan(items, tile):
-    import blosc2
-
-    return blosc2.blosc2_ext._ResidentMinI64Plan(items, tile)
-
-
-@lru_cache(maxsize=32)
-def _resident_map_min_plan(source, items, tile):
-    import blosc2
-
-    return blosc2.blosc2_ext._ResidentMapMinI64Plan(source.encode("utf-8"), items, tile)
-
-
-def compute_c_blosc2_min_if_eligible(expr, item, tile, options):
-    """Retired for normal callers when C-Blosc2 typed execution is built."""
-    import blosc2
-
-    if getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)():
-        return None
-    if (
-        _NUMPY_VALUE_PROMOTION
-        or not getattr(blosc2.blosc2_ext, "_b2nd_min_i64_available", lambda: False)()
-        or type(expr) is not blosc2.LazyExpr
-        or not isinstance(item, tuple)
-        or item
-        or options.keys() - {"_getitem"}
-        or type(tile) is not int
-        or not 0 < tile < 2**63
-        or len(expr.operands) != 1
-        or any(hasattr(expr, key) for key in ("_output", "_indices", "_order", "_where_args"))
-        or getattr(expr, "_eval_kwargs", None) is not None
-    ):
-        return None
-    name, value = next(iter(expr.operands.items()))
-    if (
-        type(value) is not np.ndarray
-        or value.ndim != 1
-        or value.dtype != np.dtype(np.int64)
-        or not value.size
-        or not value.flags.c_contiguous
-        or not value.flags.aligned
-    ):
-        return None
-    try:
-        call = expression_syntax(expr.expression)[0].body
-    except SyntaxError:
-        return None
-    if not (
-        isinstance(call, ast.Call)
-        and isinstance(call.func, ast.Name)
-        and call.func.id == "min"
-        and not call.keywords
-        and len(call.args) == 1
-    ):
-        return None
-    mapped = call.args[0]
-    if isinstance(mapped, ast.Name) and mapped.id == name:
-        plan = _resident_min_plan(value.size, tile)
-    else:
-        # Initial mapped slice: weak integer literal arithmetic on one input.
-        # The core, not Python, implements promotion, wrapping and evaluation.
-        if (
-            not getattr(blosc2.blosc2_ext, "_b2nd_map_min_i64_available", lambda: False)()
-            or not isinstance(mapped, ast.BinOp)
-            or type(mapped.op) not in (ast.Add, ast.Sub, ast.Mult)
-            or not isinstance(mapped.left, ast.Name)
-            or mapped.left.id != name
-            or min(value.size, tile) * 8 > 65536
-        ):
-            return None
-        try:
-            literal = ast.literal_eval(mapped.right)
-        except (ValueError, TypeError):
-            return None
-        if type(literal) is not int or not -(2**63) <= literal < 2**63:
-            return None
-        operator = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*"}[type(mapped.op)]
-        source = f"def mapped(x):\n    return x {operator} {literal}\n"
-        plan = _resident_map_min_plan(source, value.size, tile)
-    result, expr._native_execution_report = plan.execute(value)
-    return result
 
 
 def prepare_native_first(expr, item, *, jit=True, jit_backend=None, fp_accuracy=None, options=None):  # noqa: C901 -- conservative metadata-only admission gates
@@ -2531,7 +2456,72 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
         selection += (slice(None),) * (len(shape) - len(selection))
         if reduction:
             raise ValueError("Native reduction partial reads are not yet eligible; select operands first")
-    if reduction and not selection and any(type(value) is blosc2.NDArray for value in inputs.values()):
+    from .resident_execution import MINIMUM_WORKER_ITEMS, typed_storage_inputs_eligible
+
+    typed = plan.info()["executor"] == "c-blosc2"
+    compressed = any(type(value) is blosc2.NDArray for value in inputs.values())
+    # The typed native array binding excludes postfilters, non-native endianness,
+    # and plugin codecs/filters. Keep compatibility readers for those arrays.
+    storage_ok = (not compressed) or typed_storage_inputs_eligible(inputs)
+    full_selection = not selection or all(
+        isinstance(s, slice) and s.indices(n) == (0, n, 1) for s, n in zip(selection, shape, strict=True)
+    )
+    typed_result = None
+    if typed and full_selection and storage_ok and not (compressed and plan.stages > 1):
+        # Hand off the whole logical domain before any compatibility helper can
+        # partition it in Python or create a discarded compression destination.
+        count = math.prod(shape)
+        workers = (
+            max(1, min(blosc2.nthreads, 32, count // MINIMUM_WORKER_ITEMS))
+            if parallel_reductions and plan.partitionable and plan.stages == 1 and not blosc2.IS_WASM
+            else 1
+        )
+        # Account for mapped and worst-case gathered widths together. Decode
+        # buffers have their own native cap and must not consume this allowance.
+        budget = 64 * 1024 * 1024
+        width = np.dtype(plan.info().get("map_dtype", schedule.info()["dtype"])).itemsize
+        width += sum(value.dtype.itemsize for value in inputs.values())
+        target = 4096 if compressed or reduction else 65536
+        tile = (
+            min(target, max(1, count // workers), max(1, budget // workers // width))
+            if tile_items == 1024
+            else tile_items
+        )
+        schedule = plan.specialize(
+            {name: (value.dtype, value.shape) for name, value in inputs.items()}, tile
+        )
+        if compressed:
+            typed_result = schedule.execute_arrays(
+                inputs, out=output, workers=workers, max_worker_scratch=budget
+            )
+        elif plan.stages > 1:
+            # Staged execution owns separate per-stage mapped/gather budgets.
+            typed_result = schedule.execute(inputs, out=output)
+        else:
+            typed_result = schedule.execute(inputs, out=output, workers=workers, max_worker_scratch=budget)
+        result, report = typed_result
+        report.update(
+            tile_items=tile,
+            requested_workers=workers,
+            threads=report.get("tasks", 1),
+            output_copy_bytes=0,
+            output_zero_fill_bytes=0,
+        )
+        if compressed:
+            report.update(
+                maximum_reader_items=tile if report.get("decodes", 0) else 0,
+                reader_bytes=sum(
+                    value.size * value.dtype.itemsize
+                    for value in inputs.values()
+                    if type(value) is blosc2.NDArray
+                )
+                if report.get("decodes", 0)
+                else 0,
+            )
+    if typed_result is not None:
+        result, report = typed_result
+        arrays = inputs
+    elif reduction and not selection and compressed:
         streamed = (
             _parallel_compressed_reduction(plan, inputs, shape, tile_items) if parallel_reductions else None
         )
@@ -2552,7 +2542,7 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
             "frontend": getattr(plan, "_frontend", "declarative-json"),
         }
         return result
-    if (
+    elif (
         not reduction
         and getitem
         and parallel_reductions
@@ -2576,48 +2566,46 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
                 "frontend": getattr(plan, "_frontend", "declarative-json"),
             }
             return result
-    arrays = {}
-    for name, value in inputs.items():
+    if typed_result is None:
+        arrays = {}
+        for name, value in inputs.items():
+            if selection:
+                source_item = tuple(
+                    slice(None) if n == 1 and isinstance(s, slice) else 0 if n == 1 else s
+                    for n, s in zip(value.shape, selection[len(shape) - len(value.shape) :], strict=True)
+                )
+                arrays[name] = np.asarray(value[source_item])
+            else:
+                arrays[name] = value if isinstance(value, np.ndarray) else value[()]
         if selection:
-            source_item = tuple(
-                slice(None) if n == 1 and isinstance(s, slice) else 0 if n == 1 else s
-                for n, s in zip(value.shape, selection[len(shape) - len(value.shape) :], strict=True)
+            schedule = plan.specialize(
+                {name: (value.dtype, value.shape) for name, value in arrays.items()}, tile_items
             )
-            arrays[name] = np.asarray(value[source_item])
-        else:
-            arrays[name] = value if isinstance(value, np.ndarray) else value[()]
-    if selection:
-        schedule = plan.specialize(
-            {name: (value.dtype, value.shape) for name, value in arrays.items()}, tile_items
+        parallel = (
+            _parallel_resident_graph(plan, inputs, shape, selection, reduction, out=output)
+            if not typed
+            and tile_items == 1024
+            and (reduction or math.prod(shape) >= _MINIMUM_PARALLEL_ITEMS)
+            else None
         )
-    parallel = (
-        _parallel_resident_graph(plan, inputs, shape, selection, reduction, out=output)
-        if tile_items == 1024 and (reduction or math.prod(shape) >= _MINIMUM_PARALLEL_ITEMS)
-        else None
-    )
-    if reduction and parallel_reductions:
-        parallel = _parallel_resident_reduction(plan, arrays, shape, tile_items)
-    if parallel is None:
-        if (
-            output is not None
-            and getattr(blosc2.blosc2_ext, "native_graph_output_available", lambda: False)()
-        ):
-            result, report = schedule.execute(arrays, out=output)
+        if not typed and reduction and parallel_reductions:
+            parallel = _parallel_resident_reduction(plan, arrays, shape, tile_items)
+        if parallel is None:
+            if (
+                output is not None
+                and getattr(blosc2.blosc2_ext, "native_graph_output_available", lambda: False)()
+            ):
+                result, report = schedule.execute(arrays, out=output)
+            else:
+                result, report = schedule.execute(arrays)
         else:
-            result, report = schedule.execute(arrays)
-    else:
-        result, report = parallel
+            result, report = parallel
     if output is not None and result is not output:
         # Admission checked shape/dtype/layout and aliasing before any execution.
         # Preserve the existing destination identity, without replaying kernels.
         np.copyto(output, result, casting="no")
         report = {**report, "output_copy_bytes": result.nbytes}
         result = output
-    if report.get("route") == "c-blosc2-typed-resident":
-        report = {
-            **report,
-            "route": "parallel-resident" if report.get("tasks", 1) > 1 else "native-resident",
-        }
     expr._native_execution_report = {
         **report,
         "semantic_revision": "menudet-numpy-0.1",
@@ -2629,7 +2617,9 @@ def compute_native_graph(  # noqa: C901 -- metadata-only selection and options p
         "plan_cache": compile_plan.cache_info()._asdict(),
         "frontend": getattr(plan, "_frontend", "declarative-json"),
         "input_materialization_bytes": sum(
-            v.nbytes for k, v in arrays.items() if not isinstance(inputs[k], np.ndarray)
+            v.nbytes
+            for k, v in arrays.items()
+            if isinstance(v, np.ndarray) and not isinstance(inputs[k], np.ndarray)
         ),
     }
     if getitem or reduction:

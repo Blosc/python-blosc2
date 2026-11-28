@@ -1,5 +1,10 @@
 # Private opt-in binding; ordinary NativeGraph dispatch is unchanged.
 cdef extern from "b2nd_exec_bridge.h":
+    ctypedef struct me_error:
+        char message[256]
+    ctypedef struct me_fp_status:
+        unsigned flags
+        c_bool supported
     ctypedef union b2_exec_fp_scope:
         pass
     int b2_exec_fp_begin(b2_exec_fp_scope *, me_fp_status *, me_error *)
@@ -846,6 +851,7 @@ cdef class _TypedExecSchedule:
             "decoded_bytes": report.decoded_bytes, "decode_cache_hits": report.cache_hits,
             "read_spans": report.read_spans, "storage_metadata_bytes": report.storage_metadata_bytes,
             "input_materialization_bytes": 0, "tasks": report.execution.tasks,
+            "worker_scratch_bytes": report.execution.worker_bytes,
             "jit_calls": report.execution.jit_calls, "interpreter_calls": report.execution.interpreter_calls,
             "has_jit": bool(report.execution.jit_calls),
             "fp_flags": report.execution.fp.flags, "fp_supported": bool(report.execution.fp.supported)}

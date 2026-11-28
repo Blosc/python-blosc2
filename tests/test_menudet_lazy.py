@@ -102,7 +102,7 @@ def test_safe_graph_native_partition_buffers_release_without_cyclic_gc(monkeypat
             np.testing.assert_array_equal(expr[2:5], expected[2:5])
             report = getattr(lazy, "_source_execution_report", {})
             if report.get("route") == "c-blosc2-logical-partitions":
-                assert report["evaluated_groups"] == 3
+                assert report["evaluated_groups"] == (3 if scalar else 1)
                 assert report["max_group_items"] <= 128
                 assert report["gather_bytes"] <= 128 * data.dtype.itemsize
             else:

@@ -5,6 +5,7 @@ import pytest
 
 import blosc2
 from blosc2.native_graph import prepare_native_first
+from conftest import typed_graph_route
 
 
 @pytest.fixture(autouse=True)
@@ -39,7 +40,7 @@ def test_parallel_resident_truth(op, dtype, backend, keepdims, monkeypatch):
         np.testing.assert_array_equal(result, expected)
         assert result.dtype == np.dtype("bool")
         assert result.shape == expected.shape
-        assert expr._native_execution_report["route"] == "parallel-resident-reduction"
+        assert expr._native_execution_report["route"] == typed_graph_route("parallel-resident-reduction")
         assert expr._native_execution_report["threads"] == 2
         serial = getattr(expr, op)(axis=(0, 1), keepdims=keepdims, _require_native=True, jit=True)
         assert result.tobytes() == serial.tobytes()
@@ -67,7 +68,7 @@ def test_parallel_truth_late_fp_status_is_not_short_circuited(op, dtype, backend
         result = getattr(expr, op)()
         assert bool(result) == (op == "any")
         assert result.tobytes() == serial.tobytes()
-        assert expr._native_execution_report["route"] == "parallel-resident-reduction"
+        assert expr._native_execution_report["route"] == typed_graph_route("parallel-resident-reduction")
         assert expr._native_execution_report["fp_flags"] == flags
         assert flags & 1
     finally:
@@ -107,7 +108,7 @@ def test_parallel_compressed_truth(op, dtype, backend, root_expression, monkeypa
         assert result.dtype == np.dtype("bool")
         assert bool(result) == bool(getattr(np, op)(values))
         report = expr._native_execution_report
-        assert report["route"] == "parallel-prefilter-reduction"
+        assert report["route"] == typed_graph_route("parallel-prefilter-reduction", storage=True)
         assert report["threads"] == 2
         assert report["reduction_buffer_bytes"] <= 1024 * 1024
         assert report["input_materialization_bytes"] == 0
@@ -134,13 +135,24 @@ def test_parallel_truth_late_worker_failure_is_not_short_circuited(op, monkeypat
             return result
 
     monkeypatch.setattr(resident, "resident_pool", lambda: FailedLaterPool())
+    typed = getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)()
+    if typed:
+        # Native late-worker failure/draining is exercised by installed_exec_plan.
+        # At this layer inject at the new owner, never a retired Python pool.
+        from blosc2.typed_graph import TypedGraphSchedule
+
+        def fail(*args, **kwargs):
+            submissions.append(True)
+            raise OSError("Later truth worker failed")
+
+        monkeypatch.setattr(TypedGraphSchedule, "execute", fail)
     previous = blosc2.set_nthreads(2)
     try:
         values = np.full(4 * 128 * 1024, op == "any", dtype=bool)
         expr = blosc2.lazyexpr("x", {"x": values})
         with pytest.raises(OSError, match="Later truth worker failed"):
             getattr(expr, op)()
-        assert len(submissions) == 2
+        assert len(submissions) == (1 if typed else 2)
     finally:
         blosc2.set_nthreads(previous)
 
@@ -162,7 +174,7 @@ def test_parallel_truth_direct_snan_status_matches_serial(op, dtype, backend, mo
         result = getattr(expr, op)()
         assert result.tobytes() == serial.tobytes()
         assert expr._native_execution_report["fp_flags"] == flags
-        assert expr._native_execution_report["route"] == "parallel-resident-reduction"
+        assert expr._native_execution_report["route"] == typed_graph_route("parallel-resident-reduction")
     finally:
         blosc2.set_nthreads(previous)
 
@@ -176,7 +188,7 @@ def test_parallel_truth_comparison_maps(op, dtype):
     try:
         result = getattr(expr, op)()
         assert bool(result) == bool(getattr(np, op)(values > 1))
-        assert expr._native_execution_report["route"] == "parallel-resident-reduction"
+        assert expr._native_execution_report["route"] == typed_graph_route("parallel-resident-reduction")
     finally:
         blosc2.set_nthreads(previous)
 
@@ -209,6 +221,6 @@ def test_parallel_compressed_truth_preserves_late_status(op, monkeypatch):
         assert flags & 1
         assert report["reduction_buffer_bytes"] <= 1024 * 1024
         assert report["input_materialization_bytes"] == 0
-        assert report["route"] == "parallel-prefilter-reduction"
+        assert report["route"] == typed_graph_route("parallel-prefilter-reduction", storage=True)
     finally:
         blosc2.set_nthreads(previous)

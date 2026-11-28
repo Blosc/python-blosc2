@@ -1149,35 +1149,6 @@ cdef extern from "miniexpr_kernel.h":
         me_casting casting
         bint integer_powers
 
-cdef extern from "b2nd_kernel_pilot.h":
-    ctypedef struct me_error:
-        char message[256]
-    ctypedef struct me_fp_status:
-        unsigned flags
-        c_bool supported
-    int b2_pilot_available()
-    ctypedef struct b2nd_min_i64_plan:
-        pass
-    int b2_min_i64_available()
-    int b2nd_min_i64_prepare(int64_t, int64_t, b2nd_min_i64_plan *)
-    int b2nd_min_i64_execute(const b2nd_min_i64_plan *, const int64_t *, int64_t,
-                             int64_t *, int64_t *, size_t *) noexcept nogil
-    ctypedef struct b2nd_map_min_i64_plan:
-        pass
-    ctypedef struct b2nd_map_min_i64_report:
-        int64_t tiles
-        size_t scratch
-        me_fp_status fp
-    int b2_map_min_i64_available()
-    int b2nd_map_min_i64_prepare(const char *, int64_t, int64_t, size_t,
-                                 b2nd_map_min_i64_plan **, me_error *)
-    int b2nd_map_min_i64_execute(const b2nd_map_min_i64_plan *, const int64_t *, int64_t,
-                                 int64_t *, b2nd_map_min_i64_report *, me_error *) noexcept nogil
-    void b2nd_map_min_i64_free(b2nd_map_min_i64_plan *)
-    int b2_pilot_scalar_eligible(const void *, int)
-    int b2_pilot_map(b2nd_array_t *, const void *, int, double *, int32_t, c_bool, size_t,
-                     me_fp_status *, me_error *) noexcept nogil
-
 cdef extern from "dsl_artifact_bridge.h":
     ctypedef struct b2_artifact_input:
         const char *name
@@ -2623,87 +2594,6 @@ def menudet_artifact_available():
     return bool(b2_artifact_available())
 
 
-def _b2nd_kernel_pilot_available():
-    return bool(b2_pilot_available())
-
-
-def _b2nd_min_i64_available():
-    return bool(b2_min_i64_available())
-
-
-cdef class _ResidentMinI64Plan:
-    cdef b2nd_min_i64_plan plan
-
-    def __cinit__(self, int64_t items, int64_t tile):
-        if b2nd_min_i64_prepare(items, tile, &self.plan):
-            raise ValueError("Cannot prepare resident int64 minimum")
-
-    def execute(self, np.ndarray value not None):
-        cdef np.ndarray result = np.empty((), dtype=np.int64)
-        cdef int64_t items = np.PyArray_SIZE(value), tiles
-        cdef size_t scratch
-        cdef int rc
-        if (value.ndim != 1 or value.dtype != np.dtype(np.int64)
-                or not value.flags.aligned or not value.flags.c_contiguous):
-            raise ValueError("Expected a contiguous native int64 vector")
-        with nogil:
-            rc = b2nd_min_i64_execute(&self.plan, <const int64_t *>np.PyArray_DATA(value), items,
-                                      <int64_t *>np.PyArray_DATA(result), &tiles, &scratch)
-        if rc:
-            raise ValueError("Input does not match resident int64 minimum plan")
-        return result, {"route": "c-blosc2-resident-min", "backend": "c-blosc2",
-                        "semantic_revision": "menudet-numpy-0.1", "tasks": 1,
-                        "evaluated_tiles": tiles, "zero_copy_tiles": tiles, "reducer_state_bytes": scratch,
-                        "temporary_bytes": 0, "intermediate_bytes": 0, "gathered_bytes": 0,
-                        "input_materialization_bytes": 0, "output_copy_bytes": 0, "fp_flags": 0,
-                        "fp_supported": False}
-
-
-def _b2nd_map_min_i64_available():
-    return bool(b2_map_min_i64_available())
-
-
-cdef class _ResidentMapMinI64Plan:
-    cdef b2nd_map_min_i64_plan *plan
-
-    def __cinit__(self, bytes source, int64_t items, int64_t tile, size_t max_scratch=65536):
-        cdef me_error error
-        if not b2_map_min_i64_available():
-            raise NotImplementedError("Build with the C-Blosc2 resident map/min pilot")
-        if b'\x00' in source:
-            raise ValueError("Map source cannot contain NUL")
-        if b2nd_map_min_i64_prepare(source, items, tile, max_scratch, &self.plan, &error):
-            raise ValueError((<bytes>error.message).decode("utf-8", "replace") or
-                             "Cannot prepare resident map/min plan")
-
-    def __dealloc__(self):
-        b2nd_map_min_i64_free(self.plan)
-
-    def execute(self, np.ndarray value not None):
-        cdef np.ndarray result = np.empty((), dtype=np.int64)
-        cdef b2nd_map_min_i64_report report
-        cdef me_error error
-        cdef int64_t items = np.PyArray_SIZE(value)
-        cdef int rc
-        if (value.ndim != 1 or value.dtype != np.dtype(np.int64)
-                or not value.flags.aligned or not value.flags.c_contiguous):
-            raise ValueError("Expected a contiguous native int64 vector")
-        with nogil:
-            rc = b2nd_map_min_i64_execute(self.plan, <const int64_t *>np.PyArray_DATA(value), items,
-                                         <int64_t *>np.PyArray_DATA(result), &report, &error)
-        if rc:
-            raise ValueError((<bytes>error.message).decode("utf-8", "replace") or
-                             "Resident map/min execution failed")
-        return result, {"route": "c-blosc2-resident-map-min", "backend": "menudet-interpreter",
-                        "semantic_revision": "menudet-numpy-0.1", "tasks": 1,
-                        "stages": 1, "jit_stages": 0, "interpreter_stages": 1,
-                        "evaluated_tiles": report.tiles, "zero_copy_tiles": report.tiles,
-                        "reducer_state_bytes": sizeof(uint64_t), "temporary_bytes": report.scratch,
-                        "intermediate_bytes": 0, "gathered_bytes": 0,
-                        "input_materialization_bytes": 0, "output_copy_bytes": 0,
-                        "fp_flags": report.fp.flags, "fp_supported": bool(report.fp.supported)}
-
-
 def menudet_auto_jit_mode():
     return b2_artifact_auto_jit_mode()
 
@@ -2818,11 +2708,6 @@ cdef class MenudetArtifactHandle:
         if rc:
             raise_artifact_error(rc, error)
         return legacy
-
-    def _b2nd_scalar_pilot_eligible(self):
-        if self._artifact_document:
-            return False
-        return bool(b2_pilot_scalar_eligible(self._handle, self._is_core))
 
     def __cinit__(self, bytes artifact=None, int jit_mode=0, bint infer_output=False):
         cdef b2_artifact_error error
@@ -3842,6 +3727,24 @@ cdef class MenudetArtifactHandle:
             free(sources)
             if legacy_handle != NULL:
                 b2_artifact_free(legacy_handle)
+
+    def typed_plan(self):
+        """Borrow the prepared kernel and its immutable compiler/FP policy."""
+        cdef _TypedExecPlan result = _TypedExecPlan()
+        cdef me_error error
+        cdef int rc
+        memset(&error, 0, sizeof(error))
+        with nogil:
+            if self._is_core:
+                rc = b2_exec_prepare_core_kernel(self._handle, 0, NULL, &result._plan, &error)
+            else:
+                rc = b2_exec_prepare_artifact_kernel(self._handle, 0, NULL, &result._plan, &error)
+        if rc:
+            raise_exec_error(rc, &error)
+        result._borrowed_owners = (self,)
+        if b2_exec_describe(result._plan, &result._info):
+            raise ValueError("Cannot describe borrowed kernel plan")
+        return result
 
     def evaluate_partitions(self, inputs, domain, partitions, selection=None,
                             unsigned raise_mask=0, size_t max_decode_bytes=67108864,
@@ -7980,64 +7883,6 @@ cdef class NDArray:
     @property
     def c_array(self):
         return <uintptr_t> self.array
-
-    @_handle_locked
-    def _evaluate_b2nd_kernel_pilot(self, kernel, size_t max_scratch=65536, *, partition=None,
-                                    bint return_report=False):
-        """Run a prepared MenudetKernel through the opt-in C-Blosc2 pilot."""
-        cdef np.ndarray output
-        cdef MenudetArtifactHandle owner
-        cdef double *data
-        cdef me_error error
-        cdef me_fp_status fp
-        cdef me_fp_status *report = NULL
-        cdef int rc
-        cdef int32_t group = 0
-        cdef int64_t output_size
-        cdef bint block_scalar
-        if not b2_pilot_available():
-            raise NotImplementedError("Build with B2_EXPERIMENTAL_SHARED_MINIEXPR_CORE")
-        if self.array.ndim != 1 or self.dtype != np.dtype("float64"):
-            raise ValueError("The b2nd kernel pilot requires a native float64 vector")
-        if not isinstance(kernel, blosc2.MenudetKernel):
-            raise TypeError("The b2nd kernel pilot requires a prepared MenudetKernel")
-        owner = kernel._handle
-        if owner is None or owner._handle == NULL:
-            raise ValueError("The b2nd kernel pilot requires an initialized native kernel")
-        if owner._artifact_document:
-            raise ValueError("The b2nd kernel pilot requires a directly prepared Menudet kernel")
-        # Keep the native owner (and any graph it borrows from) alive across nogil.
-        block_scalar = owner._native_cardinality() == 1
-        if partition is not None:
-            if type(partition) is not int or not 1 <= partition <= 2147483647:
-                raise ValueError("The pilot partition must be a positive int32 extent")
-            group = partition
-        if block_scalar and not group:
-            raise ValueError("The block-scalar pilot requires an explicit logical partition")
-        if return_report:
-            if not group:
-                raise ValueError("Pilot status reporting requires an explicit logical partition")
-            report = &fp
-        output_size = self.array.shape[0]
-        if block_scalar:
-            output_size = output_size // group + (output_size % group != 0)
-        output = np.empty(output_size, dtype=np.float64)
-        data = <double *> output.data
-        memset(&error, 0, sizeof(error))
-        with nogil:
-            rc = b2_pilot_map(
-                self.array, owner._handle, owner._is_core,
-                data, group, block_scalar, max_scratch, report, &error)
-        if rc < 0:
-            message = (<bytes>error.message).decode("utf-8", "replace")
-            raise ValueError(message or f"b2nd kernel pilot failed (status {rc}); check the kernel and scratch budget")
-        if return_report:
-            return output, {
-                "fp_flags": fp.flags, "fp_supported": bool(fp.supported),
-                "execution_kind": kernel.execution_kind if self.array.shape[0] else None,
-                "prepared_has_jit": bool(owner._native_jit()),
-            }
-        return output
 
     @property
     def shape(self) -> tuple[int]:

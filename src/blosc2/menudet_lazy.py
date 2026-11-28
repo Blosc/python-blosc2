@@ -117,36 +117,6 @@ class MenudetLazyArray(LazyArray):
     def blocks(self):
         return self.chunks
 
-    def _scalar_pilot_values(self, selection):
-        # Retired once the general C-Blosc2 typed executor is available; retain
-        # direct pilot coverage via explicit test_b2nd_exec_* tests only.
-        from . import blosc2_ext
-
-        if getattr(blosc2_ext, "_b2nd_exec_available", lambda: False)():
-            return None
-        if (
-            not blosc2_ext._b2nd_kernel_pilot_available()
-            or self.kernel.result_cardinality != "block_scalar"
-            or self.kernel.has_jit
-            or len(self._domain) != 1
-            or len(self.inputs) != 1
-            or not isinstance(selection[0], slice)
-            or selection[0].indices(self.shape[0]) != (0, self.shape[0], 1)
-        ):
-            return None
-        source = next(iter(self.inputs.values()))
-        partition = self._partitions[0]
-        scratch = (partition + 1) * 8
-        if (
-            type(source) is not blosc2.NDArray
-            or source.shape != self._domain
-            or source.dtype != np.dtype("float64")
-            or scratch > 65536
-            or not getattr(self.kernel._handle, "_b2nd_scalar_pilot_eligible", lambda: False)()
-        ):
-            return None
-        return source._evaluate_b2nd_kernel_pilot(self.kernel, max_scratch=scratch, partition=partition)
-
     def _cblosc2_partition_values(self, selection):
         handle = getattr(self.kernel, "_cblosc2_handle", lambda: None)()
         if handle is None:
@@ -214,9 +184,47 @@ class MenudetLazyArray(LazyArray):
         selection += (slice(None),) * (len(self.shape) - len(selection))
         if len(selection) != len(self.shape):
             raise IndexError("Too many indices")
-        pilot = self._scalar_pilot_values(selection)
-        if pilot is not None:
-            return pilot
+        # Proven lane-local numeric maps may be retiled without changing their
+        # authored partitions. Everything else first uses borrowed-kernel group
+        # traversal, whose metadata-only admission leaves compatibility explicit.
+        if all(
+            isinstance(part, slice) and part.indices(size) == (0, size, 1)
+            for part, size in zip(selection, self.shape, strict=True)
+        ):
+            from .resident_execution import (
+                MINIMUM_WORKER_ITEMS,
+                prepare_kernel_schedule,
+                typed_storage_inputs_eligible,
+            )
+
+            if typed_storage_inputs_eligible(self.inputs):
+                count = prod(self._domain)
+                workers = (
+                    max(1, min(blosc2.nthreads, 32, count // MINIMUM_WORKER_ITEMS))
+                    if not blosc2.IS_WASM
+                    else 1
+                )
+                tile = min(4096, max(1, count // workers))
+                signature = (
+                    tile,
+                    tuple((name, value.dtype.str, value.shape) for name, value in self.inputs.items()),
+                )
+                cached = getattr(self, "_borrowed_native", None)
+                prepared = (
+                    cached[1]
+                    if cached is not None and cached[0] == signature
+                    else prepare_kernel_schedule(self.kernel, self.inputs, tile_items=tile)
+                )
+                self._borrowed_native = signature, prepared
+                if prepared is not None:
+                    values, report = prepared.execute_arrays(
+                        self.inputs, workers=workers, max_worker_scratch=64 * 1024 * 1024
+                    )
+                    self._source_execution_report = report
+                    return values
+        partitioned = self._cblosc2_partition_values(selection)
+        if partitioned is not None:
+            return partitioned
         plan = getattr(self.kernel, "_resident_plan", None)
         if (
             plan is not None
@@ -268,9 +276,6 @@ class MenudetLazyArray(LazyArray):
         if resident is not None:
             values, self._source_execution_report = resident
             return values
-        partitioned = self._cblosc2_partition_values(selection)
-        if partitioned is not None:
-            return partitioned
         if (
             self.kernel.result_cardinality == "elementwise"
             and all(groups == 1 for groups in self._grid)

@@ -6,13 +6,28 @@ scope is labelled. This is not the cross-platform performance gate.
 """
 
 import argparse
+import statistics
+import time
 
 import numpy as np
-from resident_min_pilot import medians
 
 import blosc2
 from blosc2.graph_plan import NativeGraph
 from blosc2.typed_exec import lower_typed_graph, prepare_typed_plan
+
+
+def medians(first, second, repeat):
+    first()
+    second()
+    times = [[], []]
+    for run in range(repeat):
+        for index in (run % 2, 1 - run % 2):
+            function = (first, second)[index]
+            start = time.perf_counter_ns()
+            result = function()
+            times[index].append((time.perf_counter_ns() - start) / 1000)
+            del result
+    return [statistics.median(samples) for samples in times]
 
 
 def main():

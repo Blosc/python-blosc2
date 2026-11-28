@@ -5,7 +5,7 @@ import pytest
 
 import blosc2
 from blosc2.native_graph import prepare_native_first, resident_map_kernel
-from conftest import orthogonal_cases
+from conftest import orthogonal_cases, typed_graph_route
 
 pytestmark = pytest.mark.skipif(blosc2.IS_WASM, reason="Native graph JIT is unavailable on WASM")
 
@@ -394,8 +394,9 @@ def test_native_first_parallel_sum_and_opt_out(keepdims, native_first_runtime):
         expr = blosc2.lazyexpr("x + 1", {"x": x})
         result = expr.sum(keepdims=keepdims)
         np.testing.assert_allclose(result, np.sum(x + 1, keepdims=keepdims), rtol=1e-12)
-        assert expr._native_execution_report["route"] == "parallel-resident-reduction"
-        assert expr._native_execution_report["threads"] == 2
+        typed = getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)()
+        assert expr._native_execution_report["route"] == typed_graph_route("parallel-resident-reduction")
+        assert expr._native_execution_report["threads"] == (1 if typed else 2)
         serial = expr.sum(keepdims=keepdims, _require_native=True, jit=True)
         np.testing.assert_allclose(result, serial, rtol=1e-12)
         assert expr._native_execution_report.get("route") != "parallel-resident-reduction"
@@ -440,6 +441,12 @@ def test_native_first_parallel_sum_failure_is_not_replayed(native_first_runtime,
     previous = blosc2.set_nthreads(2)
     try:
         monkeypatch.setattr(resident, "resident_pool", lambda: FailedPool())
+        if getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)():
+
+            def fail_exec(*args, **kwargs):
+                raise FloatingPointError("Reduction worker failed")
+
+            monkeypatch.setattr("blosc2.typed_graph.TypedGraphSchedule.execute", fail_exec)
         monkeypatch.setattr(blosc2.LazyExpr, "_compute_expr", forbidden)
         expr = blosc2.lazyexpr("x + 1", {"x": np.ones(4 * 128 * 1024)})
         with pytest.raises(FloatingPointError, match="Reduction worker failed"):
@@ -456,7 +463,7 @@ def test_native_first_parallel_sum_combination_status(native_first_runtime):
         expr = blosc2.lazyexpr("x + 0", {"x": x})
         assert np.isposinf(expr.sum())
         assert expr._native_execution_report["fp_flags"] & 4
-        assert expr._native_execution_report["route"] == "parallel-resident-reduction"
+        assert expr._native_execution_report["route"] == typed_graph_route("parallel-resident-reduction")
     finally:
         blosc2.set_nthreads(previous)
 

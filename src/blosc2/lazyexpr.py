@@ -5421,7 +5421,6 @@ class LazyExpr(LazyArray):
         jit, jit_backend = _jit_from_env(jit, jit_backend)
         if _require_native is None:
             from .native_graph import (
-                compute_c_blosc2_min_if_eligible,
                 compute_native_graph,
                 compute_native_prefilter_if_eligible,
                 compute_prefilter_argreduce_if_eligible,
@@ -5446,9 +5445,6 @@ class LazyExpr(LazyArray):
                 typed = compute_typed_resident_if_eligible(self, item, _native_tile_items, kwargs)
                 if typed is not None:
                     return typed
-                minimum = compute_c_blosc2_min_if_eligible(self, item, _native_tile_items, kwargs)
-                if minimum is not None:
-                    return minimum
 
             arg_reduction = compute_prefilter_argreduce_if_eligible(
                 self,
