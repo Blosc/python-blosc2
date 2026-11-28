@@ -38,6 +38,13 @@ _GC_COLLECT_INTERVAL = 500  # collect every N tests
 _test_counter = 0
 
 
+@pytest.fixture
+def legacy_graph_adapter():
+    """Differential references run only in the adapter-on qualification job."""
+    if not getattr(blosc2.blosc2_ext, "menudet_legacy_adapter_available", lambda: False)():
+        pytest.skip("Requires the legacy graph comparison adapter")
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--native-semantics",

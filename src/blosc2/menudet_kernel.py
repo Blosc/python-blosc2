@@ -34,6 +34,10 @@ class MenudetError(ValueError):
         super().__init__(f"{status}{location}: {message}")
 
 
+class _TypedGraphUnsupported(MenudetError, NotImplementedError):
+    """Typed admission rejection, retaining the public Menudet error contract."""
+
+
 # Native numeric byte orders key the common dtype descriptor without dtype.name.
 _NATIVE_DTYPE_NAMES = {
     np.dtype(name).str: name

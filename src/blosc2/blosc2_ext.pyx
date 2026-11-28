@@ -1174,8 +1174,8 @@ cdef extern from "b2nd_kernel_pilot.h":
     int b2nd_map_min_i64_execute(const b2nd_map_min_i64_plan *, const int64_t *, int64_t,
                                  int64_t *, b2nd_map_min_i64_report *, me_error *) noexcept nogil
     void b2nd_map_min_i64_free(b2nd_map_min_i64_plan *)
-    int b2_pilot_scalar_eligible(const void *)
-    int b2_pilot_map(b2nd_array_t *, const void *, double *, int32_t, c_bool, size_t,
+    int b2_pilot_scalar_eligible(const void *, int)
+    int b2_pilot_map(b2nd_array_t *, const void *, int, double *, int32_t, c_bool, size_t,
                      me_fp_status *, me_error *) noexcept nogil
 
 cdef extern from "dsl_artifact_bridge.h":
@@ -1250,6 +1250,31 @@ cdef extern from "dsl_artifact_bridge.h":
     const char *b2_artifact_fp(const void *)
     int b2_artifact_eval_ex(const void *, const b2_artifact_buffer *, int, void *,
                           const b2_artifact_descriptor *, b2_artifact_error *) nogil
+    void b2_core_kernel_free(void *) noexcept nogil
+    int b2_core_kernel_prepare(const char *, const char *, const char *, const me_signature *,
+                               int, unsigned, const me_jit_options *, int, void **, b2_artifact_error *) nogil
+    const char *b2_core_kernel_source(const void *)
+    const char *b2_core_kernel_entry(const void *)
+    int b2_core_kernel_ninputs(const void *)
+    const char *b2_core_kernel_name(const void *, int)
+    me_dtype b2_core_kernel_dtype(const void *, int)
+    me_dtype b2_core_kernel_output(const void *) noexcept nogil
+    me_dtype b2_core_kernel_inferred(const void *)
+    size_t b2_core_kernel_width(const void *, int)
+    int b2_core_kernel_cardinality(const void *)
+    int b2_core_kernel_rank(const void *)
+    int b2_core_kernel_jit(const void *)
+    int b2_core_kernel_partitionable(const void *)
+    const char *b2_core_kernel_version(const void *)
+    const char *b2_core_kernel_execution_kind(const void *)
+    const char *b2_core_kernel_math(const void *)
+    const char *b2_core_kernel_math_ulp(const void *)
+    const char *b2_core_kernel_fp(const void *)
+    int b2_core_kernel_eval_status(const void *, const b2_artifact_buffer *, int, void *,
+                                   const b2_artifact_descriptor *, unsigned, b2_artifact_fp_status *,
+                                   b2_artifact_error *) nogil
+    int b2_core_kernel_eval(const void *, const b2_artifact_input *, int, void *, size_t,
+                            b2_artifact_error *) nogil
 
 cdef extern from "dsl_array_bridge.h":
     ctypedef struct b2_array_view:
@@ -1412,6 +1437,7 @@ def menudet_pairwise_sum_available():
 
 cdef struct menudet_prefilter_state:
     const void *artifact
+    bint is_core
     int ndim
     int grid_ndim
     bint diagonal_enabled
@@ -1503,9 +1529,11 @@ cdef int pairwise_store_block(menudet_prefilter_state *state, const uint8_t *val
         memcpy(state.sum_fragments + (block * 2 + 1) * state.sum_fragment_items * itemsize,
                values + (prefix + full) * itemsize, suffix * itemsize)
     if full:
-        return b2_pairwise_leaves(b2_artifact_output(state.artifact), values + prefix * itemsize, full,
-                                 state.sum_leaves + leaf_offset * itemsize,
-                                 full // B2_PAIRWISE_LEAF_ITEMS * itemsize)
+        return b2_pairwise_leaves(
+            b2_core_kernel_output(state.artifact) if state.is_core else b2_artifact_output(state.artifact),
+            values + prefix * itemsize, full,
+            state.sum_leaves + leaf_offset * itemsize,
+            full // B2_PAIRWISE_LEAF_ITEMS * itemsize)
     return 0
 
 
@@ -1606,7 +1634,10 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
             worker.status = -5
             strcpy(worker.error.message, "Cannot isolate Menudet prefilter floating environment")
             return -1
-        rc = b2_artifact_eval_status(state.artifact, NULL, 0, destination, &descriptor, 0, &fp, &error)
+        if state.is_core:
+            rc = b2_core_kernel_eval_status(state.artifact, NULL, 0, destination, &descriptor, 0, &fp, &error)
+        else:
+            rc = b2_artifact_eval_status(state.artifact, NULL, 0, destination, &descriptor, 0, &fp, &error)
         if b2_fp_restore(&environment):
             rc = -5
             strcpy(error.message, "Cannot restore Menudet prefilter floating environment")
@@ -1715,8 +1746,12 @@ cdef int menudet_menudet_prefilter(blosc2_prefilter_params *params) noexcept nog
             destination = <void *>worker.bindings[0].data
             fp.supported = 1
         else:
-            rc = b2_artifact_eval_status(state.artifact, worker.bindings, state.ninputs,
-                                        destination, &descriptor, 0, &fp, &error)
+            if state.is_core:
+                rc = b2_core_kernel_eval_status(state.artifact, worker.bindings, state.ninputs,
+                                                destination, &descriptor, 0, &fp, &error)
+            else:
+                rc = b2_artifact_eval_status(state.artifact, worker.bindings, state.ninputs,
+                                            destination, &descriptor, 0, &fp, &error)
         if not rc and state.reduction_output != NULL:
             if state.pairwise_sum:
                 rc = pairwise_store_block(state, <const uint8_t *>destination,
@@ -1854,7 +1889,7 @@ def menudet_resident_prefilter_available():
 
 
 def native_array_sources_available():
-    return bool(b2_array_sources_available())
+    return bool(b2_array_sources_available() or b2_exec_available())
 
 
 cdef int storage_reader_callback(void *opaque, const size_t *indices, size_t count,
@@ -2126,14 +2161,18 @@ cdef int graph_host_fork_join(void *host, size_t count, b2_graph_task_fn task, v
 
 
 def native_graph_output_available():
-    return bool(b2_graph_output_available())
+    return bool(b2_graph_output_available() or b2_exec_available())
 
 
 def native_graph_executor_available():
-    return bool(b2_graph_native_executor_available())
+    return bool(b2_graph_native_executor_available() or b2_exec_available())
 
 
 def native_graph_sources_available():
+    return bool(b2_graph_sources_available() or b2_exec_available())
+
+
+def menudet_legacy_adapter_available():
     return bool(b2_graph_sources_available())
 
 
@@ -2142,6 +2181,7 @@ include "b2nd_exec.pxi"
 
 cdef class NativeGraphHandle:
     cdef void *_handle
+    cdef object _typed
 
     def __cinit__(self, graph=None, int jit_mode=2, bint require_jit=False):
         cdef b2_graph_error error
@@ -2152,7 +2192,15 @@ cdef class NativeGraphHandle:
         cdef bytes math_bytes = (blosc2.jit_config.execution_options()["math_backend"] or "").encode("ascii")
         cdef const char *math_backend = <const char *>math_bytes if math_bytes else NULL
         self._handle = NULL
+        self._typed = None
         if graph is None:
+            return
+        if jit_mode not in (0, 1, 2, 3):
+            raise ValueError("Invalid graph JIT mode")
+        if b2_exec_available() and not b2_graph_sources_available():
+            from blosc2.typed_graph import TypedGraphHandle
+            self._typed = TypedGraphHandle.from_json(
+                graph, jit=None if jit_mode in (0, 3) else jit_mode == 1, require_jit=require_jit)
             return
         encoded = graph
         json = encoded
@@ -2167,6 +2215,8 @@ cdef class NativeGraphHandle:
 
     def info(self):
         cdef int i
+        if self._typed is not None:
+            return self._typed.info()
         if self._handle == NULL:
             raise ValueError("Uninitialized graph handle")
         return {"inputs": {(<bytes>b2_graph_name(self._handle, i)).decode('utf-8'):
@@ -2181,6 +2231,8 @@ cdef class NativeGraphHandle:
         """Borrowed root-reduction metadata; None for non-reduction graphs."""
         cdef const char *op
         cdef int count, i
+        if self._typed is not None:
+            return self._typed.reduction_info()
         if self._handle == NULL:
             raise ValueError("Uninitialized graph handle")
         op = b2_graph_reduction_op(self._handle)
@@ -2199,11 +2251,15 @@ cdef class NativeGraphHandle:
         }
 
     def to_json(self):
+        if self._typed is not None:
+            return self._typed.to_json()
         if self._handle == NULL:
             raise ValueError("Uninitialized graph handle")
         return (<bytes>b2_graph_json(self._handle)).decode('utf-8')
 
     def map_json(self):
+        if self._typed is not None:
+            return self._typed.map_json()
         cdef const char *json = b2_graph_map_json(self._handle)
         if json == NULL:
             raise ValueError("Root reductions/final conversions cannot be exported as elementwise artifacts")
@@ -2211,6 +2267,10 @@ cdef class NativeGraphHandle:
 
     def resident_artifact(self):
         """Borrow the prepared map artifact, retaining this native plan owner."""
+        if self._typed is not None:
+            if self._typed.reduction_info() is not None:
+                return None
+            return self._typed._prefilter_artifact()
         if self._handle == NULL or b2_graph_map_json(self._handle) == NULL:
             return None
         cdef const void *artifact = b2_graph_map_artifact(self._handle)
@@ -2225,6 +2285,8 @@ cdef class NativeGraphHandle:
 
     def reduction_artifact(self):
         """Borrow a single-region reduction's elementwise map for block scheduling."""
+        if self._typed is not None:
+            return self._typed._prefilter_artifact()
         if self._handle == NULL or b2_graph_stages(self._handle) != 1:
             return None
         cdef const void *artifact = b2_graph_map_artifact(self._handle)
@@ -2260,6 +2322,14 @@ cdef class NativeGraphHandle:
         cdef NativeGraphHandle result = NativeGraphHandle()
         cdef bytes math_bytes = (blosc2.jit_config.execution_options()["math_backend"] or "").encode("ascii")
         cdef const char *math_backend = <const char *>math_bytes if math_bytes else NULL
+        if jit_mode not in (0, 1, 2, 3):
+            raise ValueError("Invalid graph JIT mode")
+        if b2_exec_available() and not b2_graph_sources_available():
+            from blosc2.typed_graph import TypedGraphHandle
+            result._typed = TypedGraphHandle(
+                expression.decode("utf-8"), input_dtypes,
+                jit=None if jit_mode in (0, 3) else jit_mode == 1, require_jit=require_jit)
+            return result
         if n > 128:
             raise ValueError("Native graph binding limit exceeded")
         memset(metadata, 0, sizeof(metadata))
@@ -2283,6 +2353,8 @@ cdef class NativeGraphHandle:
         cdef list names = [key.encode('utf-8') for key in inputs]
         cdef bytes name
         cdef NativeGraphSchedule result = NativeGraphSchedule()
+        if self._typed is not None:
+            return self._typed.specialize(inputs, tile_items, intermediate_budget)
         if self._handle == NULL:
             raise ValueError("Uninitialized graph handle")
         memset(metadata, 0, sizeof(metadata))
@@ -2660,20 +2732,72 @@ cdef class MenudetArtifactHandle:
     cdef void *_handle
     cdef object _owner
     cdef bint _borrowed
+    cdef bint _is_core
+    cdef int _jit_mode
+    cdef bint _infer_output
     cdef bytes _artifact_document
     cdef bytes _recipe_document
     cdef object _attested_graph
     cdef object _resident_meta
     cdef public object _identity_input
 
-    def _b2nd_scalar_pilot_eligible(self):
-        return bool(b2_pilot_scalar_eligible(self._handle))
+    cdef inline const char *_native_source(self):
+        return b2_core_kernel_source(self._handle) if self._is_core else b2_artifact_source(self._handle)
 
-    def __cinit__(self, bytes artifact=None, int jit_mode=0, bint infer_output=False):
-        cdef b2_artifact_error error
+    cdef inline const char *_native_entry(self):
+        return b2_core_kernel_entry(self._handle) if self._is_core else b2_artifact_entry(self._handle)
+
+    cdef inline int _native_ninputs(self):
+        return b2_core_kernel_ninputs(self._handle) if self._is_core else b2_artifact_ninputs(self._handle)
+
+    cdef inline const char *_native_name(self, int i):
+        return b2_core_kernel_name(self._handle, i) if self._is_core else b2_artifact_name(self._handle, i)
+
+    cdef inline me_dtype _native_dtype(self, int i):
+        return b2_core_kernel_dtype(self._handle, i) if self._is_core else b2_artifact_dtype(self._handle, i)
+
+    cdef inline me_dtype _native_output(self) noexcept nogil:
+        return b2_core_kernel_output(self._handle) if self._is_core else b2_artifact_output(self._handle)
+
+    cdef inline me_dtype _native_inferred(self):
+        return b2_core_kernel_inferred(self._handle) if self._is_core else b2_artifact_inferred(self._handle)
+
+    cdef inline size_t _native_width(self, int i):
+        return b2_core_kernel_width(self._handle, i) if self._is_core else b2_artifact_width(self._handle, i)
+
+    cdef inline int _native_cardinality(self):
+        return b2_core_kernel_cardinality(self._handle) if self._is_core else b2_artifact_cardinality(self._handle)
+
+    cdef inline int _native_rank(self):
+        return b2_core_kernel_rank(self._handle) if self._is_core else b2_artifact_rank(self._handle)
+
+    cdef inline int _native_jit(self):
+        return b2_core_kernel_jit(self._handle) if self._is_core else b2_artifact_jit(self._handle)
+
+    cdef inline int _native_partitionable(self):
+        return b2_core_kernel_partitionable(self._handle) if self._is_core else b2_artifact_partitionable(self._handle)
+
+    cdef inline const char *_native_version(self):
+        return b2_core_kernel_version(self._handle) if self._is_core else b2_artifact_version(self._handle)
+
+    cdef inline const char *_native_execution_kind(self):
+        return (b2_core_kernel_execution_kind(self._handle) if self._is_core
+                else b2_artifact_execution_kind(self._handle))
+
+    cdef inline const char *_native_math(self):
+        return b2_core_kernel_math(self._handle) if self._is_core else b2_artifact_math(self._handle)
+
+    cdef inline const char *_native_math_ulp(self):
+        return b2_core_kernel_math_ulp(self._handle) if self._is_core else b2_artifact_math_ulp(self._handle)
+
+    cdef inline const char *_native_fp(self):
+        return b2_core_kernel_fp(self._handle) if self._is_core else b2_artifact_fp(self._handle)
+
+    cdef void *_load_legacy_handle(self, b2_artifact_error *error) except *:
+        cdef void *legacy = NULL
         cdef int rc
-        cdef const char *json
-        cdef size_t size
+        cdef const char *json = self._artifact_document
+        cdef size_t size = len(self._artifact_document)
         cdef me_jit_options native_options
         options = blosc2.jit_config.execution_options()
         cdef bytes math_bytes = (options["math_backend"] or "").encode("utf-8")
@@ -2686,10 +2810,116 @@ cdef class MenudetArtifactHandle:
         native_options.math_backend = <const char *>math_bytes if math_bytes else NULL
         native_options.trace = int(options["trace"])
         native_options.compiler_output = int(options["compiler_output"])
+        with nogil:
+            if self._infer_output:
+                rc = b2_artifact_load_inferred(json, size, self._jit_mode, &native_options, &legacy, error)
+            else:
+                rc = b2_artifact_load_options(json, size, self._jit_mode, &native_options, &legacy, error)
+        if rc:
+            raise_artifact_error(rc, error)
+        return legacy
+
+    def _b2nd_scalar_pilot_eligible(self):
+        if self._artifact_document:
+            return False
+        return bool(b2_pilot_scalar_eligible(self._handle, self._is_core))
+
+    def __cinit__(self, bytes artifact=None, int jit_mode=0, bint infer_output=False):
+        cdef b2_artifact_error error
+        cdef int rc
+        cdef const char *json
+        cdef const char *display_ptr
+        cdef const char *compile_ptr
+        cdef size_t size, n, nc, i
+        cdef me_jit_options native_options
+        cdef me_input_spec slots[128]
+        cdef me_capture constants[128]
+        cdef me_signature signature
+        cdef np.ndarray array
+        cdef bytes name
+        cdef list names, constant_names, owned
+        cdef unsigned forbidden_features
+        cdef int prepended_lines
+        options = blosc2.jit_config.execution_options()
+        cdef bytes math_bytes = (options["math_backend"] or "").encode("utf-8")
+        cdef bytes compiler = (options["compiler"] or "").encode()
+        cdef bytes flags = (options["cflags"] or "").encode()
+        cdef bytes cache = (options["cache_dir"] or "").encode()
+        native_options.compiler = <const char *>compiler if compiler else NULL
+        native_options.cflags = <const char *>flags if flags else NULL
+        native_options.cache_dir = <const char *>cache if cache else NULL
+        native_options.math_backend = <const char *>math_bytes if math_bytes else NULL
+        native_options.trace = int(options["trace"])
+        native_options.compiler_output = int(options["compiler_output"])
         self._handle = NULL
+        self._is_core = False
+        self._jit_mode = jit_mode
+        self._infer_output = infer_output
         if artifact is None:
             return
         self._artifact_document = artifact
+        if b2_exec_available():
+            from .menudet_v1 import parse_v1_manifest
+
+            (
+                display_src,
+                compile_src,
+                input_dtypes,
+                captures,
+                out_dtype,
+                contract,
+                ndim,
+                casting,
+                integer_powers,
+                forbidden_features,
+                prepended_lines,
+            ) = parse_v1_manifest(artifact, infer_output=infer_output)
+            n = len(input_dtypes)
+            nc = len(captures)
+            if n + nc > 128:
+                raise ValueError("Too many Menudet parameters")
+            names = [key.encode("utf-8") for key in input_dtypes]
+            constant_names = [item[0].encode("utf-8") for item in captures]
+            owned = [item[1] for item in captures]
+            for i in range(n):
+                name = names[i]
+                dtype = np.dtype(list(input_dtypes.values())[i])
+                slots[i].name = name
+                slots[i].dtype = _me_dtype_from_numpy_dtype(dtype)
+                slots[i].itemsize = dtype.itemsize
+            for i in range(nc):
+                name = constant_names[i]
+                array = owned[i]
+                constants[i].spec.name = name
+                constants[i].spec.dtype = _me_dtype_from_numpy_dtype(array.dtype)
+                constants[i].spec.itemsize = array.dtype.itemsize
+                constants[i].value = np.PyArray_DATA(array)
+                constants[i].category = ME_CAPTURE_WEAK if captures[i][2] else ME_CAPTURE_TYPED
+            memset(&signature, 0, sizeof(signature))
+            signature.struct_size = sizeof(signature)
+            signature.inputs = slots
+            signature.ninputs = n
+            signature.captures = constants
+            signature.ncaptures = nc
+            signature.output_dtype = ME_AUTO if out_dtype is None else _me_dtype_from_numpy_dtype(out_dtype)
+            signature.output_itemsize = 0 if out_dtype is None else out_dtype.itemsize
+            signature.cardinality = ME_BLOCK_SCALAR if contract == "block_scalar" else ME_ELEMENTWISE
+            signature.context_ndim = ndim
+            signature.casting = {"unsafe": ME_CAST_UNSAFE, "safe": ME_CAST_SAFE, "same_kind": ME_CAST_SAME_KIND}[casting]
+            signature.integer_powers = integer_powers
+            display_ptr = display_src
+            compile_ptr = compile_src
+            with nogil:
+                rc = b2_core_kernel_prepare(b"0.1", display_ptr, compile_ptr, &signature, jit_mode,
+                                             forbidden_features, &native_options, 1, &self._handle, &error)
+            if rc:
+                if error.line > prepended_lines:
+                    error.line -= prepended_lines
+                elif error.line > 0:
+                    error.line = 0
+                raise_artifact_error(rc, &error)
+            self._is_core = True
+            return
         json = artifact
         size = len(artifact)
         if infer_output and not b2_artifact_load_inferred_available():
@@ -2708,7 +2938,10 @@ cdef class MenudetArtifactHandle:
         # Cyclic GC may clear _owner before __dealloc__. Native ownership must
         # not depend on a Python reference which tp_clear can replace with None.
         if not self._borrowed:
-            b2_artifact_free(self._handle)
+            if self._is_core:
+                b2_core_kernel_free(self._handle)
+            else:
+                b2_artifact_free(self._handle)
 
     @staticmethod
     def prepare_source(bytes version, bytes source, inputs, captures, output_dtype=None,
@@ -2788,11 +3021,20 @@ cdef class MenudetArtifactHandle:
         native_options.compiler_output = int(options["compiler_output"])
         cdef const char *version_ptr = version
         cdef const char *source_ptr = source
-        with nogil:
-            rc = b2_artifact_prepare_source(version_ptr, source_ptr, &signature, jit_mode,
-                                           &native_options, &handle._handle, &error)
-        if rc:
-            raise_artifact_error(rc, &error)
+        if b2_exec_available():
+            with nogil:
+                rc = b2_core_kernel_prepare(version_ptr, source_ptr, source_ptr, &signature, jit_mode,
+                                            0, &native_options, 1, &handle._handle, &error)
+            if rc:
+                raise_artifact_error(rc, &error)
+            handle._is_core = True
+        else:
+            with nogil:
+                rc = b2_artifact_prepare_source(version_ptr, source_ptr, &signature, jit_mode,
+                                               &native_options, &handle._handle, &error)
+            if rc:
+                raise_artifact_error(rc, &error)
+        handle._jit_mode = jit_mode
         handle._artifact_document = b""
         if recipe is not None:
             handle._recipe_document = msgpack.packb(recipe, use_bin_type=True, strict_types=True)
@@ -2819,22 +3061,22 @@ cdef class MenudetArtifactHandle:
     def info(self):
         cdef int i
         return {
-            "source": (<bytes>b2_artifact_source(self._handle)).decode("utf-8"),
-            "entry_point": (<bytes>b2_artifact_entry(self._handle)).decode("utf-8"),
-            "inputs": {(<bytes>b2_artifact_name(self._handle, i)).decode("utf-8"):
-                       _numpy_dtype_from_me_dtype(b2_artifact_dtype(self._handle, i))
-                       for i in range(b2_artifact_ninputs(self._handle))},
-            "output_dtype": _numpy_dtype_from_me_dtype(b2_artifact_output(self._handle)),
-            "jit": bool(b2_artifact_jit(self._handle)),
-            "execution_kind": (<bytes>b2_artifact_execution_kind(self._handle)).decode("ascii"),
-            "math_backend": (<bytes>b2_artifact_math(self._handle)).decode("ascii"),
-            "sleef_accuracy": (<bytes>b2_artifact_math_ulp(self._handle)).decode("ascii"),
-            "fp_mode": (<bytes>b2_artifact_fp(self._handle)).decode("ascii"),
+            "source": (<bytes>self._native_source()).decode("utf-8"),
+            "entry_point": (<bytes>self._native_entry()).decode("utf-8"),
+            "inputs": {(<bytes>self._native_name(i)).decode("utf-8"):
+                       _numpy_dtype_from_me_dtype(self._native_dtype(i))
+                       for i in range(self._native_ninputs())},
+            "output_dtype": _numpy_dtype_from_me_dtype(self._native_output()),
+            "jit": bool(self._native_jit()),
+            "execution_kind": (<bytes>self._native_execution_kind()).decode("ascii"),
+            "math_backend": (<bytes>self._native_math()).decode("ascii"),
+            "sleef_accuracy": (<bytes>self._native_math_ulp()).decode("ascii"),
+            "fp_mode": (<bytes>self._native_fp()).decode("ascii"),
         }
 
     cdef object signature_dtype(self, int index):
-        cdef me_dtype dtype = b2_artifact_output(self._handle) if index < 0 else b2_artifact_dtype(self._handle, index)
-        cdef size_t width = b2_artifact_width(self._handle, index)
+        cdef me_dtype dtype = self._native_output() if index < 0 else self._native_dtype(index)
+        cdef size_t width = self._native_width(index)
         if dtype == ME_STRING:
             return np.dtype(f"U{width // 4}")
         if dtype == ME_BYTES:
@@ -2842,26 +3084,26 @@ cdef class MenudetArtifactHandle:
         return _numpy_dtype_from_me_dtype(dtype)
 
     def _has_core_kernel(self):
-        return bool(b2_exec_artifact_has_core(self._handle))
+        return True if self._is_core else bool(b2_exec_artifact_has_core(self._handle))
 
     def descriptor_info(self):
         """Authoritative draft native signature; unavailable on older pinned builds."""
         if not b2_artifact_descriptor_available():
             raise NotImplementedError("Build with draft miniexpr descriptor support")
-        partitionable = b2_artifact_partitionable(self._handle)
+        partitionable = self._native_partitionable()
         return {
-            "schema_version": (<bytes>b2_artifact_version(self._handle)).decode("ascii"),
-            "inputs": {(<bytes>b2_artifact_name(self._handle, i)).decode("utf-8"):
-                       self.signature_dtype(i) for i in range(b2_artifact_ninputs(self._handle))},
+            "schema_version": (<bytes>self._native_version()).decode("ascii"),
+            "inputs": {(<bytes>self._native_name(i)).decode("utf-8"):
+                       self.signature_dtype(i) for i in range(self._native_ninputs())},
             "output_dtype": self.signature_dtype(-1),
-            "inferred_dtype": (None if b2_artifact_inferred(self._handle) == ME_AUTO else
-                               _numpy_dtype_from_me_dtype(b2_artifact_inferred(self._handle))),
-            "cardinality": "block_scalar" if b2_artifact_cardinality(self._handle) == 1 else "elementwise",
-            "ndim": b2_artifact_rank(self._handle),
+            "inferred_dtype": (None if self._native_inferred() == ME_AUTO else
+                               _numpy_dtype_from_me_dtype(self._native_inferred())),
+            "cardinality": "block_scalar" if self._native_cardinality() == 1 else "elementwise",
+            "ndim": self._native_rank(),
             "native_partitionable": None if partitionable < 0 else bool(partitionable),
-            "math_backend": (<bytes>b2_artifact_math(self._handle)).decode("ascii"),
-            "sleef_accuracy": (<bytes>b2_artifact_math_ulp(self._handle)).decode("ascii"),
-            "fp_mode": (<bytes>b2_artifact_fp(self._handle)).decode("ascii"),
+            "math_backend": (<bytes>self._native_math()).decode("ascii"),
+            "sleef_accuracy": (<bytes>self._native_math_ulp()).decode("ascii"),
+            "fp_mode": (<bytes>self._native_fp()).decode("ascii"),
         }
 
     def evaluate_block(self, inputs, block_shape, *, logical_shape=None, block_origin=None, valid_mask=None,
@@ -2893,7 +3135,7 @@ cdef class MenudetArtifactHandle:
         descriptor.struct_size = sizeof(descriptor)
         descriptor.version = 1
         descriptor.nitems = count
-        descriptor.ndim = b2_artifact_rank(self._handle)
+        descriptor.ndim = self._native_rank()
         if descriptor.ndim:
             if logical_shape is None or block_origin is None or len(block_shape) != descriptor.ndim:
                 raise ValueError("Explicit logical shape, block origin and matching block rank are required")
@@ -2914,7 +3156,7 @@ cdef class MenudetArtifactHandle:
             mask = np.ascontiguousarray(mask, dtype=np.uint8)
             descriptor.valid_mask = <const uint8_t *>np.PyArray_DATA(mask)
             descriptor.valid_mask_capacity = mask.nbytes
-        output_shape = () if b2_artifact_cardinality(self._handle) == 1 else block_shape
+        output_shape = () if self._native_cardinality() == 1 else block_shape
         output = (np.empty(output_shape, dtype=self.signature_dtype(-1))
                   if _output is None else _output)
         if ((<object>output).shape != output_shape or output.dtype != self.signature_dtype(-1)
@@ -2942,7 +3184,11 @@ cdef class MenudetArtifactHandle:
                 bindings[i].data = np.PyArray_DATA(array)
                 bindings[i].capacity = array.nbytes
             with nogil:
-                if return_status or fp_raise:
+                if self._is_core:
+                    rc = b2_core_kernel_eval_status(
+                        self._handle, bindings, <int>n, np.PyArray_DATA(output),
+                        &descriptor, fp_raise, &fp_status if (return_status or fp_raise) else NULL, &error)
+                elif return_status or fp_raise:
                     rc = b2_artifact_eval_status(self._handle, bindings, <int>n, np.PyArray_DATA(output), &descriptor, fp_raise, &fp_status, &error)
                 else:
                     rc = b2_artifact_eval_ex(self._handle, bindings, <int>n, np.PyArray_DATA(output), &descriptor, &error)
@@ -2958,7 +3204,7 @@ cdef class MenudetArtifactHandle:
             free(bindings)
 
     cdef object _cblosc2_eval_array(self, inputs, shape, reduction, axes, bint keepdims,
-                                  initial, size_t tile_items):
+                                  initial, where, accumulator, size_t tile_items):
         cdef void *plan = NULL
         cdef void *schedule = NULL
         cdef b2_exec_reduce_opts opts
@@ -2974,8 +3220,8 @@ cdef class MenudetArtifactHandle:
         if not b2_exec_available() or n == 0 or rank > 16 or n > 128 or tile_items == 0:
             return None
         sig_names = [
-            (<bytes>b2_artifact_name(self._handle, k)).decode("utf-8")
-            for k in range(b2_artifact_ninputs(self._handle))
+            (<bytes>self._native_name(k)).decode("utf-8")
+            for k in range(self._native_ninputs())
         ]
         if set(inputs) != set(sig_names):
             return None
@@ -2989,10 +3235,22 @@ cdef class MenudetArtifactHandle:
         if tuple(shape) != broadcast:
             return None
         red_code = {None: 0, "sum": 1, "prod": 2, "min": 3, "max": 4, "any": 5, "all": 6}[reduction]
+        if where is not None:
+            if not red_code:
+                raise ValueError("Mask requires a reduction")
+            if n == 128:
+                return None
+            mask = np.asarray(where)
+            if mask.dtype != np.dtype("bool"):
+                raise TypeError("Participating mask must have bool dtype")
+            arrays.append(mask)
+            n += 1
         memset(&opts, 0, sizeof(opts))
         memset(&info, 0, sizeof(info))
         memset(&error, 0, sizeof(error))
         if red_code:
+            opts.has_where = where is not None
+            opts.accumulator = ME_AUTO if accumulator is None else _me_dtype_from_numpy_dtype(np.dtype(accumulator))
             opts.has_axes = 0 if axes is None else 1
             opts.naxes = 0 if axes is None else len(axes)
             if opts.naxes > 16:
@@ -3003,7 +3261,9 @@ cdef class MenudetArtifactHandle:
             opts.keepdims = keepdims
             if initial is not None:
                 sig_out = self.signature_dtype(-1)
-                if reduction in ("sum", "prod") and sig_out.kind in "bi":
+                if accumulator is not None:
+                    acc_dtype = np.dtype(accumulator)
+                elif reduction in ("sum", "prod") and sig_out.kind in "bi":
                     acc_dtype = np.dtype("int64")
                 elif reduction in ("sum", "prod") and sig_out.kind == "u":
                     acc_dtype = np.dtype("uint64")
@@ -3018,8 +3278,12 @@ cdef class MenudetArtifactHandle:
                 opts.initial_weak = 1 if isinstance(initial, (bool, int, float, np.number)) else 0
                 memcpy(opts.initial_scalar, np.PyArray_DATA(initial_array), opts.initial_size)
         with nogil:
-            rc = b2_exec_prepare_artifact_kernel(
-                self._handle, red_code, &opts if red_code else NULL, &plan, &error)
+            if self._is_core:
+                rc = b2_exec_prepare_core_kernel(
+                    self._handle, red_code, &opts if red_code else NULL, &plan, &error)
+            else:
+                rc = b2_exec_prepare_artifact_kernel(
+                    self._handle, red_code, &opts if red_code else NULL, &plan, &error)
         if rc == -2:
             return None
         if rc:
@@ -3113,17 +3377,20 @@ cdef class MenudetArtifactHandle:
         memset(&error, 0, sizeof(error))
         if rank > 16 or n > 128:
             raise ValueError("Native array rank/input limit exceeded")
-        if where is None and accumulator is None:
-            typed_res = self._cblosc2_eval_array(
-                inputs, shape, reduction, axes, keepdims, initial, tile_items)
-            if typed_res is not None:
-                return typed_res
+        typed_res = self._cblosc2_eval_array(
+            inputs, shape, reduction, axes, keepdims, initial, where, accumulator, tile_items)
+        if typed_res is not None:
+            return typed_res
+        cdef void *eval_handle = self._handle
+        cdef void *legacy_handle = NULL
         for i in range(rank):
             domain[i] = shape[i]
         options.version = 1
         options.reduction = {None: 0, 'sum': 1, 'prod': 2, 'min': 3, 'max': 4, 'any': 5, 'all': 6}[reduction]
         options.naxes = 0 if reduction is None else -1 if axes is None else len(axes)
         if options.naxes > 16:
+            if legacy_handle != NULL:
+                b2_artifact_free(legacy_handle)
             raise ValueError("Too many reduction axes")
         if axes is not None:
             for i in range(options.naxes):
@@ -3131,31 +3398,38 @@ cdef class MenudetArtifactHandle:
         options.keepdims = keepdims
         options.accumulator = ME_AUTO if accumulator is None else _me_dtype_from_numpy_dtype(np.dtype(accumulator))
         options.tile_items = tile_items
-        with nogil:
-            rc = b2_array_shape(self._handle, rank, domain, &options, &result_rank, result_shape, &result_dtype, &error)
-        if rc:
-            raise_artifact_error(rc, &error)
-        output = np.empty(tuple(result_shape[i] for i in range(result_rank)), dtype=_numpy_dtype_from_me_dtype(result_dtype))
-        output_bytes = output.nbytes
-        if initial is not None:
-            initial_array = np.asarray(initial, dtype=output.dtype)
-            if initial_array.ndim != 0:
-                raise ValueError("initial must be a scalar")
-            options.initial = np.PyArray_DATA(initial_array)
-        if where is not None:
-            array = np.asarray(where)
-            if array.dtype != np.dtype('bool'):
-                raise TypeError("Participating mask must have bool dtype")
-            bound = array_view_binding(array, &mask_view)
-            if bound is not array:
-                normalization_bytes += bound.nbytes
-            owned.append(bound)
-            options.where = &mask_view
-        if n:
-            views = <b2_array_view *>calloc(n, sizeof(b2_array_view))
-            if views == NULL:
-                raise MemoryError()
         try:
+            if self._is_core:
+                if not b2_array_sources_available() or not self._artifact_document:
+                    from blosc2.menudet_kernel import MenudetError
+                    raise MenudetError("Native runtime does not support logical arrays",
+                                       status="unsupported_requirement")
+                legacy_handle = self._load_legacy_handle(&error)
+                eval_handle = legacy_handle
+            with nogil:
+                rc = b2_array_shape(eval_handle, rank, domain, &options, &result_rank, result_shape, &result_dtype, &error)
+            if rc:
+                raise_artifact_error(rc, &error)
+            output = np.empty(tuple(result_shape[i] for i in range(result_rank)), dtype=_numpy_dtype_from_me_dtype(result_dtype))
+            output_bytes = output.nbytes
+            if initial is not None:
+                initial_array = np.asarray(initial, dtype=output.dtype)
+                if initial_array.ndim != 0:
+                    raise ValueError("initial must be a scalar")
+                options.initial = np.PyArray_DATA(initial_array)
+            if where is not None:
+                array = np.asarray(where)
+                if array.dtype != np.dtype('bool'):
+                    raise TypeError("Participating mask must have bool dtype")
+                bound = array_view_binding(array, &mask_view)
+                if bound is not array:
+                    normalization_bytes += bound.nbytes
+                owned.append(bound)
+                options.where = &mask_view
+            if n:
+                views = <b2_array_view *>calloc(n, sizeof(b2_array_view))
+                if views == NULL:
+                    raise MemoryError()
             for i, value in enumerate(inputs.values()):
                 array = np.asarray(value)
                 bound = array_view_binding(array, &views[i])
@@ -3167,7 +3441,7 @@ cdef class MenudetArtifactHandle:
                     raise ValueError("Input names cannot contain NUL")
                 views[i].name = name
             with nogil:
-                rc = b2_array_eval(self._handle, views, n, rank, domain, &options,
+                rc = b2_array_eval(eval_handle, views, n, rank, domain, &options,
                                    np.PyArray_DATA(output), output_bytes, &report, &error)
             if rc:
                 raise_artifact_error(rc, &error)
@@ -3177,6 +3451,8 @@ cdef class MenudetArtifactHandle:
                             "fp_flags": report.fp_flags, "fp_supported": bool(report.fp_supported)}
         finally:
             free(views)
+            if legacy_handle != NULL:
+                b2_artifact_free(legacy_handle)
 
     def resident_prefilter(self, shape, workers=1, block_items=32768, chunk_items=0, graph=None):
         """Private reusable native scheduler for proven contiguous resident maps."""
@@ -3368,8 +3644,8 @@ cdef class MenudetArtifactHandle:
         if not b2_exec_available() or n == 0 or rank > 16 or n > 128 or tile_items == 0:
             return None
         sig_names = [
-            (<bytes>b2_artifact_name(self._handle, k)).decode("utf-8")
-            for k in range(b2_artifact_ninputs(self._handle))
+            (<bytes>self._native_name(k)).decode("utf-8")
+            for k in range(self._native_ninputs())
         ]
         if set(inputs) != set(sig_names):
             return None
@@ -3398,7 +3674,10 @@ cdef class MenudetArtifactHandle:
         memset(&report, 0, sizeof(report))
         memset(&error, 0, sizeof(error))
         with nogil:
-            rc = b2_exec_prepare_artifact_kernel(self._handle, 0, NULL, &plan, &error)
+            if self._is_core:
+                rc = b2_exec_prepare_core_kernel(self._handle, 0, NULL, &plan, &error)
+            else:
+                rc = b2_exec_prepare_artifact_kernel(self._handle, 0, NULL, &plan, &error)
         if rc == -2:
             return None
         if rc:
@@ -3502,22 +3781,29 @@ cdef class MenudetArtifactHandle:
             return typed_res
         if not b2_array_sources_available():
             raise NotImplementedError("Native runtime does not support storage readers")
+        cdef void *eval_handle = self._handle
+        cdef void *legacy_handle = NULL
+        if self._is_core:
+            if not self._artifact_document:
+                raise NotImplementedError("Native runtime does not support storage readers")
+            legacy_handle = self._load_legacy_handle(&error)
+            eval_handle = legacy_handle
         memset(&options, 0, sizeof(options))
         options.version = 1
         options.tile_items = tile_items
         for i in range(rank):
             domain[i] = shape[i]
-        with nogil:
-            rc = b2_array_shape(self._handle, rank, domain, &options, &result_rank, result_shape, &result_dtype, &error)
-        if rc:
-            raise_artifact_error(rc, &error)
-        output = np.empty(tuple(result_shape[i] for i in range(result_rank)), dtype=_numpy_dtype_from_me_dtype(result_dtype))
-        output_bytes = output.nbytes
-        if n:
-            sources = <b2_array_source *>calloc(n, sizeof(b2_array_source))
-            if sources == NULL:
-                raise MemoryError()
         try:
+            with nogil:
+                rc = b2_array_shape(eval_handle, rank, domain, &options, &result_rank, result_shape, &result_dtype, &error)
+            if rc:
+                raise_artifact_error(rc, &error)
+            output = np.empty(tuple(result_shape[i] for i in range(result_rank)), dtype=_numpy_dtype_from_me_dtype(result_dtype))
+            output_bytes = output.nbytes
+            if n:
+                sources = <b2_array_source *>calloc(n, sizeof(b2_array_source))
+                if sources == NULL:
+                    raise MemoryError()
             for i, (key, value) in enumerate(inputs.items()):
                 name = names[i]
                 if b'\x00' in name:
@@ -3539,7 +3825,7 @@ cdef class MenudetArtifactHandle:
                     owned.append(bound)
                 sources[i].view.name = name
             with nogil:
-                rc = b2_array_eval_sources(self._handle, sources, n, rank, domain, &options,
+                rc = b2_array_eval_sources(eval_handle, sources, n, rank, domain, &options,
                     np.PyArray_DATA(output), output_bytes, &report, &error)
             for state in states:
                 if state.error is not None:
@@ -3554,6 +3840,8 @@ cdef class MenudetArtifactHandle:
                 "reader_bytes": sum(state.read_bytes for state in states)}
         finally:
             free(sources)
+            if legacy_handle != NULL:
+                b2_artifact_free(legacy_handle)
 
     def evaluate_partitions(self, inputs, domain, partitions, selection=None,
                             unsigned raise_mask=0, size_t max_decode_bytes=67108864,
@@ -3582,7 +3870,10 @@ cdef class MenudetArtifactHandle:
         memset(&report, 0, sizeof(report))
         memset(&error, 0, sizeof(error))
         with nogil:
-            rc = b2_exec_prepare_artifact_kernel(self._handle, 0, NULL, &plan, &error)
+            if self._is_core:
+                rc = b2_exec_prepare_core_kernel(self._handle, 0, NULL, &plan, &error)
+            else:
+                rc = b2_exec_prepare_artifact_kernel(self._handle, 0, NULL, &plan, &error)
         if rc:
             raise_exec_error(rc, &error)
         try:
@@ -3591,8 +3882,8 @@ cdef class MenudetArtifactHandle:
             if n != info.ninputs:
                 raise ValueError("Partition input count mismatch")
             sig_names = [
-                (<bytes>b2_artifact_name(self._handle, k)).decode("utf-8")
-                for k in range(b2_artifact_ninputs(self._handle))
+                (<bytes>self._native_name(k)).decode("utf-8")
+                for k in range(self._native_ninputs())
             ]
             if set(inputs) != set(sig_names):
                 raise ValueError("Partition input names disagree with signature")
@@ -3729,7 +4020,7 @@ cdef class MenudetArtifactHandle:
         cdef int rc
         cdef Py_ssize_t i
         cdef size_t count
-        output = np.empty(shape, dtype=_numpy_dtype_from_me_dtype(b2_artifact_output(self._handle)))
+        output = np.empty(shape, dtype=_numpy_dtype_from_me_dtype(self._native_output()))
         count = output.size
         if n:
             bindings = <b2_artifact_input *> calloc(n, sizeof(b2_artifact_input))
@@ -3748,7 +4039,10 @@ cdef class MenudetArtifactHandle:
                 bindings[i].data = np.PyArray_DATA(array)
                 bindings[i].nitems = array.size
             with nogil:
-                rc = b2_artifact_eval(self._handle, bindings, <int>n, np.PyArray_DATA(output), count, &error)
+                if self._is_core:
+                    rc = b2_core_kernel_eval(self._handle, bindings, <int>n, np.PyArray_DATA(output), count, &error)
+                else:
+                    rc = b2_artifact_eval(self._handle, bindings, <int>n, np.PyArray_DATA(output), count, &error)
             if rc:
                 raise_artifact_error(rc, &error)
             return output
@@ -3820,7 +4114,7 @@ cdef class MenudetResidentPrefilter:
         if not 1 <= workers <= 32 or not 128 <= block_items <= 1048576 or block_items % 128:
             raise ValueError("Invalid resident prefilter worker count or block geometry")
         if owner._resident_meta is None:
-            if b2_artifact_rank(owner._handle):
+            if owner._native_rank():
                 raise NotImplementedError("Resident prefilters require a proven context-free artifact")
             info = owner.descriptor_info()
             if info["cardinality"] != "elementwise" or not 1 <= len(info["inputs"]) <= 128:
@@ -3834,7 +4128,7 @@ cdef class MenudetResidentPrefilter:
         else:
             output_dtype, input_dtypes, _ = owner._resident_meta
         if graph is None:
-            if b2_artifact_partitionable(owner._handle) <= 0:
+            if owner._native_partitionable() <= 0:
                 raise NotImplementedError("Resident prefilters require an authoritative partitioning proof")
         elif owner._attested_graph is not graph:
             # Configured kernels are imported from this very graph's map JSON.
@@ -3915,6 +4209,7 @@ cdef class MenudetResidentPrefilter:
         self.block_items = block_items
         self.chunk_items = resolved_chunk_items
         self.state.artifact = owner._handle
+        self.state.is_core = owner._is_core
         self.state.resident = True
         self.state.grid_ndim = 1
         self.state.size = count
@@ -3923,9 +4218,9 @@ cdef class MenudetResidentPrefilter:
         self.state.ninputs = ninputs
         self.state.nworkers = nworkers
         for i in range(ninputs):
-            self.state.signature[i].name = b2_artifact_name(owner._handle, i)
-            self.state.signature[i].dtype = b2_artifact_dtype(owner._handle, i)
-            self.state.signature[i].itemsize = b2_artifact_width(owner._handle, i)
+            self.state.signature[i].name = owner._native_name(i)
+            self.state.signature[i].dtype = owner._native_dtype(i)
+            self.state.signature[i].itemsize = owner._native_width(i)
         for tid in range(nworkers):
             self.state.workers[tid].bindings = (
                 <b2_artifact_buffer *>(self.state.workers + nworkers) + tid * self.workers_capacity)
@@ -7709,8 +8004,10 @@ cdef class NDArray:
         owner = kernel._handle
         if owner is None or owner._handle == NULL:
             raise ValueError("The b2nd kernel pilot requires an initialized native kernel")
+        if owner._artifact_document:
+            raise ValueError("The b2nd kernel pilot requires a directly prepared Menudet kernel")
         # Keep the native owner (and any graph it borrows from) alive across nogil.
-        block_scalar = b2_artifact_cardinality(owner._handle) == 1
+        block_scalar = owner._native_cardinality() == 1
         if partition is not None:
             if type(partition) is not int or not 1 <= partition <= 2147483647:
                 raise ValueError("The pilot partition must be a positive int32 extent")
@@ -7728,7 +8025,9 @@ cdef class NDArray:
         data = <double *> output.data
         memset(&error, 0, sizeof(error))
         with nogil:
-            rc = b2_pilot_map(self.array, owner._handle, data, group, block_scalar, max_scratch, report, &error)
+            rc = b2_pilot_map(
+                self.array, owner._handle, owner._is_core,
+                data, group, block_scalar, max_scratch, report, &error)
         if rc < 0:
             message = (<bytes>error.message).decode("utf-8", "replace")
             raise ValueError(message or f"b2nd kernel pilot failed (status {rc}); check the kernel and scratch budget")
@@ -7736,7 +8035,7 @@ cdef class NDArray:
             return output, {
                 "fp_flags": fp.flags, "fp_supported": bool(fp.supported),
                 "execution_kind": kernel.execution_kind if self.array.shape[0] else None,
-                "prepared_has_jit": bool(b2_artifact_jit(owner._handle)),
+                "prepared_has_jit": bool(owner._native_jit()),
             }
         return output
 
@@ -8916,7 +9215,8 @@ cdef class NDArray:
         memset(&state, 0, sizeof(state))
         memset(&parameters, 0, sizeof(parameters))
         state.artifact = kernel._handle
-        state.ndim = b2_artifact_rank(kernel._handle)
+        state.is_core = kernel._is_core
+        state.ndim = kernel._native_rank()
         if diagonal is not None:
             state.diagonal_enabled = True
             state.diagonal = diagonal
@@ -8966,7 +9266,7 @@ cdef class NDArray:
         state.identity_map = identity_map
         state.arg_indices = <int64_t *>arg_indices.data if arg_indices is not None else NULL
         if pairwise_sum:
-            rc = b2_pairwise_init(&sum_state, b2_artifact_output(kernel._handle))
+            rc = b2_pairwise_init(&sum_state, kernel._native_output())
             if rc:
                 raise ValueError("Cannot initialize native pairwise summation")
             sum_leaves = np.empty(
@@ -8990,14 +9290,14 @@ cdef class NDArray:
             else:
                 value = source
                 state.inputs[i] = value.array
-            state.signature[i].name = b2_artifact_name(kernel._handle, i)
+            state.signature[i].name = kernel._native_name(i)
             # Mapping order may differ from the artifact's signature order.
             encoded_name = name.encode("utf-8")
             for j in range(state.ninputs):
-                if encoded_name == <bytes>b2_artifact_name(kernel._handle, j):
-                    state.signature[i].name = b2_artifact_name(kernel._handle, j)
-                    state.signature[i].dtype = b2_artifact_dtype(kernel._handle, j)
-                    state.signature[i].itemsize = b2_artifact_width(kernel._handle, j)
+                if encoded_name == <bytes>kernel._native_name(j):
+                    state.signature[i].name = kernel._native_name(j)
+                    state.signature[i].dtype = kernel._native_dtype(j)
+                    state.signature[i].itemsize = kernel._native_width(j)
                     break
         data = (np.empty(self.array.sc.chunksize, dtype=np.uint8)
                 if driver_input is None else driver_input)

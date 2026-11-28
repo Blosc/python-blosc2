@@ -396,8 +396,16 @@ def test_import_is_native_only(native_artifacts, monkeypatch):
         pytest.fail("Python source/JSON preparation was invoked")
 
     with monkeypatch.context() as context:
-        context.setattr(ast, "parse", forbidden)
-        context.setattr(json, "loads", forbidden)
+        if getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)():
+            import importlib
+
+            dsl_kernel_mod = importlib.import_module("blosc2.dsl_kernel")
+            recipe_mod = importlib.import_module("blosc2.menudet_recipe")
+            context.setattr(dsl_kernel_mod.SourceKernel, "from_source", forbidden)
+            context.setattr(recipe_mod, "recipe_manifest", forbidden)
+        else:
+            context.setattr(ast, "parse", forbidden)
+            context.setattr(json, "loads", forbidden)
         kernel = blosc2.MenudetKernel.from_json(artifact, jit=False)
         result = kernel.evaluate({"x": np.array([0.0, 1.0, 2.0, 3.0])})
     np.testing.assert_array_equal(result, [-1, 1, 3, 5])

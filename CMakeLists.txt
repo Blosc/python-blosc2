@@ -143,9 +143,12 @@ set(MINIEXPR_BUILD_SHARED OFF CACHE BOOL "Build miniexpr shared library" FORCE)
 set(MINIEXPR_BUILD_TESTS OFF CACHE BOOL "Build miniexpr tests" FORCE)
 set(MINIEXPR_BUILD_EXAMPLES OFF CACHE BOOL "Build miniexpr examples" FORCE)
 set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
-# Standard Python builds always retain the v1 reader and native schedulers.
-# Standalone miniexpr remains independently buildable without JSON.
-set(MINIEXPR_BUILD_ARTIFACT ON CACHE BOOL "Build Menudet compatibility and scheduler adapter" FORCE)
+# Standard Python builds can retain the adapter or turn MINIEXPR_BUILD_ARTIFACT=OFF
+# when building with the C-Blosc2 shared miniexpr core executor.
+option(MINIEXPR_BUILD_ARTIFACT "Build Menudet compatibility and scheduler adapter" ON)
+if(NOT MINIEXPR_BUILD_ARTIFACT AND NOT B2_EXPERIMENTAL_SHARED_MINIEXPR_CORE)
+  message(FATAL_ERROR "MINIEXPR_BUILD_ARTIFACT=OFF requires the shared C-Blosc2 core executor")
+endif()
 # Keep miniexpr's and C-Blosc2's bundled files inside the blosc2 package.
 # Without this, their install rules use the default CMAKE_INSTALL_LIBDIR
 # ("lib"), which scikit-build places at site-packages/lib.
@@ -181,16 +184,18 @@ file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr.h" B2_MENUDET_VERSION
 if(NOT B2_MENUDET_VERSION)
   message(FATAL_ERROR "Python-Blosc2 requires Menudet 0.1 beta native sources. Update FETCHCONTENT_SOURCE_DIR_MINIEXPR or use the bundled pin.")
 endif()
-file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr_artifact.h" B2_CORE_PREPARE_API
-  REGEX "^#define ME_ARTIFACT_DIRECT_PREPARE_VERSION 1")
-if(NOT B2_CORE_PREPARE_API)
-  message(FATAL_ERROR "Python-Blosc2 5.0 requires the miniexpr 1.0 direct preparation API. Update FETCHCONTENT_SOURCE_DIR_MINIEXPR or use the bundled pin.")
-endif()
-if(B2_EXPERIMENTAL_SHARED_MINIEXPR_CORE)
-  file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr_artifact.h" B2_CORE_BORROW_API
-    REGEX "^#define ME_ARTIFACT_BORROW_CORE_VERSION 1")
-  if(NOT B2_CORE_BORROW_API)
-    message(FATAL_ERROR "The C-Blosc2 scheduler pilot requires miniexpr's prepared-core borrow API")
+if(MINIEXPR_BUILD_ARTIFACT)
+  file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr_artifact.h" B2_CORE_PREPARE_API
+    REGEX "^#define ME_ARTIFACT_DIRECT_PREPARE_VERSION 1")
+  if(NOT B2_CORE_PREPARE_API)
+    message(FATAL_ERROR "Python-Blosc2 5.0 requires the miniexpr 1.0 direct preparation API. Update FETCHCONTENT_SOURCE_DIR_MINIEXPR or use the bundled pin.")
+  endif()
+  if(B2_EXPERIMENTAL_SHARED_MINIEXPR_CORE)
+    file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr_artifact.h" B2_CORE_BORROW_API
+      REGEX "^#define ME_ARTIFACT_BORROW_CORE_VERSION 1")
+    if(NOT B2_CORE_BORROW_API)
+      message(FATAL_ERROR "The C-Blosc2 scheduler pilot requires miniexpr's prepared-core borrow API")
+    endif()
   endif()
 endif()
 file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr_kernel.h" B2_CORE_API_VERSION
@@ -198,8 +203,16 @@ file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr_kernel.h" B2_CORE_API_VERSION
 if(NOT B2_CORE_API_VERSION)
   message(FATAL_ERROR "Python-Blosc2 5.0 requires the qualified miniexpr 1.0 core contract. Update FETCHCONTENT_SOURCE_DIR_MINIEXPR or use the bundled pin.")
 endif()
+if(B2_EXPERIMENTAL_SHARED_MINIEXPR_CORE)
+  file(STRINGS "${miniexpr_SOURCE_DIR}/src/miniexpr_kernel.h" B2_CORE_FP_POLICY_API
+    REGEX "^#define ME_KERNEL_FP_POLICY_API 1")
+  if(NOT B2_CORE_FP_POLICY_API)
+    message(FATAL_ERROR "Update MiniExpr: typed FP preparation policy API is required")
+  endif()
+endif()
 
 # The adapter links the core transitively; avoid duplicate static archives.
+target_include_directories(blosc2_ext PRIVATE "${miniexpr_SOURCE_DIR}/src")
 if(TARGET miniexpr_artifact)
   target_link_libraries(blosc2_ext PRIVATE miniexpr_artifact)
   target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_MENUDET_ARTIFACT=1)
@@ -220,6 +233,8 @@ if(TARGET miniexpr_artifact)
   install(FILES "${B2_YYJSON_SOURCE_DIR}/LICENSE"
     DESTINATION ${SKBUILD_METADATA_DIR}/licenses/miniexpr RENAME LICENSE-YYJSON)
 endif()
+# In the shared-core artifact-off build, blosc2_static below supplies the core
+# transitively. Do not add a second direct static archive reference.
 if(APPLE)
   target_link_libraries(blosc2_ext PRIVATE "-framework Accelerate")
 endif()
@@ -303,6 +318,16 @@ else()
         target_include_directories(blosc2_ext PRIVATE "${blosc2_SOURCE_DIR}/blosc")
         target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_B2ND_KERNEL_PILOT)
         if(EXISTS "${blosc2_SOURCE_DIR}/blosc/b2nd-exec.h")
+            file(STRINGS "${blosc2_SOURCE_DIR}/blosc/b2nd-exec.h" B2_BORROWED_REDUCTION_API
+                REGEX "^#define B2ND_EXEC_BORROWED_REDUCTION_API 1")
+            if(NOT B2_BORROWED_REDUCTION_API)
+                message(FATAL_ERROR "Update C-Blosc2: borrowed mask/accumulator execution API is required")
+            endif()
+            file(STRINGS "${blosc2_SOURCE_DIR}/blosc/b2nd-exec.h" B2_EXEC_FP_POLICY_API
+                REGEX "^#define B2ND_EXEC_FP_POLICY_API 1")
+            if(NOT B2_EXEC_FP_POLICY_API)
+                message(FATAL_ERROR "Update C-Blosc2: typed FP preparation policy API is required")
+            endif()
             target_compile_definitions(blosc2_ext PRIVATE B2_HAVE_B2ND_EXEC)
         endif()
     endif()

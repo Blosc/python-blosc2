@@ -23,6 +23,7 @@ def storage_inputs():
     }
 
 
+@pytest.mark.usefixtures("legacy_graph_adapter")
 def test_storage_same_plan_different_layouts_and_no_python_reads(monkeypatch):
     inputs = storage_inputs()
     adapter = NativeGraph.from_expression(

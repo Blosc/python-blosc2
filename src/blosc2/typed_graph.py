@@ -1,8 +1,7 @@
-"""Explicit comparison facade for C-Blosc2's admitted resident graph family.
+"""C-Blosc2 typed graph facade with Python-owned canonical interchange.
 
-Prepare/inspect/specialize/execute use only typed plans. Compatibility exports
-are explicit, lazy adapter operations until Python canonical export is migrated.
-This is a qualified subset of the restricted text frontend, not a default switch.
+Preparation captures compiler, FP and math preferences before any operand reads.
+Specialization and execution retain that immutable policy without adapter replay.
 """
 
 import ast
@@ -11,11 +10,12 @@ import json
 import os
 import re
 import tokenize
+from functools import lru_cache
 
 import numpy as np
 
 from . import blosc2_ext
-from .menudet_kernel import menudet_execution_environment
+from .menudet_kernel import MenudetError, menudet_execution_environment
 from .typed_exec import (
     TYPED_RESIDENT_DTYPES,
     TypedGraphNotAdmitted,
@@ -76,33 +76,101 @@ def _check_text(expression):
         raise NotImplementedError("Invalid restricted expression") from error
 
 
+@lru_cache(maxsize=1)
+def _typed_sleef_available():
+    """Probe immutable core capability, independent of caller FP/compiler policy."""
+    try:
+        blosc2_ext._TypedExecPlan.from_source(
+            b"0.2",
+            b"def probe(x):\n    return sin(x)\n",
+            {"x": np.dtype("float64")},
+            (),
+            np.dtype("float64"),
+            execution=0,
+            compiler=2,
+            math_backend=3,
+            fp_mode=1,
+            math_accuracy=1,
+        )
+    except MenudetError as error:
+        if "requested math backend 'sleef' is unavailable" not in str(error):
+            raise
+        return False
+    return True
+
+
 def typed_graph_policy(jit, require_jit):
     """Capture the admitted typed compiler/math policy without preparing a plan."""
     import blosc2
 
     policy = blosc2.jit_config.execution_options()
+    environment = menudet_execution_environment()
+    compiler = environment.pop("compiler", None)
+    fp = environment.pop("fp", "strict")
+    # Match Menudet execution snapshots: environment overrides compute options.
+    math_backend = environment.pop("math", None) or policy["math_backend"]
+    if fp not in {"strict", "contract", "fast", "relaxed"} or math_backend not in {
+        None,
+        "auto",
+        "scalar",
+        "system",
+        "sleef",
+        "accelerate",
+    }:
+        raise NotImplementedError("Unsupported typed graph FP or math policy")
+    # Compiler selection is a preparation policy, not an unsupported FP override.
+    if compiler is not None:
+        if compiler not in {"cc", "tcc"}:
+            raise NotImplementedError("Unsupported typed graph compiler policy")
+        policy = dict(policy, jit_backend=compiler)
     if (
         (jit is not None and jit is not False and jit is not True and not require_jit)
-        or menudet_execution_environment()
+        or environment
         or policy["jit_backend"] not in {None, "cc", "tcc"}
-        or policy["math_backend"] not in {None, "system", "sleef", "accelerate"}
-        or policy["fp_accuracy"] != blosc2.FPAccuracy.DEFAULT
     ):
         raise NotImplementedError("Unsupported typed graph backend or environment policy")
+    accuracy = 0
+    # MEDIUM leaves automatic backend selection to the core. Platform-specific
+    # ordinary-expression preferences are applied by that frontend, not here.
+    if math_backend == "sleef":
+        accuracy = 1 if policy["fp_accuracy"] == blosc2.FPAccuracy.HIGH else 2
+    elif (
+        math_backend in {None, "auto"}
+        and policy["fp_accuracy"] == blosc2.FPAccuracy.HIGH
+        and _typed_sleef_available()
+    ):
+        # HIGH is a preference, unlike an explicit unavailable SLEEF request.
+        math_backend, accuracy = "sleef", 1
+    policy = dict(
+        policy,
+        math_backend=math_backend,
+        typed_fp_mode={"strict": 1, "contract": 2, "fast": 3, "relaxed": 3}[fp],
+        typed_math_accuracy=accuracy,
+    )
     effective_jit = policy["jit"] if jit is None else jit
     if effective_jit is None:
-        effective_jit = os.environ.get("BLOSC_ME_JIT", "").lower() in (
-            "1",
-            "true",
-            "on",
-            "tcc",
-            "cc",
-        ) or os.environ.get("ME_DSL_JIT", "").lower() not in ("", "0", "false", "off")
+        requested = os.environ.get("BLOSC_ME_JIT", "").lower()
+        effective_jit = (
+            requested
+            in (
+                "1",
+                "true",
+                "on",
+                "tcc",
+                "cc",
+            )
+            if requested
+            else None
+        )
+        if effective_jit is None and (requested := os.environ.get("ME_DSL_JIT")):
+            # Capture the native override in cache identity as well as execution.
+            effective_jit = requested != "0"
     return (
         policy,
-        2 if require_jit else 1 if effective_jit else 0,
+        # Preserve native structural AUTO heuristics (including ME_DSL_JIT).
+        2 if require_jit else 3 if effective_jit is None else 1 if effective_jit else 0,
         {None: 0, "tcc": 1, "cc": 2}[policy["jit_backend"]],
-        {None: 0, "system": 2, "sleef": 3, "accelerate": 4}[policy["math_backend"]],
+        {None: 0, "auto": 1, "system": 2, "sleef": 3, "accelerate": 4, "scalar": 5}[math_backend],
     )
 
 
@@ -273,7 +341,7 @@ def _render_map_expr(nodes, idx):
     raise ValueError(f"Unsupported map export op: {op}")
 
 
-def _canonical_map_artifact(doc, inferred_dtype, math_backend, integer_powers):
+def _canonical_map_artifact(doc, inferred_dtype, math_backend, integer_powers, fp_mode=1, math_accuracy=0):
     nodes = doc["nodes"]
     inputs = [{"name": n["name"], "dtype": n["dtype"]} for n in nodes if n["op"] == "input"]
     reachable = _collect_stage_nodes(nodes, doc["root"], ())
@@ -287,14 +355,20 @@ def _canonical_map_artifact(doc, inferred_dtype, math_backend, integer_powers):
     body = _render_map_expr(nodes, doc["root"])
     semantics = {
         "casting": doc["output"]["casting"],
-        "fp": "strict",
+        "fp": {0: "strict", 1: "strict", 2: "contract", 3: "fast"}[fp_mode],
         "numeric": "numpy-2.5",
     }
     if math_backend is not None:
         semantics["math"] = math_backend
     if integer_powers:
         semantics["integer_powers"] = "multiply"
-    requires = ["numeric", "flexible-math"] if math_backend is not None else ["numeric"]
+    if math_accuracy:
+        semantics["ulp"] = {1: "u10", 2: "u35"}[math_accuracy]
+    requires = (
+        ["numeric", "flexible-math"]
+        if math_backend is not None or fp_mode > 1 or math_accuracy
+        else ["numeric"]
+    )
     return {
         "schema_version": "0.1",
         "language": {"name": "menudet", "version": "0.1"},
@@ -311,18 +385,14 @@ def _canonical_map_artifact(doc, inferred_dtype, math_backend, integer_powers):
 
 def _normalize_typed_dtypes(input_dtypes):
     dtypes = {name: np.dtype(dtype).newbyteorder("=") for name, dtype in input_dtypes.items()}
-    if (
-        not dtypes
-        or len(dtypes) > 128
-        or any(
-            not isinstance(name, str)
-            or not name.isascii()
-            or not name.isidentifier()
-            or len(name) > 63
-            or name in {"True", "False", "true", "false"}
-            or dtype.name not in TYPED_RESIDENT_DTYPES
-            for name, dtype in dtypes.items()
-        )
+    if len(dtypes) > 128 or any(
+        not isinstance(name, str)
+        or not name.isascii()
+        or not name.isidentifier()
+        or len(name) > 63
+        or name in {"True", "False", "true", "false"}
+        or dtype.name not in TYPED_RESIDENT_DTYPES
+        for name, dtype in dtypes.items()
     ):
         raise NotImplementedError("Unsupported restricted input signature")
     return dtypes
@@ -385,8 +455,19 @@ class TypedGraphHandle:
         self._staged = staged
         self._integer_powers = integer_powers
         self._plan = prepare_typed_plan(
-            nodes, len(names), root, execution, compiler, math_backend, staged, integer_powers
+            nodes,
+            len(names),
+            root,
+            execution,
+            compiler,
+            math_backend,
+            staged,
+            integer_powers,
+            policy["typed_fp_mode"],
+            policy["typed_math_accuracy"],
         )
+        self._fp_mode = policy["typed_fp_mode"]
+        self._math_accuracy = policy["typed_math_accuracy"]
         self._jit_backend = policy["jit_backend"]
         self._math_backend = policy["math_backend"]
         self._names = names
@@ -425,6 +506,9 @@ class TypedGraphHandle:
             "inferred_dtype": getattr(self, "_import_inferred_dtype", native["inferred_dtype"]),
             "map_dtype": native["map_dtype"],
             "has_jit": native["has_jit"],
+            "fp_mode": native.get("fp_mode"),
+            "math_backend": native.get("math_backend"),
+            "sleef_accuracy": native.get("sleef_accuracy"),
             "stages": native["stages"],
             "partitionable": native["partitionable"],
             "plan_metadata_bytes": native["plan_metadata_bytes"],
@@ -444,6 +528,14 @@ class TypedGraphHandle:
             "initial": native["initial"],
             "where": native.get("where", False),
         }
+
+    def participation_mask(self):
+        """Return the resident mask binding name without reading any operands."""
+        if not (self.reduction_info() or {}).get("where"):
+            return None
+        document = self._base_document()
+        root = document["nodes"][document["root"]]
+        return document["nodes"][root["where"]]["name"]
 
     def specialize(self, inputs, tile_items=1024, intermediate_budget=0, *, pairwise_sum=False):
         if set(inputs) != set(self._names):
@@ -496,6 +588,8 @@ class TypedGraphHandle:
             map_dtype,
             self._math_backend,
             getattr(self, "_integer_powers", False) or doc.get("optimization") == "aggressive",
+            getattr(self, "_fp_mode", 1),
+            getattr(self, "_math_accuracy", 0),
         )
         recipe, input_types = _graph_manifest_to_recipe(manifest)
         try:
@@ -543,6 +637,8 @@ class TypedGraphHandle:
             info["inferred_dtype"],
             self._math_backend,
             getattr(self, "_integer_powers", False) or doc.get("optimization") == "aggressive",
+            getattr(self, "_fp_mode", 1),
+            getattr(self, "_math_accuracy", 0),
         )
         return json.dumps(artifact, sort_keys=True, separators=(",", ":"), allow_nan=False)
 

@@ -27,6 +27,7 @@ typedef struct {
 
 typedef struct {
     int dtype, reduction, identity, map_dtype, reducer, partitionable, has_jit;
+    const char *fp_mode, *math_backend, *sleef_accuracy;
     size_t itemsize, ninputs, nitems, tile_items, mapped_bytes, reducer_bytes, output_items;
     size_t plan_metadata_bytes, schedule_metadata_bytes;
     size_t ndim, broadcast_gather_bytes;
@@ -47,6 +48,7 @@ typedef struct {
 
 typedef struct {
     int has_axes, keepdims, has_initial, initial_dtype, initial_weak;
+    int has_where, accumulator;
     size_t naxes, initial_size;
     int axes[16];
     unsigned char initial_scalar[16];
@@ -107,6 +109,7 @@ typedef struct {
     size_t index_buffer_bytes, output_buffer_bytes;
 } b2_exec_callback_report;
 
+#include "dsl_artifact_bridge.h"
 #ifdef B2_HAVE_B2ND_EXEC
 #include "b2nd-exec.h"
 #include "b2nd-exec-storage.h"
@@ -126,7 +129,7 @@ static int b2_exec_fp_end(b2_exec_fp_scope *scope, me_error *error) {
 static int b2_exec_available(void) { return 1; }
 static int b2_exec_prepare_impl(const b2_exec_node *nodes, size_t count, size_t ninputs,
                             uint32_t root, int execution, int compiler, int math_backend,
-                            int integer_powers, void **out, size_t *failed_stage,
+                            int integer_powers, int fp_mode, int accuracy, void **out, size_t *failed_stage,
                             uint32_t *failed_node, me_error *error, int staged) {
     *out = NULL;
     if (failed_stage) *failed_stage = SIZE_MAX;
@@ -174,6 +177,8 @@ static int b2_exec_prepare_impl(const b2_exec_node *nodes, size_t count, size_t 
     options.jit_compiler = (me_jit_compiler)compiler;
     options.math_backend = (me_math_backend)math_backend;
     options.integer_powers = integer_powers != 0;
+    options.fp_mode = (me_fp_mode)fp_mode;
+    options.math_accuracy = (me_math_accuracy)accuracy;
     int rc;
     if (staged) {
         b2nd_exec_staged_plan *plan = NULL;
@@ -192,9 +197,9 @@ static int b2_exec_prepare_impl(const b2_exec_node *nodes, size_t count, size_t 
 }
 static int b2_exec_prepare(const b2_exec_node *nodes, size_t count, size_t ninputs,
                            uint32_t root, int execution, int compiler, int math_backend,
-                           int integer_powers, void **out, me_error *error) {
+                           int integer_powers, int fp_mode, int accuracy, void **out, me_error *error) {
     return b2_exec_prepare_impl(nodes, count, ninputs, root, execution, compiler, math_backend,
-                                integer_powers, out, NULL, NULL, error, 0);
+                                integer_powers, fp_mode, accuracy, out, NULL, NULL, error, 0);
 }
 static void b2_exec_free(void *plan) { b2nd_exec_plan_free(plan); }
 static void b2_exec_schedule_free(void *schedule) { b2nd_exec_schedule_free(schedule); }
@@ -212,6 +217,9 @@ static int b2_exec_describe(const void *plan, b2_exec_info *out) {
         out->reducer = (int)info.reducer;
         out->partitionable = info.partitionable;
         out->has_jit = info.has_jit;
+        out->fp_mode = info.fp_mode;
+        out->math_backend = info.math_backend;
+        out->sleef_accuracy = info.sleef_accuracy;
         out->plan_metadata_bytes = info.plan_metadata_bytes;
         out->has_axes = info.has_axes;
         out->naxes = info.naxes;
@@ -520,12 +528,10 @@ static int b2_exec_artifact_has_core(const void *artifact) {
     return 0;
 #endif
 }
-static int b2_exec_prepare_artifact_kernel(const void *artifact, int reducer,
-                                           const b2_exec_reduce_opts *opts,
-                                           void **out, me_error *error) {
+static int b2_exec_prepare_borrowed_common(const me_kernel *kernel, int reducer,
+                                             const b2_exec_reduce_opts *opts,
+                                             void **out, me_error *error) {
     *out = NULL;
-#ifdef B2_HAVE_MENUDET_ARTIFACT
-    const me_kernel *kernel = me_artifact_borrow_core((const me_artifact *)artifact);
     if (!kernel) {
         return ME_ERR_UNSUPPORTED;
     }
@@ -545,12 +551,31 @@ static int b2_exec_prepare_artifact_kernel(const void *artifact, int reducer,
         memcpy(native_opts.initial_scalar, opts->initial_scalar, sizeof(native_opts.initial_scalar));
     }
     b2nd_exec_plan *plan = NULL;
-    int rc = b2nd_exec_prepare_borrowed_kernel(kernel, (me_reduction_kind)reducer,
+    int rc;
+    if (opts && (opts->has_where || opts->accumulator != ME_AUTO)) {
+        rc = b2nd_exec_prepare_borrowed_kernel_ex(kernel, (me_reduction_kind)reducer,
+            &native_opts, (me_dtype)opts->accumulator, opts->has_where != 0, &plan, error);
+    } else {
+        rc = b2nd_exec_prepare_borrowed_kernel(kernel, (me_reduction_kind)reducer,
                                                opts ? &native_opts : NULL, &plan, error);
+    }
     *out = plan;
     return rc;
+}
+static int b2_exec_prepare_core_kernel(const void *core_handle, int reducer,
+                                       const b2_exec_reduce_opts *opts,
+                                       void **out, me_error *error) {
+    return b2_exec_prepare_borrowed_common(b2_core_kernel_unwrap(core_handle), reducer, opts, out, error);
+}
+static int b2_exec_prepare_artifact_kernel(const void *artifact, int reducer,
+                                           const b2_exec_reduce_opts *opts,
+                                           void **out, me_error *error) {
+#ifdef B2_HAVE_MENUDET_ARTIFACT
+    return b2_exec_prepare_borrowed_common(me_artifact_borrow_core((const me_artifact *)artifact),
+                                           reducer, opts, out, error);
 #else
     (void)artifact; (void)reducer; (void)opts; (void)error;
+    *out = NULL;
     return ME_ERR_UNSUPPORTED;
 #endif
 }
@@ -695,9 +720,10 @@ static int b2_exec_fp_end(b2_exec_fp_scope *scope, me_error *error) {
 static int b2_exec_available(void) { return 0; }
 static int b2_exec_prepare(const b2_exec_node *nodes, size_t count, size_t ninputs,
                            uint32_t root, int execution, int compiler, int math_backend,
-                           int integer_powers, void **out, me_error *error) {
+                           int integer_powers, int fp_mode, int accuracy, void **out, me_error *error) {
     (void)nodes; (void)count; (void)ninputs; (void)root; (void)execution; (void)error;
     (void)compiler; (void)math_backend; (void)integer_powers;
+    (void)fp_mode; (void)accuracy;
     *out = NULL;
     return ME_ERR_UNSUPPORTED;
 }
@@ -762,6 +788,13 @@ static int b2_exec_execute_sources_into(const void *schedule, const b2_exec_sour
 static int b2_exec_artifact_has_core(const void *artifact) {
     (void)artifact;
     return 0;
+}
+static int b2_exec_prepare_core_kernel(const void *core_handle, int reducer,
+                                       const b2_exec_reduce_opts *opts,
+                                       void **out, me_error *error) {
+    (void)core_handle; (void)reducer; (void)opts; (void)error;
+    *out = NULL;
+    return ME_ERR_UNSUPPORTED;
 }
 static int b2_exec_prepare_artifact_kernel(const void *artifact, int reducer,
                                            const b2_exec_reduce_opts *opts,

@@ -20,7 +20,20 @@ def test_native_expression_ingestion_bypasses_adapter(native_graph_runtime, monk
     def forbidden(*args, **kwargs):
         pytest.fail("Eligible native text expression constructed Python graph nodes")
 
-    monkeypatch.setattr(native.GraphAdapter, "visit", forbidden)
+    if getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)():
+        # The typed frontend intentionally reuses GraphAdapter for lowering,
+        # but must never instantiate the legacy native JSON/text adapter.
+        class ForbidLegacy:
+            def __new__(cls, *args, **kwargs):
+                forbidden()
+
+            @classmethod
+            def from_expression(cls, *args, **kwargs):
+                forbidden()
+
+        monkeypatch.setattr(blosc2.graph_plan, "NativeGraphHandle", ForbidLegacy)
+    else:
+        monkeypatch.setattr(native.GraphAdapter, "visit", forbidden)
     plan, arrays, reduction = native.lower_native_graph(expr, jit=True)
     assert plan._frontend == "native-expression"
     assert not reduction

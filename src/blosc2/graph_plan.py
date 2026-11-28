@@ -11,10 +11,16 @@ from .blosc2_ext import NativeGraphHandle
 from .menudet_kernel import menudet_execution_environment
 
 
+def _adapter_available():
+    return bool(getattr(blosc2_ext, "menudet_legacy_adapter_available", lambda: False)())
+
+
 def _use_typed_executor(_executor):
     if _executor == "c-blosc2":
         return True
     if _executor == "adapter":
+        if not _adapter_available():
+            raise NotImplementedError("Legacy graph comparison adapter is not available")
         return False
     if _executor == "auto":
         return bool(getattr(blosc2_ext, "_b2nd_exec_available", lambda: False)()) and bool(
@@ -64,10 +70,10 @@ class NativeGraph:
                     graph,
                     jit=jit,
                     require_jit=require_jit,
-                    allow_where=(_executor == "c-blosc2"),
+                    allow_where=(_executor == "c-blosc2" or not _adapter_available()),
                 )
             except NotImplementedError:
-                if _executor == "c-blosc2":
+                if _executor == "c-blosc2" or not _adapter_available():
                     raise
                 self._handle = NativeGraphHandle(graph, mode, require_jit)
         else:
@@ -109,10 +115,10 @@ class NativeGraph:
                     input_dtypes,
                     jit=jit,
                     require_jit=require_jit,
-                    allow_where=(_executor == "c-blosc2"),
+                    allow_where=(_executor == "c-blosc2" or not _adapter_available()),
                 )
             except NotImplementedError:
-                if _executor == "c-blosc2":
+                if _executor == "c-blosc2" or not _adapter_available():
                     raise
                 result._handle = NativeGraphHandle.from_expression(
                     expression.encode("utf-8"), input_dtypes, mode, require_jit
@@ -155,6 +161,11 @@ class NativeGraph:
         return self._handle.to_json()
 
     def info(self):
+        """Describe the plan; assembled graphs report the root stage's FP/math policy.
+
+        Producer stages may have different authored policies. Backend call counts
+        include internal conversion kernels, not only the authored map.
+        """
         return {
             **self._info,
             "inputs": self.input_dtypes,
@@ -229,6 +240,18 @@ class NativeGraph:
         Unsupported bindings raise before numerical reads, without adapter replay.
         """
         if getattr(self._handle, "_executor", None) == "c-blosc2":
+            mask_name = self._handle.participation_mask()
+            if (
+                mask_name is not None
+                and not isinstance(inputs.get(mask_name), np.ndarray)
+                and getattr(self, "_explicit_executor", "auto") != "c-blosc2"
+            ):
+                from .menudet_kernel import MenudetError
+
+                raise MenudetError(
+                    "Reader-backed masked execution is not admitted",
+                    status="unsupported_requirement",
+                )
             if (
                 getattr(self, "_explicit_executor", "auto") != "c-blosc2"
                 and self.info()["stages"] != 1
@@ -240,6 +263,7 @@ class NativeGraph:
             )
             if (
                 all_native
+                and not (self._handle.reduction_info() or {}).get("where")
                 and sink is None
                 and not budgets
                 and (

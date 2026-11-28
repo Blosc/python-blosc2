@@ -159,17 +159,22 @@ def test_generic_source_nd_broadcast_reduction_and_preflight_failures(monkeypatc
     assert ok_src.calls == 2
     assert seen_writes == 2
 
-    # Unsupported reader-backed where mask rejected before any callback.
+    # Resident masks read participating source lanes only.
     masked_src = _MetadataSource((8,), "float64")
-    plan = NativeGraph.from_expression("sum(x, where=m)", {"x": "float64", "m": "bool"})
-    with pytest.raises(TypeError, match="NumPy or Blosc2"):
-        plan.evaluate_sources({"x": masked_src, "m": blosc2.asarray(np.ones(8, dtype=bool))})
-    assert masked_src.calls == 0
+    if getattr(blosc2.blosc2_ext, "menudet_legacy_adapter_available", lambda: True)():
+        plan = NativeGraph.from_expression("sum(x, where=m)", {"x": "float64", "m": "bool"})
+        with pytest.raises(TypeError, match="NumPy or Blosc2"):
+            plan.evaluate_sources({"x": masked_src, "m": blosc2.asarray(np.ones(8, dtype=bool))})
+        assert masked_src.calls == 0
     typed_masked = NativeGraph.from_expression(
         "sum(x, where=m)", {"x": "float64", "m": "bool"}, jit=False, _executor="c-blosc2"
     )
+    mask = np.arange(8) % 2 == 0
+    assert typed_masked.evaluate_sources({"x": masked_src, "m": mask}) == 12
+    np.testing.assert_array_equal(np.concatenate(masked_src.seen_indices), np.arange(8)[mask])
+    masked_src = _MetadataSource((8,), "float64")
     with pytest.raises(NotImplementedError, match="masked"):
-        typed_masked.evaluate_sources({"x": masked_src, "m": np.ones(8, dtype=bool)})
+        typed_masked.evaluate_sources({"x": masked_src, "m": blosc2.asarray(mask)})
     assert masked_src.calls == 0
 
 

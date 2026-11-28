@@ -6,7 +6,7 @@
 
 #ifdef B2_HAVE_B2ND_KERNEL_PILOT
 #include "b2nd-kernel.h"
-#include "miniexpr_artifact.h"
+#include "dsl_artifact_bridge.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -39,32 +39,47 @@ static int b2_pilot_write_scalar(void *context, int64_t chunk, int64_t block,
     return 0;
 }
 
-static int b2_pilot_signature(const void *artifact, const me_kernel *kernel, bool scalar) {
+static const me_kernel *b2_pilot_borrow(const void *handle, int is_core) {
+    if (is_core) {
+        return b2_core_kernel_unwrap(handle);
+    }
+#ifdef B2_HAVE_MENUDET_ARTIFACT
+    return me_artifact_borrow_core(handle);
+#else
+    (void)handle;
+    return NULL;
+#endif
+}
+
+static int b2_pilot_signature(const me_kernel *kernel, bool scalar) {
     const size_t width = sizeof(double);
     me_kernel_info info = ME_KERNEL_INFO_INITIALIZER;
+    size_t ninputs = 0;
+    me_input_spec spec = {0};
     return kernel && me_describe(kernel, &info) == ME_SUCCESS &&
+        me_describe_input_count(kernel, &ninputs) == ME_SUCCESS && ninputs == 1 &&
+        me_describe_input(kernel, 0, &spec) == ME_SUCCESS &&
+        spec.dtype == ME_FLOAT64 && spec.itemsize == width &&
         info.cardinality == (scalar ? ME_BLOCK_SCALAR : ME_ELEMENTWISE) &&
-        !info.context_ndim && info.output_dtype == ME_FLOAT64 && info.output_itemsize == width &&
-        me_artifact_ninputs(artifact) == 1 && me_artifact_input_dtype(artifact, 0) == ME_FLOAT64 &&
-        me_artifact_input_itemsize(artifact, 0) == width;
+        !info.context_ndim && info.output_dtype == ME_FLOAT64 && info.output_itemsize == width;
 }
 
-static int b2_pilot_scalar_eligible(const void *artifact) {
-    return b2_pilot_signature(artifact, me_artifact_borrow_core(artifact), true);
+static int b2_pilot_scalar_eligible(const void *handle, int is_core) {
+    return b2_pilot_signature(b2_pilot_borrow(handle, is_core), true);
 }
 
-static int b2_pilot_map(b2nd_array_t *input, const void *artifact, double *output, int32_t partition,
-                       bool scalar, size_t scratch, me_fp_status *fp, me_error *error) {
+static int b2_pilot_map(b2nd_array_t *input, const void *handle, int is_core, double *output,
+                        int32_t partition, bool scalar, size_t scratch, me_fp_status *fp, me_error *error) {
     const size_t width = sizeof(double);
     if (!input || input->ndim != 1 || !input->sc || input->sc->typesize != width) {
         return BLOSC2_ERROR_INVALID_PARAM;
     }
-    const me_kernel *kernel = me_artifact_borrow_core(artifact);
+    const me_kernel *kernel = b2_pilot_borrow(handle, is_core);
     if (!kernel) {
         snprintf(error->message, sizeof(error->message), "The pilot requires a directly prepared Menudet kernel");
         return BLOSC2_ERROR_INVALID_PARAM;
     }
-    if (!b2_pilot_signature(artifact, kernel, scalar)) {
+    if (!b2_pilot_signature(kernel, scalar)) {
         snprintf(error->message, sizeof(error->message), "The pilot requires a context-free float64 input and output");
         return BLOSC2_ERROR_INVALID_PARAM;
     }
@@ -82,10 +97,10 @@ static int b2_pilot_map(b2nd_array_t *input, const void *artifact, double *outpu
 static int b2_pilot_available(void) { return 1; }
 #else
 static int b2_pilot_available(void) { return 0; }
-static int b2_pilot_scalar_eligible(const void *artifact) { (void)artifact; return 0; }
-static int b2_pilot_map(b2nd_array_t *input, const void *artifact, double *output, int32_t partition,
-                       bool scalar, size_t scratch, me_fp_status *fp, me_error *error) {
-    (void)input; (void)artifact; (void)output; (void)partition; (void)scalar; (void)scratch; (void)fp; (void)error;
+static int b2_pilot_scalar_eligible(const void *handle, int is_core) { (void)handle; (void)is_core; return 0; }
+static int b2_pilot_map(b2nd_array_t *input, const void *handle, int is_core, double *output,
+                        int32_t partition, bool scalar, size_t scratch, me_fp_status *fp, me_error *error) {
+    (void)input; (void)handle; (void)is_core; (void)output; (void)partition; (void)scalar; (void)scratch; (void)fp; (void)error;
     return BLOSC2_ERROR_INVALID_PARAM;
 }
 #endif

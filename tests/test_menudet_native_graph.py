@@ -125,5 +125,9 @@ with blosc2.expression_evaluation('safe'):
     np.testing.assert_allclose(restored[:], np.sqrt(stored[:])+2)
 assert not any(n == 'numexpr' or n.startswith('numexpr.') for n in sys.modules)
 """
-    result = subprocess.run([sys.executable, "-c", script, str(tmp_path)], capture_output=True, text=True)
+    # Preserve the selected wheel and bypass editable-install startup hooks.
+    bootstrap = f"import sys; sys.path[:] = {sys.path!r}\n"
+    result = subprocess.run(
+        [sys.executable, "-S", "-c", bootstrap + script, str(tmp_path)], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stdout + result.stderr

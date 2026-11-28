@@ -81,6 +81,7 @@ def test_native_host_executor_partitions_strided_output(jit):
     np.testing.assert_array_equal(storage[::2], -999)
 
 
+@pytest.mark.usefixtures("legacy_graph_adapter")
 def test_native_executor_joins_on_submission_failure(monkeypatch):
     import blosc2.resident_execution as resident
 

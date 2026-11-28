@@ -125,6 +125,7 @@ def test_graph_execution_failure_never_replays(parallel_runtime, monkeypatch):
         expr[:]
 
 
+@pytest.mark.usefixtures("legacy_graph_adapter")
 def test_borrowed_artifact_retains_native_owner(parallel_runtime):
     from blosc2.graph_plan import NativeGraph
 
@@ -140,6 +141,7 @@ def test_borrowed_artifact_retains_native_owner(parallel_runtime):
     gc.collect()
 
 
+@pytest.mark.usefixtures("legacy_graph_adapter")
 def test_borrowed_artifact_collected_with_unreachable_cycle():
     def make_cycle():
         plan = NativeGraph.from_expression("x + 1", {"x": "float64"}, jit=False, _executor="adapter")

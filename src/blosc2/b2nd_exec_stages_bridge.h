@@ -23,6 +23,9 @@ static void b2_st_fill_plan(b2_exec_info *out, const b2nd_exec_plan_info *info) 
     out->itemsize = info->itemsize; out->ninputs = info->ninputs;
     out->identity = info->identity; out->reduction = info->reduction;
     out->reducer = info->reducer; out->has_jit = info->has_jit;
+    out->fp_mode = info->fp_mode;
+    out->math_backend = info->math_backend;
+    out->sleef_accuracy = info->sleef_accuracy;
     out->partitionable = info->partitionable;
     out->plan_metadata_bytes = info->plan_metadata_bytes;
     out->has_axes = info->has_axes; out->naxes = info->naxes;
@@ -32,9 +35,9 @@ static void b2_st_fill_plan(b2_exec_info *out, const b2nd_exec_plan_info *info) 
 }
 static int b2_st_prepare(const b2_exec_node *nodes, size_t count, size_t ninputs,
                          uint32_t root, int execution, int compiler, int math_backend,
-                         int integer_powers, void **out, b2_st_diag *diag, me_error *error) {
+                         int integer_powers, int fp_mode, int accuracy, void **out, b2_st_diag *diag, me_error *error) {
     return b2_exec_prepare_impl(nodes, count, ninputs, root, execution, compiler, math_backend,
-                                integer_powers, out, diag ? &diag->stage : NULL,
+                                integer_powers, fp_mode, accuracy, out, diag ? &diag->stage : NULL,
                                 diag ? &diag->node : NULL, error, 1);
 }
 static void b2_st_free(void *plan) { b2nd_exec_staged_plan_free(plan); }
@@ -85,12 +88,15 @@ static int b2_st_child(const void *plan, size_t stage, void **out, int *bindings
     return 0;
 }
 static int b2_st_source(const char *version, const char *source, const me_signature *signature,
-                        int execution, int compiler, int math_backend, void **out, me_error *error) {
+                        int execution, int compiler, int math_backend, int fp_mode, int accuracy,
+                        void **out, me_error *error) {
     *out = NULL;
     me_prepare_options options = ME_PREPARE_OPTIONS_INITIALIZER;
     options.execution = (me_execution_policy)execution;
     options.jit_compiler = (me_jit_compiler)compiler;
     options.math_backend = (me_math_backend)math_backend;
+    options.fp_mode = (me_fp_mode)fp_mode;
+    options.math_accuracy = (me_math_accuracy)accuracy;
     options.menudet_forbidden_features = ME_MENUDET_FEATURE_CONTROL_FLOW |
         ME_MENUDET_FEATURE_BLOCK_REDUCTIONS | ME_MENUDET_FEATURE_FIXED_STRINGS;
     me_kernel *kernel = NULL;
@@ -194,9 +200,10 @@ static int b2_st_execute_into(const void *schedule, const b2_exec_source *source
 #else
 static int b2_st_prepare(const b2_exec_node *nodes, size_t count, size_t ninputs,
                          uint32_t root, int execution, int compiler, int math_backend,
-                         int integer_powers, void **out, b2_st_diag *diag, me_error *error) {
+                         int integer_powers, int fp_mode, int accuracy, void **out, b2_st_diag *diag, me_error *error) {
     (void)nodes; (void)count; (void)ninputs; (void)root; (void)execution;
     (void)compiler; (void)math_backend; (void)integer_powers; (void)error;
+    (void)fp_mode; (void)accuracy;
     if (diag) {
         diag->stage = (size_t)-1;
         diag->node = (uint32_t)-1;
@@ -226,9 +233,11 @@ static int b2_st_child(const void *plan, size_t stage, void **out, int *bindings
     *out = NULL; return ME_ERR_UNSUPPORTED;
 }
 static int b2_st_source(const char *version, const char *source, const me_signature *signature,
-                        int execution, int compiler, int math_backend, void **out, me_error *error) {
+                        int execution, int compiler, int math_backend, int fp_mode, int accuracy,
+                        void **out, me_error *error) {
     (void)version; (void)source; (void)signature; (void)execution;
-    (void)compiler; (void)math_backend; (void)error; *out = NULL; return ME_ERR_UNSUPPORTED;
+    (void)compiler; (void)math_backend; (void)fp_mode; (void)accuracy;
+    (void)error; *out = NULL; return ME_ERR_UNSUPPORTED;
 }
 static int b2_st_specialize(const void *plan, const b2_exec_meta *inputs, size_t ninputs,
                             size_t tile, size_t mapped, size_t intermediate,

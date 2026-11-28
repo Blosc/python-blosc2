@@ -116,21 +116,21 @@ static int b2_formula_grid_eval(const void *handle, const void **inputs, size_t 
 #endif
 
 static int b2_artifact_options_available(void) {
-#ifdef ME_ARTIFACT_LOAD_OPTIONS_VERSION
+#if defined(ME_ARTIFACT_LOAD_OPTIONS_VERSION) || defined(B2_HAVE_B2ND_EXEC)
     return 1;
 #else
     return 0;
 #endif
 }
 static int b2_artifact_auto_jit_mode(void) {
-#ifdef ME_ARTIFACT_EXECUTION_KIND_VERSION
+#if defined(ME_ARTIFACT_EXECUTION_KIND_VERSION) || defined(B2_HAVE_B2ND_EXEC)
     return 3;
 #else
     return 0;
 #endif
 }
 static int b2_core_prepare_available(void) {
-#ifdef ME_ARTIFACT_DIRECT_PREPARE_VERSION
+#if defined(ME_ARTIFACT_DIRECT_PREPARE_VERSION) || defined(B2_HAVE_B2ND_EXEC)
     return 1;
 #else
     return 0;
@@ -147,7 +147,13 @@ static const char *b2_artifact_execution_kind(const void *handle) {
 #if defined(B2_HAVE_MENUDET_ARTIFACT) && defined(ME_ARTIFACT_MENUDET_SCHEMA_VERSION)
 typedef me_artifact_input b2_artifact_input;
 typedef me_artifact_error b2_artifact_error;
-static int b2_artifact_available(void) { return !strcmp(ME_ARTIFACT_SCHEMA_VERSION, "0.1"); }
+static int b2_artifact_available(void) {
+#ifdef B2_HAVE_B2ND_EXEC
+    return 1;
+#else
+    return !strcmp(ME_ARTIFACT_SCHEMA_VERSION, "0.1");
+#endif
+}
 static int b2_artifact_load(const char *json, size_t size, int jit, void **out, b2_artifact_error *error) {
     if (!b2_artifact_available()) {
         *out = NULL;
@@ -185,7 +191,13 @@ typedef struct {
     int column;
     char message[256];
 } b2_artifact_error;
-static int b2_artifact_available(void) { return 0; }
+static int b2_artifact_available(void) {
+#ifdef B2_HAVE_B2ND_EXEC
+    return 1;
+#else
+    return 0;
+#endif
+}
 static int b2_artifact_load(const char *json, size_t size, int jit, void **out, b2_artifact_error *error) {
     (void)json; (void)size; (void)jit;
     *out = NULL;
@@ -238,7 +250,7 @@ static int b2_artifact_load_options(const char *json, size_t size, int jit,
 #endif
 }
 static int b2_artifact_load_inferred_available(void) {
-#ifdef ME_ARTIFACT_INFER_OUTPUT_VERSION
+#if defined(ME_ARTIFACT_INFER_OUTPUT_VERSION) || defined(B2_HAVE_B2ND_EXEC)
     return 1;
 #else
     return 0;
@@ -308,7 +320,13 @@ typedef struct {
     const int64_t *block_origin;
     const int64_t *block_extent;
 } b2_artifact_descriptor;
-static int b2_artifact_descriptor_available(void) { return 0; }
+static int b2_artifact_descriptor_available(void) {
+#ifdef B2_HAVE_B2ND_EXEC
+    return 1;
+#else
+    return 0;
+#endif
+}
 static int b2_artifact_cardinality(const void *handle) { (void)handle; return 0; }
 static size_t b2_artifact_width(const void *handle, int index) { (void)handle; (void)index; return 0; }
 static int b2_artifact_rank(const void *handle) { (void)handle; return 0; }
@@ -347,6 +365,487 @@ static int b2_artifact_eval_status(const void *handle, const b2_artifact_buffer 
     memset(error, 0, sizeof(*error));
     snprintf(error->message, sizeof(error->message), "Native runtime does not support floating status");
     return -2;
+}
+#endif
+
+#ifdef B2_HAVE_B2ND_EXEC
+typedef struct {
+    me_kernel *kernel;
+    char *source;
+    char *schema_version;
+    char **input_names;
+    size_t ninputs;
+    me_kernel_info info;
+    me_input_spec inputs[ME_MAX_VARS];
+} b2_core_kernel_handle;
+
+static char *b2_core_strdup(const char *s) {
+    if (!s) {
+        return NULL;
+    }
+    size_t len = strlen(s);
+    char *copy = (char *)malloc(len + 1);
+    if (!copy) {
+        return NULL;
+    }
+    memcpy(copy, s, len + 1);
+    return copy;
+}
+
+static int b2_core_status_to_artifact_rc(me_status st, int is_prepare) {
+    switch (st) {
+    case ME_SUCCESS:
+        return 0;
+    case ME_ERR_OOM:
+        return -6;
+    case ME_ERR_UNSUPPORTED:
+        return -2;
+    case ME_ERR_INVALID_ARG:
+    case ME_ERR_SIGNATURE:
+        return -4;
+    case ME_ERR_SOURCE:
+        return -3;
+    case ME_ERR_EVAL:
+        return -5;
+    default:
+        return is_prepare ? -3 : -5;
+    }
+}
+
+static void b2_core_set_error(b2_artifact_error *error, const me_error *src,
+                              const char *fallback, int native_status) {
+    if (!error) {
+        return;
+    }
+    memset(error, 0, sizeof(*error));
+    if (src) {
+        error->native_status = (int)src->status;
+        error->line = src->line;
+        error->column = src->column;
+        snprintf(error->message, sizeof(error->message), "%s", src->message);
+    } else {
+        error->native_status = native_status;
+        if (fallback) {
+            snprintf(error->message, sizeof(error->message), "%s", fallback);
+        }
+    }
+}
+
+static const me_kernel *b2_core_kernel_unwrap(const void *handle) {
+    return handle ? ((const b2_core_kernel_handle *)handle)->kernel : NULL;
+}
+
+static void b2_core_kernel_free(void *handle) {
+    b2_core_kernel_handle *h = (b2_core_kernel_handle *)handle;
+    if (!h) {
+        return;
+    }
+    if (h->kernel) {
+        me_kernel_free(h->kernel);
+    }
+    free(h->source);
+    free(h->schema_version);
+    if (h->input_names) {
+        for (size_t i = 0; i < h->ninputs; i++) {
+            free(h->input_names[i]);
+        }
+        free(h->input_names);
+    }
+    free(h);
+}
+
+static int b2_core_kernel_prepare(const char *version, const char *display_source,
+    const char *compile_source, const me_signature *signature, int jit_mode,
+    unsigned forbidden_features, const me_jit_options *jit_options,
+    int inherit_environment, void **out, b2_artifact_error *error) {
+    if (!out) {
+        b2_core_set_error(error, NULL, "invalid output handle", ME_ERR_INVALID_ARG);
+        return -4;
+    }
+    *out = NULL;
+    if (!version || !display_source || !signature) {
+        b2_core_set_error(error, NULL, "missing version, source, or signature", ME_ERR_INVALID_ARG);
+        return -4;
+    }
+    me_execution_policy exec_pref;
+    switch (jit_mode) {
+    case 0:
+    case 2:
+        exec_pref = ME_EXEC_INTERPRET;
+        break;
+    case 1:
+        exec_pref = ME_EXEC_PREFER_JIT;
+        break;
+    case 3:
+        exec_pref = ME_EXEC_AUTO;
+        break;
+    default:
+        b2_core_set_error(error, NULL, "invalid host JIT mode", ME_ERR_INVALID_ARG);
+        return -4;
+    }
+    me_prepare_options opts = ME_PREPARE_OPTIONS_INITIALIZER;
+    opts.execution = exec_pref;
+    opts.inherit_environment = inherit_environment ? true : false;
+    opts.menudet_forbidden_features = forbidden_features;
+    opts.jit_options = jit_options;
+
+    me_kernel *kernel = NULL;
+    me_error err;
+    memset(&err, 0, sizeof(err));
+    me_status st = me_prepare_menudet(
+        version, compile_source ? compile_source : display_source,
+        signature, &opts, &kernel, &err);
+    if (st != ME_SUCCESS) {
+        b2_core_set_error(error, &err, NULL, (int)st);
+        return b2_core_status_to_artifact_rc(st, 1);
+    }
+
+    b2_core_kernel_handle *h = (b2_core_kernel_handle *)calloc(1, sizeof(*h));
+    if (!h) {
+        me_kernel_free(kernel);
+        b2_core_set_error(error, NULL, "out of memory allocating kernel handle", ME_ERR_OOM);
+        return -6;
+    }
+    h->kernel = kernel;
+    h->info = (me_kernel_info)ME_KERNEL_INFO_INITIALIZER;
+    st = me_describe(kernel, &h->info);
+    if (st == ME_SUCCESS) {
+        st = me_describe_input_count(kernel, &h->ninputs);
+    }
+    if (st != ME_SUCCESS || h->ninputs > ME_MAX_VARS || h->ninputs != signature->ninputs) {
+        b2_core_kernel_free(h);
+        b2_core_set_error(error, NULL, "cannot describe prepared kernel inputs", (int)st);
+        return b2_core_status_to_artifact_rc(st == ME_SUCCESS ? ME_ERR_SIGNATURE : st, 1);
+    }
+    h->source = b2_core_strdup(display_source);
+    h->schema_version = b2_core_strdup("0.1");
+    if (!h->source || !h->schema_version) {
+        b2_core_kernel_free(h);
+        b2_core_set_error(error, NULL, "out of memory duplicating kernel metadata", ME_ERR_OOM);
+        return -6;
+    }
+    if (h->ninputs > 0) {
+        h->input_names = (char **)calloc(h->ninputs, sizeof(char *));
+        if (!h->input_names) {
+            b2_core_kernel_free(h);
+            b2_core_set_error(error, NULL, "out of memory allocating input names", ME_ERR_OOM);
+            return -6;
+        }
+        for (size_t i = 0; i < h->ninputs; i++) {
+            st = me_describe_input(kernel, i, &h->inputs[i]);
+            if (st != ME_SUCCESS) {
+                b2_core_kernel_free(h);
+                b2_core_set_error(error, NULL, "cannot describe input slot", (int)st);
+                return b2_core_status_to_artifact_rc(st, 1);
+            }
+            const char *nm = signature->inputs[i].name;
+            if (!nm) {
+                b2_core_kernel_free(h);
+                b2_core_set_error(error, NULL, "missing input slot name", ME_ERR_SIGNATURE);
+                return -4;
+            }
+            h->input_names[i] = b2_core_strdup(nm);
+            if (!h->input_names[i]) {
+                b2_core_kernel_free(h);
+                b2_core_set_error(error, NULL, "out of memory allocating input name", ME_ERR_OOM);
+                return -6;
+            }
+        }
+    }
+    *out = h;
+    return 0;
+}
+
+static const char *b2_core_kernel_source(const void *handle) {
+    const b2_core_kernel_handle *h = (const b2_core_kernel_handle *)handle;
+    return h ? h->source : NULL;
+}
+
+static const char *b2_core_kernel_entry(const void *handle) {
+    const b2_core_kernel_handle *h = (const b2_core_kernel_handle *)handle;
+    return h ? me_kernel_entry_point(h->kernel) : NULL;
+}
+
+static int b2_core_kernel_ninputs(const void *handle) {
+    const b2_core_kernel_handle *h = (const b2_core_kernel_handle *)handle;
+    return h ? (int)h->ninputs : 0;
+}
+
+static const char *b2_core_kernel_name(const void *handle, int index) {
+    const b2_core_kernel_handle *h = (const b2_core_kernel_handle *)handle;
+    if (!h || index < 0 || (size_t)index >= h->ninputs) {
+        return NULL;
+    }
+    return h->input_names[index];
+}
+
+static me_dtype b2_core_kernel_dtype(const void *handle, int index) {
+    const b2_core_kernel_handle *h = (const b2_core_kernel_handle *)handle;
+    if (!h || index < 0 || (size_t)index >= h->ninputs) {
+        return ME_AUTO;
+    }
+    return h->inputs[index].dtype;
+}
+
+static me_dtype b2_core_kernel_output(const void *handle) {
+    const b2_core_kernel_handle *h = (const b2_core_kernel_handle *)handle;
+    return h ? h->info.output_dtype : ME_AUTO;
+}
+
+static me_dtype b2_core_kernel_inferred(const void *handle) {
+    const b2_core_kernel_handle *h = (const b2_core_kernel_handle *)handle;
+    return h ? me_kernel_inferred_dtype(h->kernel) : ME_AUTO;
+}
+
+static size_t b2_core_kernel_width(const void *handle, int index) {
+    const b2_core_kernel_handle *h = (const b2_core_kernel_handle *)handle;
+    if (!h) {
+        return 0;
+    }
+    if (index < 0) {
+        return h->info.output_itemsize;
+    }
+    if ((size_t)index >= h->ninputs) {
+        return 0;
+    }
+    return h->inputs[index].itemsize;
+}
+
+static int b2_core_kernel_cardinality(const void *handle) {
+    const b2_core_kernel_handle *h = (const b2_core_kernel_handle *)handle;
+    if (!h) {
+        return 0;
+    }
+    return h->info.cardinality == ME_BLOCK_SCALAR ? 1 : 0;
+}
+
+static int b2_core_kernel_rank(const void *handle) {
+    const b2_core_kernel_handle *h = (const b2_core_kernel_handle *)handle;
+    return h ? h->info.context_ndim : 0;
+}
+
+static int b2_core_kernel_jit(const void *handle) {
+    const b2_core_kernel_handle *h = (const b2_core_kernel_handle *)handle;
+    return (h && me_kernel_has_jit(h->kernel)) ? 1 : 0;
+}
+
+static int b2_core_kernel_partitionable(const void *handle) {
+    const b2_core_kernel_handle *h = (const b2_core_kernel_handle *)handle;
+    if (!h) {
+        return -1;
+    }
+    return me_kernel_is_partitionable(h->kernel) ? 1 : 0;
+}
+
+static const char *b2_core_kernel_version(const void *handle) {
+    const b2_core_kernel_handle *h = (const b2_core_kernel_handle *)handle;
+    return (h && h->schema_version) ? h->schema_version : "unsupported";
+}
+
+static const char *b2_core_kernel_execution_kind(const void *handle) {
+    const b2_core_kernel_handle *h = (const b2_core_kernel_handle *)handle;
+    return h ? me_kernel_execution_kind(h->kernel) : "unknown";
+}
+
+static const char *b2_core_kernel_math(const void *handle) {
+    const b2_core_kernel_handle *h = (const b2_core_kernel_handle *)handle;
+    return h ? me_kernel_math_backend(h->kernel) : "unknown";
+}
+
+static const char *b2_core_kernel_math_ulp(const void *handle) {
+    const b2_core_kernel_handle *h = (const b2_core_kernel_handle *)handle;
+    return h ? me_kernel_sleef_accuracy(h->kernel) : "";
+}
+
+static const char *b2_core_kernel_fp(const void *handle) {
+    const b2_core_kernel_handle *h = (const b2_core_kernel_handle *)handle;
+    return h ? me_kernel_fp_mode(h->kernel) : "unknown";
+}
+
+static int b2_core_kernel_eval_status(const void *handle, const b2_artifact_buffer *inputs, int ninputs,
+    void *output, const b2_artifact_descriptor *descriptor, unsigned mask,
+    b2_artifact_fp_status *status, b2_artifact_error *error) {
+    if (status) {
+        status->flags = 0;
+        status->supported = 0;
+    }
+    const b2_core_kernel_handle *h = (const b2_core_kernel_handle *)handle;
+    if (!h || !descriptor || ninputs < 0 || (size_t)ninputs != h->ninputs || (!inputs && ninputs > 0)) {
+        b2_core_set_error(error, NULL, "invalid kernel evaluation binding", ME_ERR_SIGNATURE);
+        return -4;
+    }
+    me_buffer ordered[ME_MAX_VARS];
+    unsigned char seen[ME_MAX_VARS];
+    memset(seen, 0, sizeof(seen));
+    for (int k = 0; k < ninputs; k++) {
+        const char *name = inputs[k].name;
+        if (!name) {
+            b2_core_set_error(error, NULL, "missing input binding name", ME_ERR_SIGNATURE);
+            return -4;
+        }
+        int matched = -1;
+        for (size_t slot = 0; slot < h->ninputs; slot++) {
+            if (!strcmp(name, h->input_names[slot])) {
+                matched = (int)slot;
+                break;
+            }
+        }
+        if (matched < 0 || seen[matched]) {
+            b2_core_set_error(error, NULL, "unknown or duplicate input binding", ME_ERR_SIGNATURE);
+            return -4;
+        }
+        if (inputs[k].dtype != h->inputs[matched].dtype ||
+            inputs[k].itemsize != h->inputs[matched].itemsize) {
+            b2_core_set_error(error, NULL, "input dtype or itemsize disagrees with signature", ME_ERR_SIGNATURE);
+            return -4;
+        }
+        seen[matched] = 1;
+        ordered[matched] = (me_buffer){inputs[k].data, inputs[k].capacity};
+    }
+
+    me_block blk = ME_BLOCK_INITIALIZER;
+    blk.nitems = descriptor->nitems;
+    blk.valid_mask = descriptor->valid_mask;
+    blk.valid_mask_capacity = descriptor->valid_mask_capacity;
+    blk.ndim = descriptor->ndim;
+    blk.logical_shape = descriptor->logical_shape;
+    blk.origin = descriptor->block_origin;
+    blk.extent = descriptor->block_extent;
+
+    me_fp_status me_fp = {0, false};
+    me_run_options run_opts = ME_RUN_OPTIONS_INITIALIZER;
+    run_opts.raise_mask = mask;
+    run_opts.fp_status = status ? &me_fp : NULL;
+
+    me_error err;
+    memset(&err, 0, sizeof(err));
+    me_status st = me_eval_block(h->kernel, ordered, h->ninputs,
+        (me_mut_buffer){output, descriptor->output_capacity}, &blk, &run_opts, &err);
+    if (status) {
+        status->flags = me_fp.flags;
+        status->supported = me_fp.supported ? 1u : 0u;
+    }
+    if (st != ME_SUCCESS) {
+        b2_core_set_error(error, &err, NULL, (int)st);
+        return b2_core_status_to_artifact_rc(st, 0);
+    }
+    return 0;
+}
+
+static int b2_core_kernel_eval(const void *handle, const b2_artifact_input *inputs, int ninputs,
+    void *output, size_t count, b2_artifact_error *error) {
+    const b2_core_kernel_handle *h = (const b2_core_kernel_handle *)handle;
+    if (!h || ninputs < 0 || (size_t)ninputs != h->ninputs || (!inputs && ninputs > 0)) {
+        b2_core_set_error(error, NULL, "invalid kernel evaluation binding", ME_ERR_SIGNATURE);
+        return -4;
+    }
+    me_buffer ordered[ME_MAX_VARS];
+    unsigned char seen[ME_MAX_VARS];
+    memset(seen, 0, sizeof(seen));
+    for (int k = 0; k < ninputs; k++) {
+        const char *name = inputs[k].name;
+        if (!name) {
+            b2_core_set_error(error, NULL, "missing input binding name", ME_ERR_SIGNATURE);
+            return -4;
+        }
+        int matched = -1;
+        for (size_t slot = 0; slot < h->ninputs; slot++) {
+            if (!strcmp(name, h->input_names[slot])) {
+                matched = (int)slot;
+                break;
+            }
+        }
+        if (matched < 0 || seen[matched]) {
+            b2_core_set_error(error, NULL, "unknown or duplicate input binding", ME_ERR_SIGNATURE);
+            return -4;
+        }
+        if (inputs[k].dtype != h->inputs[matched].dtype || inputs[k].nitems != count) {
+            b2_core_set_error(error, NULL, "input dtype or item count disagrees with signature", ME_ERR_SIGNATURE);
+            return -4;
+        }
+        size_t itemsize = h->inputs[matched].itemsize;
+        if (!itemsize || count > SIZE_MAX / itemsize) {
+            b2_core_set_error(error, NULL, "input buffer capacity overflow", ME_ERR_SIGNATURE);
+            return -4;
+        }
+        seen[matched] = 1;
+        ordered[matched] = (me_buffer){inputs[k].data, count * itemsize};
+    }
+    size_t out_width = h->info.output_itemsize;
+    size_t out_count = (h->info.cardinality == ME_BLOCK_SCALAR && count == 0) ? 1 : count;
+    if (!out_width || out_count > SIZE_MAX / out_width) {
+        b2_core_set_error(error, NULL, "output buffer capacity overflow", ME_ERR_SIGNATURE);
+        return -4;
+    }
+    me_block blk = ME_BLOCK_INITIALIZER;
+    blk.nitems = count;
+    me_error err;
+    memset(&err, 0, sizeof(err));
+    me_status st = me_eval_block(h->kernel, ordered, h->ninputs,
+        (me_mut_buffer){output, out_count * out_width}, &blk, NULL, &err);
+    if (st != ME_SUCCESS) {
+        b2_core_set_error(error, &err, NULL, (int)st);
+        return b2_core_status_to_artifact_rc(st, 0);
+    }
+    return 0;
+}
+#else
+static const void *b2_core_kernel_unwrap(const void *handle) { (void)handle; return NULL; }
+static void b2_core_kernel_free(void *handle) { (void)handle; }
+static int b2_core_kernel_prepare(const char *version, const char *display_source,
+    const char *compile_source, const me_signature *signature, int jit_mode,
+    unsigned forbidden_features, const me_jit_options *jit_options,
+    int inherit_environment, void **out, b2_artifact_error *error) {
+    (void)version; (void)display_source; (void)compile_source;
+    (void)signature; (void)jit_mode; (void)forbidden_features; (void)jit_options;
+    (void)inherit_environment;
+    if (out) {
+        *out = NULL;
+    }
+    if (error) {
+        memset(error, 0, sizeof(*error));
+        snprintf(error->message, sizeof(error->message), "Build with core Menudet kernel support");
+    }
+    return -100;
+}
+static const char *b2_core_kernel_source(const void *handle) { (void)handle; return NULL; }
+static const char *b2_core_kernel_entry(const void *handle) { (void)handle; return NULL; }
+static int b2_core_kernel_ninputs(const void *handle) { (void)handle; return 0; }
+static const char *b2_core_kernel_name(const void *handle, int index) { (void)handle; (void)index; return NULL; }
+static me_dtype b2_core_kernel_dtype(const void *handle, int index) { (void)handle; (void)index; return ME_AUTO; }
+static me_dtype b2_core_kernel_output(const void *handle) { (void)handle; return ME_AUTO; }
+static me_dtype b2_core_kernel_inferred(const void *handle) { (void)handle; return ME_AUTO; }
+static size_t b2_core_kernel_width(const void *handle, int index) { (void)handle; (void)index; return 0; }
+static int b2_core_kernel_cardinality(const void *handle) { (void)handle; return 0; }
+static int b2_core_kernel_rank(const void *handle) { (void)handle; return 0; }
+static int b2_core_kernel_jit(const void *handle) { (void)handle; return 0; }
+static int b2_core_kernel_partitionable(const void *handle) { (void)handle; return -1; }
+static const char *b2_core_kernel_version(const void *handle) { (void)handle; return "unsupported"; }
+static const char *b2_core_kernel_execution_kind(const void *handle) { (void)handle; return "unknown"; }
+static const char *b2_core_kernel_math(const void *handle) { (void)handle; return "unknown"; }
+static const char *b2_core_kernel_math_ulp(const void *handle) { (void)handle; return ""; }
+static const char *b2_core_kernel_fp(const void *handle) { (void)handle; return "unknown"; }
+static int b2_core_kernel_eval_status(const void *handle, const b2_artifact_buffer *inputs, int ninputs,
+    void *output, const b2_artifact_descriptor *descriptor, unsigned mask,
+    b2_artifact_fp_status *status, b2_artifact_error *error) {
+    (void)handle; (void)inputs; (void)ninputs; (void)output; (void)descriptor; (void)mask;
+    if (status) {
+        status->flags = status->supported = 0;
+    }
+    if (error) {
+        memset(error, 0, sizeof(*error));
+        snprintf(error->message, sizeof(error->message), "Build with core Menudet kernel support");
+    }
+    return -100;
+}
+static int b2_core_kernel_eval(const void *handle, const b2_artifact_input *inputs, int ninputs,
+    void *output, size_t count, b2_artifact_error *error) {
+    (void)handle; (void)inputs; (void)ninputs; (void)output; (void)count;
+    if (error) {
+        memset(error, 0, sizeof(*error));
+        snprintf(error->message, sizeof(error->message), "Build with core Menudet kernel support");
+    }
+    return -100;
 }
 #endif
 #endif

@@ -58,6 +58,13 @@ def write(directory):
 
 
 def check(directory):
+    # Reopen the original v1 carrier, not only the writer's v2 re-save.
+    source = directory / "kernel.b2nd"
+    original = source.read_bytes()
+    legacy = blosc2.open(source, mode="r")
+    assert legacy.schunk.meta["b2o"]["version"] == 1
+    np.testing.assert_array_equal(legacy[:], np.array([1, 27, 125, 343], dtype="float64"), strict=True)
+    assert source.read_bytes() == original
     migrated = blosc2.open(directory / "migrated.b2nd", mode="r")
     assert migrated.schunk.meta["b2o"] == {"version": 2, "kind": "menudet"}
     recipe = migrated.kernel.to_recipe()

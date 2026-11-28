@@ -61,6 +61,9 @@ def test_block_scalar_public_syntax(with_pilot, monkeypatch):
     if with_pilot and not AVAILABLE:
         pytest.skip("requires the C-Blosc2 scheduler pilot build")
     monkeypatch.setattr(blosc2_ext, "_b2nd_kernel_pilot_available", lambda: with_pilot)
+    orig_exec_available = getattr(blosc2_ext, "_b2nd_exec_available", None)
+    if orig_exec_available is not None and orig_exec_available():
+        monkeypatch.setattr(blosc2_ext, "_b2nd_exec_available", lambda: False)
     calls = []
     run = blosc2.NDArray._evaluate_b2nd_kernel_pilot
 
@@ -78,6 +81,11 @@ def test_block_scalar_public_syntax(with_pilot, monkeypatch):
 
     wide = group_sum.specialize(x).lazy({"x": x}, partitions=(10000,))
     np.testing.assert_array_equal(wide[:], [21.0])
+    if (
+        orig_exec_available is not None
+        and not getattr(blosc2_ext, "menudet_legacy_adapter_available", lambda: True)()
+    ):
+        monkeypatch.setattr(blosc2_ext, "_b2nd_exec_available", orig_exec_available)
     legacy = blosc2.MenudetKernel.from_json(sums.kernel.to_json(), jit=False)
     np.testing.assert_array_equal(legacy.lazy({"x": x}, partitions=(3,))[:], [3.0, 12.0, 6.0])
     assert len(calls) == int(with_pilot)

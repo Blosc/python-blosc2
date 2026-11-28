@@ -69,6 +69,17 @@ def _needs_stages(nodes, root):
     )
 
 
+def _check_reachable(nodes, root):
+    reachable = {root}
+    for index in range(len(nodes) - 1, -1, -1):
+        if index in reachable:
+            reachable.update(nodes[index].get("args", ()))
+            if nodes[index].get("where") is not None:
+                reachable.add(nodes[index]["where"])
+    if len(reachable) != len(nodes):
+        _fail("Unreachable graph node")
+
+
 def _graph(document, policy, overrides=None):
     _envelope(document, False)
     if document["format"] != "menudet-graph-1":
@@ -102,10 +113,11 @@ def _graph(document, policy, overrides=None):
         if set(node) - common - extra:
             _fail("Unexpected graph node field")
     nodes, names, dtypes = typed_nodes_from_records(records, overrides)
+    _check_reachable(nodes, root)
     staged = _needs_stages(nodes, root)
     if staged and "staged" not in document["requires"]:
         _fail("Graph requires the staged capability")
-    execution, compiler, math_backend = policy
+    execution, compiler, math_backend, fp_mode, accuracy = policy
     plan = blosc2_ext._TypedExecPlan(
         nodes,
         len(names),
@@ -115,6 +127,8 @@ def _graph(document, policy, overrides=None):
         math_backend=math_backend,
         staged=staged,
         integer_powers=document.get("optimization") == "aggressive",
+        fp_mode=fp_mode,
+        math_accuracy=accuracy,
     )
     original_inferred = plan.info()["inferred_dtype"]
     output = document["output"]
@@ -191,7 +205,13 @@ def _menudet(stage, policy, resolved):
     for key in ("fp", "math", "ulp"):
         if key in artifact["semantics"] and not re.search(rf"(?m)^\s*#\s*me:{key}\s*=", header):
             source = f"# me:{key}={artifact['semantics'][key]}\n" + source
-    execution, compiler, math_backend = policy
+    execution, compiler, math_backend, fp_mode, accuracy = policy
+    authored_math = artifact["semantics"].get("math")
+    match = re.search(r"(?m)^\s*#\s*me:math\s*=\s*(\w+)", header)
+    if match:
+        authored_math = match[1]
+    if authored_math is not None and authored_math != "sleef":
+        accuracy = 0  # A runtime preference cannot attach SLEEF ULP to authored system math.
     plan = blosc2_ext._TypedExecPlan.from_source(
         artifact["language"]["version"].encode(),
         source.encode(),
@@ -203,6 +223,8 @@ def _menudet(stage, policy, resolved):
         compiler=compiler,
         math_backend=math_backend,
         integer_powers=artifact["semantics"].get("integer_powers") == "multiply",
+        fp_mode=fp_mode,
+        math_accuracy=accuracy,
     )
     return plan, tuple(inputs), inputs
 
@@ -298,6 +320,13 @@ def prepare_typed_document(data, handle_type, *, jit, require_jit, allow_where=T
     if not 0 < len(data) <= 1024**2:
         _fail("Invalid graph document size")
     configured, execution, compiler, math_backend = typed_graph_policy(jit, require_jit)
+    preparation_policy = (
+        execution,
+        compiler,
+        math_backend,
+        configured["typed_fp_mode"],
+        configured["typed_math_accuracy"],
+    )
     try:
         document = json.loads(
             data, object_pairs_hook=_object, parse_constant=lambda _: _fail("Nonfinite JSON literal")
@@ -306,9 +335,9 @@ def prepare_typed_document(data, handle_type, *, jit, require_jit, allow_where=T
             _fail("Invalid graph document")
         with blosc2_ext._TypedFPScope():
             result = (
-                _staged(document, (execution, compiler, math_backend))
+                _staged(document, preparation_policy)
                 if document.get("format") == "menudet-staged-graph-1"
-                else _graph(document, (execution, compiler, math_backend))
+                else _graph(document, preparation_policy)
             )
     except MenudetError:
         raise
@@ -326,5 +355,7 @@ def prepare_typed_document(data, handle_type, *, jit, require_jit, allow_where=T
     handle._import_reduction = reduction
     handle._import_inferred_dtype = inferred
     handle._jit_backend, handle._math_backend = configured["jit_backend"], configured["math_backend"]
+    handle._fp_mode = configured["typed_fp_mode"]
+    handle._math_accuracy = configured["typed_math_accuracy"]
     handle._integer_powers = document.get("optimization") == "aggressive"
     return handle

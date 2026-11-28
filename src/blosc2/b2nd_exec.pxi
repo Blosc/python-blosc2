@@ -22,6 +22,9 @@ cdef extern from "b2nd_exec_bridge.h":
         int64_t shape[16]
     ctypedef struct b2_exec_info:
         int dtype, reduction, identity, map_dtype, reducer, partitionable, has_jit
+        const char *fp_mode
+        const char *math_backend
+        const char *sleef_accuracy
         size_t itemsize, ninputs, nitems, tile_items, mapped_bytes, reducer_bytes, output_items
         size_t plan_metadata_bytes, schedule_metadata_bytes
         size_t ndim, broadcast_gather_bytes
@@ -48,6 +51,7 @@ cdef extern from "b2nd_exec_bridge.h":
         size_t evaluated_groups, max_group_items
     ctypedef struct b2_exec_reduce_opts:
         int has_axes, keepdims, has_initial, initial_dtype, initial_weak
+        int has_where, accumulator
         size_t naxes, initial_size
         int axes[16]
         unsigned char initial_scalar[16]
@@ -87,7 +91,7 @@ cdef extern from "b2nd_exec_bridge.h":
         size_t write_calls, write_items, max_write_items, written_bytes
         size_t index_buffer_bytes, output_buffer_bytes
     int b2_exec_available()
-    int b2_exec_prepare(const b2_exec_node *, size_t, size_t, uint32_t, int, int, int, int, void **, me_error *) nogil
+    int b2_exec_prepare(const b2_exec_node *, size_t, size_t, uint32_t, int, int, int, int, int, int, void **, me_error *) nogil
     void b2_exec_free(void *)
     void b2_exec_schedule_free(void *)
     int b2_exec_describe(const void *, b2_exec_info *)
@@ -114,6 +118,8 @@ cdef extern from "b2nd_exec_bridge.h":
     int b2_exec_artifact_has_core(const void *)
     int b2_exec_prepare_artifact_kernel(const void *, int, const b2_exec_reduce_opts *,
                                         void **, me_error *) nogil
+    int b2_exec_prepare_core_kernel(const void *, int, const b2_exec_reduce_opts *,
+                                    void **, me_error *) nogil
     int b2_exec_specialize_partitions(const void *, const b2_exec_meta *, size_t,
                                       const b2_exec_partition_spec *, size_t,
                                       void **, me_error *) nogil
@@ -139,7 +145,7 @@ cdef extern from "b2nd_exec_bridge.h":
         size_t entered_stages, intermediate_bytes, live_intermediate_bytes
         size_t failed_stage, failed_node
         me_fp_status fp
-    int b2_st_prepare(const b2_exec_node *, size_t, size_t, uint32_t, int, int, int, int,
+    int b2_st_prepare(const b2_exec_node *, size_t, size_t, uint32_t, int, int, int, int, int, int,
                       void **, b2_st_diag *, me_error *) nogil
     void b2_st_free(void *)
     void b2_st_schedule_free(void *)
@@ -148,7 +154,7 @@ cdef extern from "b2nd_exec_bridge.h":
     int b2_st_assemble(const void *const *, const int *, const size_t *, size_t, size_t,
                        void **, b2_st_diag *, me_error *) nogil
     int b2_st_child(const void *, size_t, void **, int *, size_t *, size_t *)
-    int b2_st_source(const char *, const char *, const me_signature *, int, int, int,
+    int b2_st_source(const char *, const char *, const me_signature *, int, int, int, int, int,
                      void **, me_error *) nogil
     int b2_st_specialize(const void *, const b2_exec_meta *, size_t, size_t, size_t, size_t,
                          void **, b2_st_diag *, me_error *) nogil
@@ -163,13 +169,18 @@ cdef extern from "b2nd_exec_bridge.h":
 def _typed_exec_error(status, message, flags, supported, line, column):
     if status == -6:
         return MemoryError(message)
-    if status == -2:
-        return NotImplementedError(message)
+    if status == -2 and "JIT is required" not in message:
+        from blosc2.menudet_kernel import _TypedGraphUnsupported
+
+        return _TypedGraphUnsupported(message, status="unsupported_requirement", native_status=status)
     # MenudetError is a ValueError: existing narrower handlers keep working,
     # while callers of the graph facade can catch its public exception type.
     from blosc2.menudet_kernel import MenudetError
 
-    statuses = {-1: "invalid_graph", -3: "invalid_signature", -5: "evaluation_error"}
+    statuses = {
+        -1: "invalid_graph", -2: "unsupported_requirement",
+        -3: "invalid_signature", -5: "evaluation_error",
+    }
     exception = MenudetError(
         message or "Invalid typed execution request",
         status=statuses.get(status, "native_error"),
@@ -420,7 +431,7 @@ cdef class _TypedExecPlan:
 
     def __cinit__(self, nodes=None, size_t ninputs=0, uint32_t root=0, int execution=0,
                   int jit_compiler=0, int math_backend=0, bint staged=False,
-                  bint integer_powers=False):
+                  bint integer_powers=False, int fp_mode=0, int math_accuracy=0):
         cdef b2_exec_node native[1024]
         cdef me_error error
         cdef size_t count
@@ -512,11 +523,11 @@ cdef class _TypedExecPlan:
         with nogil:
             if staged:
                 rc = b2_st_prepare(native, count, ninputs, root, execution,
-                                   jit_compiler, math_backend, <int>integer_powers,
+                                   jit_compiler, math_backend, <int>integer_powers, fp_mode, math_accuracy,
                                    &self._plan, &diag, &error)
             else:
                 rc = b2_exec_prepare(native, count, ninputs, root, execution,
-                                     jit_compiler, math_backend, <int>integer_powers,
+                                     jit_compiler, math_backend, <int>integer_powers, fp_mode, math_accuracy,
                                      &self._plan, &error)
         if rc:
             if staged:
@@ -568,7 +579,7 @@ cdef class _TypedExecPlan:
     @staticmethod
     def from_source(bytes version, bytes source, inputs, captures, output_dtype,
                     casting="unsafe", int execution=0, int compiler=0, int math_backend=0,
-                    bint integer_powers=False):
+                    bint integer_powers=False, int fp_mode=0, int math_accuracy=0):
         cdef me_input_spec slots[128]
         cdef me_capture constants[128]
         cdef me_signature signature
@@ -610,7 +621,8 @@ cdef class _TypedExecPlan:
         cdef const char *v = version
         cdef const char *text = source
         with nogil:
-            rc = b2_st_source(v, text, &signature, execution, compiler, math_backend, &result._plan, &error)
+            rc = b2_st_source(v, text, &signature, execution, compiler, math_backend,
+                              fp_mode, math_accuracy, &result._plan, &error)
         if rc:
             raise_exec_error(rc, &error)
         if b2_exec_describe(result._plan, &result._info):
@@ -658,6 +670,9 @@ cdef class _TypedExecPlan:
                 "identity": bool(self._info.identity),
                 "partitionable": bool(self._info.partitionable),
                 "has_jit": bool(self._info.has_jit),
+                "fp_mode": (<bytes>self._info.fp_mode).decode() if self._info.fp_mode != NULL else None,
+                "math_backend": (<bytes>self._info.math_backend).decode() if self._info.math_backend != NULL else None,
+                "sleef_accuracy": (<bytes>self._info.sleef_accuracy).decode() if self._info.sleef_accuracy != NULL else None,
                 "axes": axes, "keepdims": bool(self._info.keepdims),
                 "initial": bool(self._info.has_initial),
                 "where": bool(self._info.has_where),

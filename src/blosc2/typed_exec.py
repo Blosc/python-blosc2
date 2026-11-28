@@ -193,7 +193,7 @@ def lower_typed_graph(expression, operands, *, input_dtypes=None, syntax=None, a
     except (ValueError, KeyError, TypeError):
         raise TypedGraphNotAdmitted from None
     names = tuple(adapter.arrays)
-    if not names or len(names) > 128 or len(adapter.nodes) > 1024:
+    if len(names) > 128 or len(adapter.nodes) > 1024:
         raise TypedGraphNotAdmitted
     slots = {name: slot for slot, name in enumerate(names)}
     nodes, depths = [], []
@@ -251,7 +251,16 @@ def lower_typed_graph(expression, operands, *, input_dtypes=None, syntax=None, a
 
 @lru_cache(maxsize=32)
 def prepare_typed_plan(
-    nodes, ninputs, root, execution=0, jit_compiler=0, math_backend=0, staged=False, integer_powers=False
+    nodes,
+    ninputs,
+    root,
+    execution=0,
+    jit_compiler=0,
+    math_backend=0,
+    staged=False,
+    integer_powers=False,
+    fp_mode=0,
+    math_accuracy=0,
 ):
     # Cache only descriptor semantics/exact captures. Neither arrays nor results
     # reach this key or the native plan.
@@ -298,6 +307,8 @@ def prepare_typed_plan(
         math_backend=math_backend,
         staged=staged,
         integer_powers=integer_powers,
+        fp_mode=fp_mode,
+        math_accuracy=math_accuracy,
     )
 
 

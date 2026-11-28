@@ -158,6 +158,7 @@ def test_typed_partition_proof_rejects_checked_weak_conversion():
         np.testing.assert_array_equal(out_i64, np.full(4, -77, dtype=np.int64))
 
 
+@pytest.mark.usefixtures("legacy_graph_adapter")
 def test_named_typed_facade_large_tile_and_gather_at_workers_1():
     n = 16384
     x = np.arange(n, dtype="float64")
@@ -431,6 +432,7 @@ def test_typed_sum_order_and_empty_identities():
 @pytest.mark.parametrize(
     "expression", ["x + .5", "x + 1.", "x * -0.0", "min(x + y * 3)", "sum(x)", "prod(x)", "max(x)"]
 )
+@pytest.mark.usefixtures("legacy_graph_adapter")
 def test_named_typed_graph_matches_explicit_adapter(expression):
     inputs = {"x": np.arange(1, 7, dtype="float64").reshape(2, 3), "y": np.full((2, 3), 2, dtype="float64")}
     if "y" not in expression:
@@ -529,6 +531,7 @@ def test_typed_frontend_scope_restores_after_parser_exception():
     assert plan.inferred_dtype == np.dtype("int64")
 
 
+@pytest.mark.usefixtures("legacy_graph_adapter")
 def test_named_typed_graph_rejects_unreachable_signature():
     for executor in ("adapter", "c-blosc2"):
         with pytest.raises(ValueError, match="unreachable"):
@@ -537,6 +540,7 @@ def test_named_typed_graph_rejects_unreachable_signature():
             )
 
 
+@pytest.mark.usefixtures("legacy_graph_adapter")
 def test_named_typed_graph_fp_raise_parity():
     from blosc2.menudet_kernel import MenudetError
 
@@ -550,6 +554,7 @@ def test_named_typed_graph_fp_raise_parity():
     assert failures[0] == failures[1] == ("evaluation_error", {"flags": 4, "supported": True})
 
 
+@pytest.mark.usefixtures("legacy_graph_adapter")
 def test_typed_parallel_jobs_preserve_values_and_bound_scratch():
     values = np.random.default_rng(7).integers(-(2**40), 2**40, size=200_003)
     for expression in ("min(x + 1)", "max(x)", "x * 2 + 1"):
@@ -569,6 +574,7 @@ def test_typed_parallel_jobs_preserve_values_and_bound_scratch():
     assert report["tasks"] * report["temporary_bytes"] <= 65536
 
 
+@pytest.mark.usefixtures("legacy_graph_adapter")
 def test_typed_ordered_reduction_rejects_partitioning():
     values = np.arange(4096, dtype="int64")
     for expression in ("sum(x)", "prod(x + 1)"):
@@ -582,6 +588,7 @@ def test_typed_ordered_reduction_rejects_partitioning():
         ).evaluate({"x": values})
 
 
+@pytest.mark.usefixtures("legacy_graph_adapter")
 def test_typed_parallel_float_min_unions_flags():
     values = np.array([1.0, np.nan] * 4096, dtype="float64")
     typed = NativeGraph.from_expression("min(x)", {"x": "float64"}, jit=False, _executor="c-blosc2")
@@ -617,6 +624,7 @@ def test_typed_resident_rejects_mixed_storage_before_prepare(monkeypatch):
         ("prod(x)", np.full(10, 2, dtype="int8")),
     ],
 )
+@pytest.mark.usefixtures("legacy_graph_adapter")
 def test_typed_narrow_sum_prod_overflow_matches_adapter(expression, values):
     expected = NativeGraph.from_expression(
         expression, {"x": values.dtype.name}, jit=False, _executor="adapter"
@@ -631,6 +639,7 @@ def test_typed_narrow_sum_prod_overflow_matches_adapter(expression, values):
 
 @pytest.mark.parametrize("reducer", ["any", "all"])
 @pytest.mark.parametrize("dtype", ["bool", "int8", "int64", "float32", "float64"])
+@pytest.mark.usefixtures("legacy_graph_adapter")
 def test_typed_truth_reductions_and_empty_domains(reducer, dtype):
     values = (np.arange(15) % 3).astype(dtype).reshape(3, 5)
     expression = f"{reducer}(x * 2)"
@@ -660,6 +669,7 @@ def test_typed_truth_reductions_and_empty_domains(reducer, dtype):
     assert expr._native_execution_report["route"] == "c-blosc2-typed-resident"
 
 
+@pytest.mark.usefixtures("legacy_graph_adapter")
 def test_typed_truth_non_short_circuit_fp_flags():
     for reducer, init_val in (("any", 1.0), ("all", 0.0)):
         x = np.full(16, init_val, dtype="float64")
@@ -686,6 +696,7 @@ def test_typed_truth_non_short_circuit_fp_flags():
     ("shape_a", "shape_b"),
     [((), (2, 3)), ((3, 1), (1, 5)), ((2, 0, 3), (3,))],
 )
+@pytest.mark.usefixtures("legacy_graph_adapter")
 def test_typed_resident_broadcast_maps_and_reductions(shape_a, shape_b):
     a = np.arange(np.prod(shape_a, dtype=int), dtype="int64").reshape(shape_a)
     b = (np.arange(np.prod(shape_b, dtype=int), dtype="int64") + 1).reshape(shape_b)
@@ -710,6 +721,7 @@ def test_typed_resident_broadcast_maps_and_reductions(shape_a, shape_b):
         assert expr._native_execution_report["route"] == "c-blosc2-typed-resident"
 
 
+@pytest.mark.usefixtures("legacy_graph_adapter")
 def test_typed_strided_unaligned_and_non_native_views():
     base_x = np.arange(24, dtype=">f8").reshape(4, 6)
     raw = bytearray(1 + 24 * 4)
@@ -744,6 +756,7 @@ def test_typed_strided_unaligned_and_non_native_views():
     np.testing.assert_array_equal(out, -11)
 
 
+@pytest.mark.usefixtures("legacy_graph_adapter")
 def test_typed_axes_keepdims_and_empty_reductions():
     x = np.arange(24, dtype="int32").reshape(2, 3, 4)
     cases = [
@@ -778,6 +791,7 @@ def test_typed_axes_keepdims_and_empty_reductions():
     assert typed_e.evaluate({"x": empty}).tobytes() == adapter_e.evaluate({"x": empty}).tobytes()
 
 
+@pytest.mark.usefixtures("legacy_graph_adapter")
 def test_typed_initial_values_and_runtime_conversion():
     x = np.array([[1, 2], [3, 4]], dtype="int16")
     for expression in (
@@ -811,6 +825,7 @@ def test_typed_initial_values_and_runtime_conversion():
     assert failure.value.status == "evaluation_error"
 
 
+@pytest.mark.usefixtures("legacy_graph_adapter")
 def test_typed_pairwise_sum_opt_in_invariance():
     values = (np.arange(1, 301, dtype="float64") * 0.1) + 1e-7
     for expression in ("sum(x)", "sum(x, initial=0.25)"):
