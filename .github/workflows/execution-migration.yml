@@ -4,6 +4,11 @@ on:
   push:
     branches: [next]
   workflow_dispatch:
+    inputs:
+      performance:
+        description: Run diagnostic interleaved Release benchmarks (not a stable-runner gate)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -39,7 +44,7 @@ jobs:
 
   native:
     needs: checkpoint
-    name: C4 ${{ matrix.os }} ${{ matrix.cc }} ${{ matrix.mode }}
+    name: C4 ${{ matrix.os }} ${{ matrix.consumer_cc || matrix.cc }} ${{ matrix.mode }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -48,9 +53,11 @@ jobs:
         include:
           - {os: ubuntu-latest, cc: gcc, cxx: g++, mode: release}
           - {os: ubuntu-latest, cc: clang, cxx: clang++, mode: sanitizer}
-          - {os: windows-latest, cc: cl, cxx: cl, mode: release}
+          # MiniExpr requires clang-cl; MSVC independently compiles installed C
+          # consumers and the compression-only library, not the numerical core.
+          - {os: windows-latest, cc: clang-cl, cxx: cl, consumer_cc: cl, mode: release}
           - {os: windows-latest, cc: clang-cl, cxx: clang-cl, mode: release}
-          - {os: macos-14, cc: clang, cxx: clang++, mode: release}
+          - {os: macos-latest, cc: clang, cxx: clang++, mode: release}
     env:
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
@@ -80,7 +87,12 @@ jobs:
         shell: bash
         run: |
           extra=()
-          if [ "${{ matrix.mode }}" = sanitizer ]; then extra+=(--sanitizers); fi
+          if [ -n "${{ matrix.consumer_cc }}" ]; then
+            extra+=(--consumer-compiler "${{ matrix.consumer_cc }}")
+          fi
+          if [ "${{ matrix.mode }}" = sanitizer ]; then
+            extra+=(--sanitizers --phase san-exec-plan --phase san-exec-storage --phase san-exec-stages)
+          fi
           python sources/python-blosc2/scripts/qualify_execution_platform.py \
             --sources "$GITHUB_WORKSPACE/sources" --work "$RUNNER_TEMP/execution-native" \
             --results "$RUNNER_TEMP/execution-results" --compiler "${{ matrix.cc }}" \
@@ -89,7 +101,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: execution-native-${{ matrix.os }}-${{ matrix.cc }}-${{ matrix.mode }}
+          name: execution-native-${{ matrix.os }}-${{ matrix.consumer_cc || matrix.cc }}-${{ matrix.mode }}
           path: ${{ runner.temp }}/execution-results
 
   python:
@@ -103,12 +115,10 @@ jobs:
         include:
           - {os: ubuntu-latest, cc: gcc, cxx: g++, artifact: off}
           - {os: ubuntu-latest, cc: gcc, cxx: g++, artifact: on}
-          - {os: windows-latest, cc: cl, cxx: cl, artifact: off}
-          - {os: windows-latest, cc: cl, cxx: cl, artifact: on}
           - {os: windows-latest, cc: clang-cl, cxx: clang-cl, artifact: off}
           - {os: windows-latest, cc: clang-cl, cxx: clang-cl, artifact: on}
-          - {os: macos-14, cc: clang, cxx: clang++, artifact: off}
-          - {os: macos-14, cc: clang, cxx: clang++, artifact: on}
+          - {os: macos-latest, cc: clang, cxx: clang++, artifact: off}
+          - {os: macos-latest, cc: clang, cxx: clang++, artifact: on}
     env:
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
@@ -151,6 +161,96 @@ jobs:
           path: |
             ${{ runner.temp }}/execution-results
             ${{ runner.temp }}/execution-python/wheels-*/*.whl
+
+  performance:
+    if: github.event_name == 'workflow_dispatch' && inputs.performance
+    needs: checkpoint
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CMAKE_GENERATOR: Ninja
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: sources/python-blosc2
+      - uses: actions/checkout@v7
+        with:
+          repository: Blosc/miniexpr
+          ref: ${{ needs.checkpoint.outputs.miniexpr }}
+          path: sources/miniexpr
+      - uses: actions/checkout@v7
+        with:
+          repository: Blosc/c-blosc2
+          ref: ${{ needs.checkpoint.outputs.blosc2 }}
+          path: sources/c-blosc2
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Dependencies
+        working-directory: sources/python-blosc2
+        run: python -m pip install --upgrade pip ninja cmake scikit-build-core cython "numpy>=2.1" --group test
+      - name: Build and qualify Release comparison wheels
+        shell: bash
+        run: |
+          python sources/python-blosc2/scripts/qualify_execution_platform.py \
+            --sources "$GITHUB_WORKSPACE/sources" --work "$RUNNER_TEMP/execution-performance" \
+            --results "$RUNNER_TEMP/execution-results" --phase wheel-off --phase wheel-standard
+      - name: Interleave candidate and reference
+        shell: bash
+        run: |
+          python sources/python-blosc2/scripts/qualify_execution_performance.py \
+            --candidate "$RUNNER_TEMP/execution-performance/package-off" \
+            --reference "$RUNNER_TEMP/execution-performance/package-standard" \
+            --results "$RUNNER_TEMP/execution-results/performance"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: execution-performance-diagnostic
+          path: ${{ runner.temp }}/execution-results
+
+  wasm-native:
+    needs: checkpoint
+    name: C4 WASM installed static consumers
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: sources/python-blosc2
+      - uses: actions/checkout@v7
+        with:
+          repository: Blosc/miniexpr
+          ref: ${{ needs.checkpoint.outputs.miniexpr }}
+          path: sources/miniexpr
+      - uses: actions/checkout@v7
+        with:
+          repository: Blosc/c-blosc2
+          ref: ${{ needs.checkpoint.outputs.blosc2 }}
+          path: sources/c-blosc2
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: '5.0.0'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - run: python -m pip install ninja cmake
+      - name: Bounded interpreter-only C4 compile, install and runtime
+        shell: bash
+        run: |
+          python sources/python-blosc2/scripts/qualify_execution_platform.py \
+            --sources "$GITHUB_WORKSPACE/sources" --work "$RUNNER_TEMP/execution-wasm" \
+            --results "$RUNNER_TEMP/execution-results" \
+            --wasm-toolchain "$EMSDK/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake" \
+            --phase public-api --phase consumers --phase compression
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: execution-wasm-native
+          path: ${{ runner.temp }}/execution-results
 
   wasm:
     needs: checkpoint

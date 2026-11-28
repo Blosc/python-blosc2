@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 
 
-def audit(prefix, results, numerical):
+def audit(prefix, results, numerical, wasm=False):
     results.mkdir(parents=True, exist_ok=True)
     header = next(prefix.rglob("b2nd_exec.h"))
     companion = list(prefix.rglob("b2nd_exec_kernel.h"))
@@ -20,10 +20,14 @@ def audit(prefix, results, numerical):
     libraries = [
         p
         for p in prefix.rglob("*")
-        if p.is_file() and "blosc2" in p.name and p.suffix in (".dll", ".dylib", ".so")
+        if p.is_file()
+        and "blosc2" in p.name
+        and p.suffix in ((".a",) if wasm else (".dll", ".dylib", ".so"))
     ]
     library = next(iter(libraries))
-    if os.name == "nt":
+    if wasm:
+        command = ["emnm", "--defined-only", str(library)]
+    elif os.name == "nt":
         command = ["dumpbin", "/exports", str(library)]
     elif platform.system() == "Darwin":
         command = ["nm", "-gU", str(library)]
@@ -42,7 +46,11 @@ def audit(prefix, results, numerical):
         if platform.system() == "Darwin"
         else ["ldd", str(library)]
     )
-    (results / "dependencies.txt").write_text(subprocess.check_output(dependencies, text=True))
+    (results / "dependencies.txt").write_text(
+        "WASM static archive; dependencies verified by external link/runtime consumer\n"
+        if wasm
+        else subprocess.check_output(dependencies, text=True)
+    )
     pc_files = list(prefix.rglob("blosc2.pc"))
     assert pc_files, "Missing installed blosc2.pc"
     if shutil.which("pkg-config"):
@@ -73,8 +81,9 @@ def main():
     parser.add_argument("--prefix", type=Path, required=True)
     parser.add_argument("--results", type=Path, required=True)
     parser.add_argument("--numerical", choices=("on", "off"), required=True)
+    parser.add_argument("--wasm", action="store_true")
     args = parser.parse_args()
-    audit(args.prefix.resolve(), args.results.resolve(), args.numerical == "on")
+    audit(args.prefix.resolve(), args.results.resolve(), args.numerical == "on", args.wasm)
 
 
 if __name__ == "__main__":

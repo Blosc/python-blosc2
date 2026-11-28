@@ -19,6 +19,7 @@ class QualificationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / "status.json").write_text('{"stale": "passed"}')
             code = run_phases(
                 {"bad": fail, "good": lambda log: visited.append("good")},
                 ["bad", "good"],
@@ -28,6 +29,7 @@ class QualificationTests(unittest.TestCase):
             assert visited == ["good"]
             status = json.loads((root / "status.json").read_text())
             assert status["good"] == "passed"
+            assert "stale" not in status
             assert "fixture" in status["bad"]
             assert "intentional failure" in (root / "bad.log").read_text()
 

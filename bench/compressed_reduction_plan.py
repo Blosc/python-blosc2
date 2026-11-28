@@ -9,16 +9,15 @@ This local benchmark is not the ARM64/x86-64 production performance gate.
 import argparse
 import math
 import statistics
+import sys
+import sysconfig
 import time
-
-import numpy as np
-
-import blosc2
-from blosc2.graph_plan import NativeGraph
+from pathlib import Path
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--package", type=Path, help="Isolated installed wheel (use Python -S)")
     parser.add_argument("--shape", type=int, nargs=2, default=(1001, 1003))
     parser.add_argument("--chunks", type=int, nargs=2, default=(128, 128))
     parser.add_argument("--blocks", type=int, nargs=2, default=(32, 32))
@@ -26,6 +25,17 @@ def main():
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument("--cache-budgets", type=int, nargs="+", default=(1, 8))
     args = parser.parse_args()
+    if args.package:
+        args.package = args.package.resolve()
+        sys.path[:0] = [str(args.package), sysconfig.get_path("purelib"), sysconfig.get_path("platlib")]
+    import numpy as np
+
+    import blosc2
+    from blosc2.graph_plan import NativeGraph
+
+    if args.package:
+        assert Path(blosc2.__file__).is_relative_to(args.package)
+        assert Path(blosc2.blosc2_ext.__file__).is_relative_to(args.package)
     if min(*args.shape, *args.chunks, *args.blocks, args.tile, args.repeat, *args.cache_budgets) <= 0:
         parser.error("shapes, tile, repeat and cache-budget multiples must be positive")
     if not getattr(blosc2.blosc2_ext, "_b2nd_exec_available", lambda: False)():

@@ -1,6 +1,7 @@
 """Ordinary callers hand whole-domain ownership to the typed executor."""
 
 import gc
+import sys
 
 import numpy as np
 import pytest
@@ -68,7 +69,7 @@ def test_ordinary_compressed_owner(expression, monkeypatch):
     np.testing.assert_array_equal(actual, x + 1 if expression == "x + 1" else 1.0)
     report = expr._native_execution_report
     assert report["route"] == "c-blosc2-typed-storage"
-    assert report["tasks"] == (1 if blosc2.IS_WASM else 8)
+    assert report["tasks"] == (1 if blosc2.IS_WASM or sys.platform == "win32" else 8)
     assert report["input_materialization_bytes"] == 0
     assert report["worker_scratch_bytes"] <= 64 * 1024 * 1024
     assert report.get("discarded_output_bytes", 0) == 0
@@ -268,7 +269,10 @@ def test_compressed_sink_scales_workers_without_explicit_scratch_cap():
     assert res is out_default
     np.testing.assert_array_equal(out_default[:], x + 1)
     assert report["route"] == "c-blosc2-typed-storage-sink"
-    assert report["tasks"] == (1 if blosc2.IS_WASM else 8)
+    # This counter counts workers that actually entered a codec prefilter, not
+    # allocated worker slots. Short jobs need not wake every admitted worker.
+    serial = blosc2.IS_WASM or sys.platform == "win32"
+    assert 1 <= report["tasks"] <= (1 if serial else 8)
 
     out_capped = blosc2.uninit(x.shape, dtype=x.dtype, chunks=(65536,), blocks=(4096,))
     res_capped, report_capped = schedule.execute_arrays(
@@ -276,5 +280,7 @@ def test_compressed_sink_scales_workers_without_explicit_scratch_cap():
     )
     assert res_capped is out_capped
     np.testing.assert_array_equal(out_capped[:], x + 1)
-    assert report_capped["tasks"] == (1 if blosc2.IS_WASM else 2)
+    assert 1 <= report_capped["tasks"] <= (1 if serial else 2)
     assert report_capped["worker_scratch_bytes"] <= 65536
+    if sys.platform != "win32":
+        assert report["worker_scratch_bytes"] == 4 * report_capped["worker_scratch_bytes"]

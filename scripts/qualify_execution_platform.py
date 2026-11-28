@@ -17,7 +17,9 @@ from pathlib import Path
 
 def run_phases(phases, selected, results):
     status_path = results / "status.json"
-    status = json.loads(status_path.read_text()) if status_path.exists() else {}
+    # Never carry passing phases from a different revision/configuration into
+    # the current invocation's evidence.
+    status = {}
     failed = False
     for name in selected:
         print(f"{name}: starting", flush=True)
@@ -45,7 +47,30 @@ def toolchain_options(compiler, sanitizers):
     return options
 
 
-def main():
+def wasm_options(toolchain):
+    if not toolchain:
+        return []
+    return [
+        "-DCMAKE_TOOLCHAIN_FILE=" + str(toolchain.resolve()),
+        "-DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH",
+        "-DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH",
+        "-DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH",
+        "-DCMAKE_CROSSCOMPILING_EMULATOR=node",
+        # The bounded planner/compiler uses more than Emscripten's 64 KiB
+        # default stack. Keep the runtime budget explicit and detect overflow.
+        "-DCMAKE_EXE_LINKER_FLAGS=-sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=16777216 -sSTACK_OVERFLOW_CHECK=2",
+        "-DBUILD_SHARED=OFF",
+        "-DBUILD_SHARED_LIBS=OFF",
+        "-DMINIEXPR_BUILD_SHARED=OFF",
+        "-DMINIEXPR_ENABLE_TCC_JIT=OFF",
+        "-DWITH_ZLIB_OPTIM=OFF",
+        "-DWITH_OPTIM=OFF",
+        "-DWITH_RUNTIME_CPU_DETECTION=OFF",
+        "-DEXECUTION_STATIC_CONSUMER=ON",
+    ]
+
+
+def main():  # noqa: C901 - sequential build phases share the invocation's isolated paths
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sources", type=Path, required=True)
     parser.add_argument("--work", type=Path, required=True)
@@ -53,7 +78,11 @@ def main():
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--phase", action="append", default=[])
     parser.add_argument("--compiler", help="C compiler; default is CMake's selected compiler")
+    parser.add_argument("--consumer-compiler", help="Independent C ABI consumer/stub compiler (e.g. MSVC)")
     parser.add_argument("--sanitizers", action="store_true", help="Instrument native C4 builds")
+    parser.add_argument(
+        "--wasm-toolchain", type=Path, help="Emscripten toolchain; bounded static C4 runtime"
+    )
     args = parser.parse_args()
     sources, work, results = (p.resolve() for p in (args.sources, args.work, args.results))
     work.mkdir(parents=True, exist_ok=True)
@@ -82,7 +111,9 @@ def main():
                 "executable": sys.executable,
                 "conda_environment": os.environ.get("CONDA_DEFAULT_ENV"),
                 "compiler": args.compiler,
+                "consumer_compiler": args.consumer_compiler,
                 "sanitizers": args.sanitizers,
+                "wasm_toolchain": str(args.wasm_toolchain) if args.wasm_toolchain else None,
                 "revisions": {
                     name: subprocess.check_output(
                         ["git", "-C", str(sources / name), "rev-parse", "HEAD"], text=True
@@ -108,7 +139,14 @@ def main():
 
     def build(source, name, options, log, test=True):
         directory = work / name
-        options = [*options, *toolchain_options(args.compiler, args.sanitizers)]
+        compiler = (
+            args.consumer_compiler
+            if args.consumer_compiler
+            and name in ("consumers", "public-consumer", "compression", "compression-consumer")
+            else args.compiler
+        )
+        options = ["-DCMAKE_C_STANDARD=11", *options, *toolchain_options(compiler, args.sanitizers)]
+        options += wasm_options(args.wasm_toolchain)
         run(["cmake", "-S", source, "-B", directory, "-G", "Ninja", *options], log)
         run(["cmake", "--build", directory, "--parallel", args.jobs], log)
         if test:
@@ -131,9 +169,9 @@ def main():
 
     core_options = [
         "-DCMAKE_BUILD_TYPE=Release",
-        "-DMINIEXPR_BUILD_TESTS=ON",
         "-DMINIEXPR_BUILD_EXAMPLES=OFF",
         "-DMINIEXPR_BUILD_BENCH=OFF",
+        "-DMINIEXPR_BUILD_TESTS=" + ("OFF" if args.wasm_toolchain else "ON"),
     ]
 
     def core(log, artifact):
@@ -145,12 +183,14 @@ def main():
                 "-DMINIEXPR_BUILD_ARTIFACT=" + artifact.upper(),
             ],
             log,
+            test=not args.wasm_toolchain,
         )
 
     def wheel(log, kind):
         directory = work / ("wheel-" + kind)
         wheels = work / ("wheels-" + kind)
         package = work / ("package-" + kind)
+        link_options = ["-Ccmake.define.CMAKE_MODULE_LINKER_FLAGS=/MAP"] if os.name == "nt" else []
         run(
             [
                 sys.executable,
@@ -168,6 +208,7 @@ def main():
                 "-Ccmake.define.MINIEXPR_BUILD_ARTIFACT=" + ("OFF" if kind == "off" else "ON"),
                 "-Ccmake.define.FETCHCONTENT_SOURCE_DIR_MINIEXPR=" + str(sources / "miniexpr"),
                 "-Ccmake.define.FETCHCONTENT_SOURCE_DIR_BLOSC2=" + str(sources / "c-blosc2"),
+                *link_options,
             ],
             log,
             sources / "python-blosc2",
@@ -186,6 +227,21 @@ def main():
             log,
         )
         if kind != "standard":
+            run(
+                [
+                    sys.executable,
+                    sources / "python-blosc2/scripts/audit_execution_wheel.py",
+                    "--package",
+                    package,
+                    "--build",
+                    directory,
+                    "--results",
+                    results / ("wheel-" + kind + "-audit"),
+                    "--artifact",
+                    kind,
+                ],
+                log,
+            )
             run(
                 [
                     sys.executable,
@@ -249,7 +305,23 @@ raise SystemExit(pytest.main(["-n", "0", "--override-ini=addopts=", "--tb=short"
                 "-DCMAKE_INSTALL_PREFIX=" + str(work / "compression-prefix"),
             ],
             log,
+            test=not args.wasm_toolchain,
         )
+        if args.wasm_toolchain:
+            run(
+                [
+                    "ctest",
+                    "--test-dir",
+                    directory,
+                    "-R",
+                    "test_b2nd_exec_api",
+                    "--no-tests=error",
+                    "--output-on-failure",
+                    "--timeout",
+                    "180",
+                ],
+                log,
+            )
         run(["cmake", "--install", directory], log)
         run(
             [
@@ -261,6 +333,7 @@ raise SystemExit(pytest.main(["-n", "0", "--override-ini=addopts=", "--tb=short"
                 results / "compression-audit",
                 "--numerical",
                 "off",
+                *(["--wasm"] if args.wasm_toolchain else []),
             ],
             log,
         )
@@ -285,6 +358,7 @@ raise SystemExit(pytest.main(["-n", "0", "--override-ini=addopts=", "--tb=short"
                 "-DCMAKE_INSTALL_PREFIX=" + str(prefix),
             ],
             log,
+            test=not args.wasm_toolchain,
         )
         run(["cmake", "--install", core_directory], log)
         directory = build(
@@ -329,6 +403,7 @@ raise SystemExit(pytest.main(["-n", "0", "--override-ini=addopts=", "--tb=short"
                 results / "public-audit",
                 "--numerical",
                 "on",
+                *(["--wasm"] if args.wasm_toolchain else []),
             ],
             log,
         )
